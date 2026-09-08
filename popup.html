@@ -1,0 +1,571 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>YouTube Smart Blacklister</title>
+  <style>
+    :root {
+      --bg: #0f0f0f;
+      --surface: #1e1e1e;
+      --surface-hover: #2a2a2a;
+      --border: #333333;
+      --text: #f1f1f1;
+      --muted: #aaaaaa;
+      --accent: #ff0033;
+      --accent-hover: #d9002c;
+      --green: #2ba640;
+      --green-bg: rgba(43, 166, 64, 0.15);
+      --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      width: 400px;
+      min-height: 520px;
+      max-height: 600px;
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--font);
+      font-size: 13px;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* Header */
+    header {
+      padding: 14px 16px;
+      background: #181818;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .header-title {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .header-title h1 {
+      font-size: 15px;
+      font-weight: 700;
+      letter-spacing: -0.2px;
+    }
+    .header-badge {
+      background: rgba(255, 0, 51, 0.18);
+      color: #ff4d6a;
+      border: 1px solid rgba(255, 0, 51, 0.35);
+      border-radius: 12px;
+      padding: 2px 8px;
+      font-size: 11px;
+      font-weight: 600;
+    }
+
+    /* Nav Tabs */
+    nav.tabs {
+      display: flex;
+      background: #141414;
+      border-bottom: 1px solid var(--border);
+      padding: 0 8px;
+    }
+    .tab-btn {
+      flex: 1;
+      background: transparent;
+      border: none;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 600;
+      padding: 10px 4px;
+      cursor: pointer;
+      position: relative;
+      transition: color 0.15s ease;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 4px;
+    }
+    .tab-btn:hover { color: var(--text); }
+    .tab-btn.active {
+      color: #fff;
+    }
+    .tab-btn.active::after {
+      content: '';
+      position: absolute;
+      bottom: 0;
+      left: 12px;
+      right: 12px;
+      height: 2px;
+      background: var(--accent);
+      border-radius: 2px 2px 0 0;
+    }
+
+    /* Main Tab Content */
+    main {
+      flex: 1;
+      overflow-y: auto;
+      padding: 12px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .tab-pane { display: none; flex-direction: column; gap: 12px; height: 100%; }
+    .tab-pane.active { display: flex; }
+
+    /* Search & Filter */
+    .search-row {
+      position: relative;
+      display: flex;
+      align-items: center;
+    }
+    .search-row input {
+      width: 100%;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      color: var(--text);
+      border-radius: 6px;
+      padding: 8px 10px 8px 28px;
+      font-size: 12px;
+      outline: none;
+    }
+    .search-row input:focus { border-color: #666; }
+    .search-icon {
+      position: absolute;
+      left: 8px;
+      width: 14px;
+      height: 14px;
+      fill: var(--muted);
+      pointer-events: none;
+    }
+
+    /* Lists */
+    .list-container {
+      flex: 1;
+      max-height: 270px;
+      overflow-y: auto;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: #141414;
+      display: flex;
+      flex-direction: column;
+    }
+    .item-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 8px 10px;
+      border-bottom: 1px solid #222;
+      transition: background 0.1s;
+    }
+    .item-row:last-child { border-bottom: none; }
+    .item-row:hover { background: var(--surface); }
+    .item-name {
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 12px;
+    }
+    .item-btn {
+      background: transparent;
+      border: 1px solid var(--green);
+      color: var(--green);
+      font-size: 11px;
+      padding: 3px 8px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-weight: 500;
+    }
+    .item-btn:hover { background: var(--green-bg); }
+    .empty-state {
+      padding: 24px;
+      text-align: center;
+      color: var(--muted);
+      font-size: 12px;
+      font-style: italic;
+    }
+
+    /* Add Inputs */
+    .add-section {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .input-row { display: flex; gap: 6px; }
+    .input-row input, .input-row textarea {
+      flex: 1;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      color: var(--text);
+      border-radius: 6px;
+      padding: 8px 10px;
+      font-size: 12px;
+      outline: none;
+    }
+    .input-row textarea {
+      resize: vertical;
+      min-height: 54px;
+      font-family: inherit;
+    }
+    .input-row input:focus, .input-row textarea:focus { border-color: #666; }
+    .action-btn {
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      padding: 0 14px;
+      cursor: pointer;
+      font-weight: 600;
+      font-size: 12px;
+      transition: background 0.15s;
+      white-space: nowrap;
+    }
+    .action-btn:hover { background: var(--accent-hover); }
+    .btn-secondary {
+      background: #333;
+      color: #eee;
+    }
+    .btn-secondary:hover { background: #444; }
+
+    .help-hint {
+      font-size: 11px;
+      color: var(--muted);
+      line-height: 1.4;
+    }
+
+    /* Settings & Declutter Toggles */
+    .setting-group {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px;
+    }
+    .setting-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .setting-label {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    .setting-title {
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .setting-desc {
+      font-size: 11px;
+      color: var(--muted);
+    }
+
+    /* Switch toggle */
+    .switch {
+      position: relative;
+      display: inline-block;
+      width: 36px;
+      height: 20px;
+      flex-shrink: 0;
+    }
+    .switch input { opacity: 0; width: 0; height: 0; }
+    .slider {
+      position: absolute;
+      cursor: pointer;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background-color: #444;
+      transition: .2s;
+      border-radius: 20px;
+    }
+    .slider:before {
+      position: absolute;
+      content: "";
+      height: 14px;
+      width: 14px;
+      left: 3px;
+      bottom: 3px;
+      background-color: white;
+      transition: .2s;
+      border-radius: 50%;
+    }
+    input:checked + .slider { background-color: var(--accent); }
+    input:checked + .slider:before { transform: translateX(16px); }
+
+    /* Tools & Backup */
+    .tools-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+    .tool-btn {
+      padding: 8px 10px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      transition: background 0.15s;
+    }
+    .tool-btn:hover { background: var(--surface-hover); }
+
+    /* Footer */
+    footer {
+      padding: 10px 16px;
+      background: #141414;
+      border-top: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 11px;
+      color: var(--muted);
+    }
+    .footer-left {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .footer-dot { color: #555; }
+    .footer-right {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .kofi-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      background: rgba(255, 94, 91, 0.15);
+      border: 1px solid rgba(255, 94, 91, 0.35);
+      color: #ff7b77;
+      padding: 3px 8px;
+      border-radius: 12px;
+      text-decoration: none;
+      font-weight: 600;
+      font-size: 10.5px;
+      transition: all 0.15s ease;
+      cursor: pointer;
+    }
+    .kofi-link:hover {
+      background: #ff5e5b;
+      color: #fff;
+      border-color: #ff5e5b;
+      text-decoration: none;
+      transform: translateY(-1px);
+    }
+    .kofi-card {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      background: linear-gradient(135deg, rgba(255, 94, 91, 0.1), rgba(255, 20, 70, 0.05));
+      border: 1px solid rgba(255, 94, 91, 0.25);
+      border-radius: 8px;
+      padding: 12px;
+    }
+    .kofi-card-text {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    .kofi-card-text strong {
+      color: #f1f1f1;
+      font-size: 12px;
+    }
+    .kofi-card-text span {
+      color: var(--muted);
+      font-size: 10.5px;
+      line-height: 1.3;
+    }
+    .kofi-card-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      background: #ff5e5b;
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      padding: 7px 11px;
+      font-size: 11px;
+      font-weight: 700;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: background 0.15s, transform 0.15s;
+    }
+    .kofi-card-btn:hover {
+      background: #e04b48;
+      transform: translateY(-1px);
+    }
+    .link { color: #5ea8ff; text-decoration: none; cursor: pointer; }
+    .link:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+
+  <!-- Header -->
+  <header>
+    <div class="header-title">
+      <h1>YouTube Blacklister</h1>
+      <span class="header-badge" id="totalBlockedBadge">0 Blocked</span>
+    </div>
+    <span class="link" id="openYoutube">Open YouTube ↗</span>
+  </header>
+
+  <!-- Navigation Tabs -->
+  <nav class="tabs">
+    <button class="tab-btn active" data-tab="channelsTab">Channels (<span id="channelCount">0</span>)</button>
+    <button class="tab-btn" data-tab="keywordsTab">Keywords (<span id="keywordCount">0</span>)</button>
+    <button class="tab-btn" data-tab="whitelistTab">Whitelist (<span id="whitelistCount">0</span>)</button>
+    <button class="tab-btn" data-tab="settingsTab">Settings & Tools</button>
+  </nav>
+
+  <!-- Main Content Areas -->
+  <main>
+
+    <!-- Tab 1: Channels -->
+    <div class="tab-pane active" id="channelsTab">
+      <div class="search-row">
+        <svg class="search-icon" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
+        <input type="text" id="channelSearch" placeholder="Search blacklisted channels…" />
+      </div>
+
+      <div class="list-container" id="channelList">
+        <div class="empty-state">No channels blacklisted yet. Click the 3 dots or quick-block button on any video.</div>
+      </div>
+
+      <div class="add-section">
+        <div class="input-row">
+          <input type="text" id="channelInput" placeholder="Channel name, @handle, or video URL (comma/newline separated)…" />
+          <button class="action-btn" id="addChannelBtn">Add</button>
+        </div>
+        <p class="help-hint">Supports handles, URLs (e.g. youtu.be/xyz), or multiple names separated by commas.</p>
+      </div>
+    </div>
+
+    <!-- Tab 2: Keywords -->
+    <div class="tab-pane" id="keywordsTab">
+      <div class="search-row">
+        <svg class="search-icon" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
+        <input type="text" id="keywordSearch" placeholder="Search keyword rules…" />
+      </div>
+
+      <div class="list-container" id="keywordList">
+        <div class="empty-state">No keyword rules yet.</div>
+      </div>
+
+      <div class="add-section">
+        <div class="input-row">
+          <input type="text" id="keywordInput" placeholder="Word (e.g. crypto) or regex (e.g. /vlog\s*\d+/i)…" />
+          <button class="action-btn" id="addKeywordBtn">Add</button>
+        </div>
+        <p class="help-hint">Word-boundary aware: "cat" will not block "category". Regex supported with /pattern/flags.</p>
+      </div>
+    </div>
+
+    <!-- Tab 3: Whitelist -->
+    <div class="tab-pane" id="whitelistTab">
+      <div class="list-container" id="whitelistList">
+        <div class="empty-state">No whitelisted channels.</div>
+      </div>
+
+      <div class="add-section">
+        <div class="input-row">
+          <input type="text" id="whitelistInput" placeholder="Channel you always want to see…" />
+          <button class="action-btn" id="addWhitelistBtn">Add</button>
+        </div>
+        <p class="help-hint">Whitelisted channels are never blocked, even if a keyword matches their video titles.</p>
+      </div>
+    </div>
+
+    <!-- Tab 4: Settings & Tools -->
+    <div class="tab-pane" id="settingsTab">
+      <div class="setting-group">
+        <div class="setting-item">
+          <div class="setting-label">
+            <span class="setting-title">1-Click Thumbnail Button</span>
+            <span class="setting-desc">Show quick-block button on video thumbnails on hover</span>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="toggleQuickBlock" checked />
+            <span class="slider"></span>
+          </label>
+        </div>
+
+        <div class="setting-item">
+          <div class="setting-label">
+            <span class="setting-title">Server Recommendation Feedback</span>
+            <span class="setting-desc">Auto-trigger YouTube's native "Don't recommend channel" (Off recommended: prevents feed lockout)</span>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="toggleServerFeedback" />
+            <span class="slider"></span>
+          </label>
+        </div>
+
+        <div class="setting-item">
+          <div class="setting-label">
+            <span class="setting-title">Hide YouTube Shorts</span>
+            <span class="setting-desc">Completely remove Shorts shelves and lockups</span>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="toggleBlockShorts" />
+            <span class="slider"></span>
+          </label>
+        </div>
+
+        <div class="setting-item">
+          <div class="setting-label">
+            <span class="setting-title">Hide Community Posts</span>
+            <span class="setting-desc">Hide text posts and polls from home feed</span>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="toggleBlockCommunity" />
+            <span class="slider"></span>
+          </label>
+        </div>
+      </div>
+
+      <div class="tools-grid">
+        <button class="tool-btn" id="exportBtn">📥 Export Backup (JSON)</button>
+        <button class="tool-btn" id="importBtn">📤 Import Backup (JSON)</button>
+      </div>
+      <input type="file" id="importFileInput" accept=".json" style="display:none;" />
+
+      <div class="kofi-card">
+        <div class="kofi-card-text">
+          <strong>Enjoying clean, fresh feeds?</strong>
+          <span>Free & open-source. Help support continuous YouTube patch updates!</span>
+        </div>
+        <button class="kofi-card-btn" id="kofiSettingsBtn">☕ Support on Ko-fi</button>
+      </div>
+    </div>
+
+  </main>
+
+  <!-- Footer -->
+  <footer>
+    <div class="footer-left">
+      <span id="statusMsg">Ready</span>
+      <span class="footer-dot">•</span>
+      <span id="versionText">v1.5.2</span>
+    </div>
+    <div class="footer-right">
+      <button class="kofi-link" id="kofiFooterBtn" title="Support developer on Ko-fi">
+        <svg class="kofi-icon" viewBox="0 0 24 24" width="12" height="12"><path fill="currentColor" d="M23.881 8.948c-.773-4.085-4.859-4.593-4.859-4.593H.723c-.604 0-.679.798-.679.798s-.082 7.324-.022 11.822c.164 2.424 2.586 2.672 2.586 2.672s8.267-.023 11.966-.049c2.438-.426 2.683-2.566 2.658-3.734 4.352.24 7.422-2.831 6.649-6.916zm-11.062 3.511c-1.246 1.453-4.047 3.974-4.047 3.974s-2.8-2.521-4.047-3.974c-1.332-1.556-1.077-3.477.409-4.423 1.487-.947 3.638-.135 3.638-.135s2.152-.812 3.638.135c1.487.946 1.741 2.867.409 4.423zm6.852-1.747c-.366 1.942-1.957 2.051-1.957 2.051V7.054s1.614-.074 1.957 2.058z"/></svg>
+        <span>Support</span>
+      </button>
+    </div>
+  </footer>
+
+  <script src="popup.js"></script>
+</body>
+</html>
