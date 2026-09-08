@@ -150,13 +150,24 @@ The extension features a responsive, dark-themed management popup designed to fe
 
 ## Installation Guide
 
-### Option 1: Load Unpacked (Chrome, Edge, Brave, Opera, Vivaldi)
+### Option 1: One-Click Quick Installer (Windows)
+
+1. Download the [Latest Release ZIP](https://github.com/PyrateGFXProductions/YouTube-Blacklister/releases) and extract it anywhere.
+2. Double-click **`install.bat`**:
+   - It automatically copies the folder path to your clipboard.
+   - It automatically launches your browser's extensions manager.
+3. Turn on **Developer mode** (top-right switch) and click **Load unpacked** (top-left).
+4. Paste (`Ctrl+V`) the copied folder path and click **Select Folder**. Done!
+
+---
+
+### Option 2: Manual Load Unpacked (Chrome, Edge, Brave, Opera, Vivaldi)
 
 1. **Download or Clone the Repository**:
    ```bash
    git clone https://github.com/PyrateGFXProductions/YouTube-Blacklister.git
    ```
-   *(Or download the ZIP from [Releases](https://github.com/PyrateGFXProductions/YouTube-Blacklister/releases) and extract it to a folder).*
+   *(Or download the ZIP from [Releases](https://github.com/PyrateGFXProductions/YouTube-Blacklister/releases) and extract it).*
 
 2. **Open your browser's Extension Manager**:
    - **Google Chrome**: Navigate to `chrome://extensions`
@@ -169,10 +180,15 @@ The extension features a responsive, dark-themed management popup designed to fe
 
 4. **Load the Extension**:
    - Click the **Load unpacked** button in the top-left corner.
-   - Select the `YouTube-Blacklister` folder containing `manifest.json`.
+   - Select the extracted `YouTube-Blacklister` directory.
 
 5. **Pin the Extension**:
    - Click the puzzle piece icon in your browser toolbar and pin **Always New To You**.
+
+---
+
+### Option 3: Chrome Web Store / Edge Add-ons (Coming Soon)
+*We have pre-packaged the store-compliant bundle (`YouTube-Blacklister-v1.5.2.zip`). Once published, users will be able to install directly with one click from the official web stores.*
 
 ---
 
