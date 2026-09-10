@@ -2149,26 +2149,15 @@ function ensureHuntStyles() {
     st.textContent = `
       body.nyt-hunting, body.nyt-hunting a, body.nyt-hunting button { cursor: crosshair !important; }
       .nyt-hunt-prey {
-        position: absolute; z-index: 1001; width: 34px; height: 34px;
+        position: fixed; z-index: 2147483647; width: 34px; height: 34px;
         display: flex; align-items: center; justify-content: center;
         font-size: 24px; line-height: 1; user-select: none; cursor: crosshair;
         background: rgba(15,15,15,0.85); border: 2px solid #ff0033; border-radius: 50%;
         box-shadow: 0 0 12px rgba(255,0,51,0.7);
-        opacity: 0; pointer-events: none;
+        opacity: 1; pointer-events: auto;
         transition: opacity 0.15s ease, top 0.45s ease, left 0.45s ease, transform 0.1s;
       }
-      ytd-rich-item-renderer:hover .nyt-hunt-prey,
-      ytd-rich-grid-media:hover .nyt-hunt-prey,
-      yt-lockup-view-model:hover .nyt-hunt-prey,
-      ytd-video-renderer:hover .nyt-hunt-prey,
-      ytd-compact-video-renderer:hover .nyt-hunt-prey,
-      ytd-grid-video-renderer:hover .nyt-hunt-prey,
-      ytd-reel-item-renderer:hover .nyt-hunt-prey,
-      yt-shorts-lockup-view-model:hover .nyt-hunt-prey,
-      ytd-playlist-video-renderer:hover .nyt-hunt-prey,
-      ytd-playlist-panel-video-renderer:hover .nyt-hunt-prey {
-        opacity: 1; pointer-events: auto;
-      }
+      .nyt-hunt-prey.hidden { opacity: 0; pointer-events: none; }
       .nyt-hunt-prey:hover { transform: scale(1.12); }
       .nyt-hunt-prey.nyt-hunt-hit { transform: scale(1.6); opacity: 0; transition: transform 0.15s, opacity 0.15s; }
       .nyt-hunt-hud {
@@ -2258,8 +2247,27 @@ function huntAddPrey(card, thumb) {
     el.addEventListener('pointerdown', stopNav, true);
     el.addEventListener('mousedown', (ev) => { stopNav(ev); huntHit(el); }, true);
     el.addEventListener('click', stopNav, true);
-    thumb.appendChild(el);
-    huntMovePreyEl(el);
+    document.body.appendChild(el);
+    huntMovePreyEl(el, thumb);
+  } catch (_) {}
+}
+
+function huntMovePreyEl(el, anchor) {
+  try {
+    const thumb = anchor || (el && document.querySelector(
+      'ytd-thumbnail, #thumbnail, a#thumbnail, .yt-lockup-view-model-wiz__thumbnail, yt-thumbnail-view-model'
+    ));
+    if (!thumb || !thumb.clientWidth) return;
+    const thumbRect = thumb.getBoundingClientRect();
+    const maxX = Math.max(0, thumbRect.width - 38);
+    const maxY = Math.max(0, thumbRect.height - 38);
+    let x = thumbRect.left + 2 + Math.random() * maxX;
+    let y = thumbRect.top + 2 + Math.random() * maxY;
+    if (maxY > 90 && y < (thumbRect.top + 46) && x < (thumbRect.left + 54)) {
+      y = thumbRect.top + 46 + Math.random() * Math.max(1, maxY - 46);
+    }
+    el.style.left = `${x}px`;
+    el.style.top = `${y}px`;
   } catch (_) {}
 }
 
@@ -2282,15 +2290,26 @@ function huntRoamAll() {
           if (el.parentNode) el.parentNode.removeChild(el);
           return;
         }
-        huntMovePreyEl(el);
-        try { el.parentNode.appendChild(el); } catch (_) {}
+        const thumb = card.querySelector(
+          'ytd-thumbnail, #thumbnail, a#thumbnail, .yt-lockup-view-model-wiz__thumbnail, yt-thumbnail-view-model'
+        );
+        huntMovePreyEl(el, thumb);
+        // Show only for hovered card
+        if (card === hoveredVideoCard) {
+          el.classList.remove('hidden');
+        } else {
+          el.classList.add('hidden');
+        }
       } catch (_) {}
     });
     try {
       const hc = hoveredVideoCard;
       if (hc && hc.isConnected && hc.offsetHeight > 0 && hc.dataset.hiddenByLocalBlacklist !== 'true') {
         if (!hc.querySelector('.nyt-hunt-prey')) {
-          huntAddPrey(hc, huntThumbFor(hc));
+          const thumb = hc.querySelector(
+            'ytd-thumbnail, #thumbnail, a#thumbnail, .yt-lockup-view-model-wiz__thumbnail, yt-thumbnail-view-model'
+          );
+          huntAddPrey(hc, thumb);
         }
       }
     } catch (_) {}
