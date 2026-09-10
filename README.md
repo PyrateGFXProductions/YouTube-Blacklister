@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/PyrateGFXProductions/YouTube-Blacklister/releases"><img src="https://img.shields.io/badge/Release-v1.5.2-brightgreen?style=for-the-badge" alt="Version 1.5.2"></a>
+  <a href="https://github.com/PyrateGFXProductions/YouTube-Blacklister/releases"><img src="https://img.shields.io/badge/Release-v1.8.0-brightgreen?style=for-the-badge" alt="Version 1.8.0"></a>
   <a href="https://developer.chrome.com/docs/extensions/mv3/intro/"><img src="https://img.shields.io/badge/Manifest-V3-4285F4?style=for-the-badge&logo=googlechrome&logoColor=white" alt="Manifest V3"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge" alt="MIT License"></a>
   <a href="#privacy--offline-security"><img src="https://img.shields.io/badge/Privacy-100%25%20Local-success?style=for-the-badge&logo=shield" alt="100% Local Privacy"></a>
@@ -29,6 +29,8 @@
 - [The Problem: The YouTube Server Cache Trap](#the-problem-the-youtube-server-cache-trap)
 - [How Always New To You Solves It](#how-always-new-to-you-solves-it)
 - [Key Features](#key-features)
+- [🧠 Autonomous AI Guardian & Mind Reader Mode](#-autonomous-ai-guardian--mind-reader-mode)
+- [Gamified Level System & Impact Metrics](#gamified-level-system--impact-metrics)
 - [Extension Popup Tour](#extension-popup-tour)
 - [Installation Guide](#installation-guide)
 - [Usage & Quick Start](#usage--quick-start)
@@ -79,15 +81,61 @@ When you click YouTube's native dismissal buttons, YouTube's server immediately 
 
 ## Key Features
 
+### 🧠 Autonomous AI Guardian & Mind Reader Mode
+- **Local AI Daemon Link**: Auto-detects local Ollama (`http://localhost:11434`) and LM Studio (`http://localhost:1234`), letting you select any local model (Phi, Gemma, Qwen, LLaMA).
+- **Mind Reader Taste Synthesizer**: Type what content you love or hate in plain English (or pick from curated personas like *Zen Scholar*, *Tech & Hardware*, or *Anti-Dopamine*), and the AI automatically synthesizes precision keyword and regex rules into your active blacklist.
+- **Predictive Autonomous Slop Interceptor**: Analyzes incoming YouTube home feed videos in real time, purging clickbait and ragebait before you even have to see it.
+- **100% Local & Private**: All inference runs locally on your own machine. Zero data or video titles are sent to external cloud APIs.
+- **Built-In Heuristic Fallback**: Runs intelligent neural heuristic scoring even when local LLM daemons are offline.
+
+### ✨ AI Title De-Baiter (Real-Time Title Neutralizer)
+- Detects sensationalist titles on the feed and rewrites them into factual, dry, low-key descriptions via batched, zero-temperature local LLM calls.
+- Prepends a subtle clickable `✨` badge to every de-baited title — click it any time to **smoothly toggle** between the calm AI title and the raw clickbait original.
+- Original titles are preserved in `dataset.originalTitle` and a per-video cache, so toggling is instant and offline.
+- Instant heuristic neutralizer fallback strips ALL-CAPS, exclamation spam, and hype hooks when the local daemon is closed.
+- Toggle in **Settings & Tools** or the **AI Guardian** tab.
+
+### 🩻 AI Feed Forensic Diagnostic Roast
+- Glowing **"Run Feed Diagnostic Roast"** action in the AI Guardian tab pulls up to 15 visible titles/channels from the active YouTube tab.
+- Local LLM returns a **Toxicity Score (0–100%)**, named **Manipulation Tactics** (e.g. *Manufactured Outrage*, *Parasocial Dopamine Trap*, *Algorithmic Desperation*), and a **Savage Psychological Diagnosis** of your current algorithm.
+- 1-Click **"⚡ Purge All Identified Manipulators"** button immediately blacklists every offending channel.
+
+### ⏱️ 1-Click TL;DW (Too Long; Didn't Watch) Video Inspector
+- Hover any video thumbnail to reveal a sleek `⏱️ TL;DW` pill alongside Quick-Block.
+- Opens a dark glassmorphism modal with an animated neural-scan effect and summarizes the video into:
+  - 🔍 **Clickbait Truth Verdict** — exposes whether the title was false or exaggerated.
+  - 📝 **Core Takeaways** — three bullet points of actual substance.
+  - ⏱️ **Time Saved** — calculated minutes saved.
+- Captions are fetched with YouTube's standard client-side `/timedtext` endpoint (zero API keys), parsed from JSON3/XML, with a metadata fallback when captions are disabled.
+- Quick **"Blacklist Channel"** action directly inside the modal.
+- Toggle in **Settings & Tools**.
+
 ### ⚡ Zero-Latency Local Blacklist
 - Hide channels instantly with zero network delay.
 - Cleanly matches channel names, `@handles`, and video link formats.
 - Persistent offline storage via `chrome.storage.local`.
 
-### 🎯 1-Click Thumbnail Quick-Block
+### 🎯 1-Click Thumbnail Quick-Block & Keyboard Shortcut (`B`)
 - Hover over any video thumbnail on YouTube to reveal a dedicated quick-block button.
-- Dismiss unwanted channels in a fraction of a second without navigating nested dropdown menus.
+- Tap **`B`** on your keyboard while hovering over any video card to block it instantly without clicking.
 - Can be toggled on/off in Settings.
+
+### ↩️ Floating "Undo" Toast Notification
+- Misclick or change your mind? A floating YouTube-native dark pill toast in the bottom-left corner gives you a **5-second Undo window** to instantly unhide the video and restore the channel.
+
+### 🎮 Gamified Level System & Milestones
+- Earn rank promotions as you clean your digital space, from 🌱 **Novice Scroller** up to 🌌 **Cosmic Mind**, complete with milestone confetti celebrations!
+- Track **Hours of Life Reclaimed** and your real-time **Algorithm Purity Score**.
+
+### 📦 1-Click Curated "Starter Packs"
+- Pre-loaded anti-slop keyword filters in the Keywords tab:
+  - 🧠 **Anti-Brainrot**: `prank`, `skibidi`, `in 24 hours`, `you won't believe`, `exposed`, `reaction`
+  - 🪙 **Crypto / Hustle**: `crypto`, `bitcoin`, `memecoin`, `100x`, `passive income`, `dropshipping`
+  - 🤖 **AI Slop**: `ai generated`, `faceless channel`, `text to speech`, `midjourney`
+  - 🎭 **Drama / Gossip**: `drama`, `canceled`, `apology video`, `responds to`, `clout`
+
+### 💡 Algorithm Defense Wisdom
+- Interactive header quote bar cycling daily philosophical and witty reminders on digital autonomy and algorithmic intentionality.
 
 ### 📋 Seamless 3-Dot Menu Integration
 - Injects a native-styled **"Blacklist Channel (Local)"** action directly into YouTube's 3-dot context menu.
@@ -109,13 +157,26 @@ When you click YouTube's native dismissal buttons, YouTube's server immediately 
 - **Hide YouTube Shorts**: Completely remove Shorts shelves and compact Shorts reels from your home and subscription feeds.
 - **Hide Community Posts**: Eliminate text posts, polls, and image promotions from your feed.
 
-### 📊 Real-Time Badging & All-Time Stats
-- The extension badge displays the number of hidden videos on your active tab in real time.
-- Lifetime counter tracks all-time blocked videos.
-
 ### 💾 Complete Data Portability (JSON Backup)
 - Export your entire rule set, keywords, whitelist, and settings to a JSON file with one click.
 - Import backups effortlessly to sync rules across multiple computers or browsers.
+
+---
+
+## Gamified Level System & Impact Metrics
+
+| Rank Level | Emoji | Title | Videos Blocked |
+|:---:|:---:|:---|:---:|
+| **Level 1** | 🌱 | Novice Scroller | 0 – 9 |
+| **Level 2** | 🛡️ | Feed Defender | 10 – 49 |
+| **Level 3** | ⚔️ | Slop Slayer | 50 – 99 |
+| **Level 4** | 🧙 | Algorithm Whisperer | 100 – 249 |
+| **Level 5** | 👑 | Zen Master | 250 – 499 |
+| **Level 6** | 🚀 | Feed Ascendant | 500 – 999 |
+| **Level 7** | 🌌 | Cosmic Mind | 1,000+ |
+
+* **Hours Saved Formula**: Calculated at ~10 minutes saved per blocked clickbait video avoided (`totalBlocked * 10 / 60`).
+* **Purity Meter**: Real-time algorithm cleanliness score with dynamic gradient progress fill.
 
 ---
 
@@ -144,7 +205,8 @@ The extension features a responsive, dark-themed management popup designed to fe
 - **Channels Tab**: View, search, and unblock blacklisted channels. Add channels by name, `@handle`, or direct video URL. Bulk entry supported (comma or newline separated).
 - **Keywords Tab**: Add and search word-boundary keywords or `/pattern/flags` regular expressions.
 - **Whitelist Tab**: Safeguard trusted channels against broad keyword rules.
-- **Settings & Tools Tab**: Toggle the hover quick-block button, Shorts blocker, and Community posts blocker. Export and import JSON backups.
+- **Settings & Tools Tab**: Toggle the hover quick-block button, Shorts blocker, Community posts blocker, AI Title De-Baiter, and the TL;DW inspect button. Export and import JSON backups.
+- **AI Guardian Tab**: Local model connection status, Mind Reader taste profiler, Autonomous Guardian sensitivity, the **🩻 Feed Forensic Diagnostic Roast**, the AI Title De-Baiter toggle, and the live interception audit log.
 
 ---
 
@@ -188,7 +250,7 @@ The extension features a responsive, dark-themed management popup designed to fe
 ---
 
 ### Option 3: Chrome Web Store / Edge Add-ons (Coming Soon)
-*We have pre-packaged the store-compliant bundle (`YouTube-Blacklister-v1.5.2.zip`). Once published, users will be able to install directly with one click from the official web stores.*
+*We have pre-packaged the store-compliant bundle (`YouTube-Blacklister-v1.8.0.zip`). Once published, users will be able to install directly with one click from the official web stores.*
 
 ---
 
@@ -229,9 +291,11 @@ Modern YouTube does not use static HTML tables or standard server-rendered feeds
 
 ## Privacy & Offline Security
 
-- **Zero External Connections**: The extension communicates only with `chrome.storage.local` on your device.
+- **Zero External Connections**: The extension communicates only with `chrome.storage.local` on your device — plus your own **local** AI daemon (`localhost:11434` / `localhost:1234`) when AI features are enabled.
+- **AI stays on your machine**: All title de-baiting, feed roasting, taste synthesis, and transcript summarizing run against your local Ollama / LM Studio model. Nothing is sent to any cloud API.
+- **Captions fetched client-side**: TL;DW transcripts use YouTube's standard `/timedtext` endpoint, retrieved in-page the same way YouTube's own player does — no API keys, no third-party transcript services.
 - **No Analytics or Telemetry**: No trackers, no logging services, no third-party libraries.
-- **Minimal Permissions**: Requests only `"storage"` (to remember your blocked rules) and `"tabs"` (to notify open YouTube tabs when rules change).
+- **Minimal Permissions**: Requests only `"storage"` (to remember your blocked rules), `"tabs"` (to notify open YouTube tabs when rules change), and `localhost` host permissions for your local AI server.
 - **Inspectable Source**: Every line of code is human-readable Vanilla JavaScript and CSS.
 
 ---
@@ -266,7 +330,7 @@ To create a clean, distributable ZIP archive for GitHub Releases or Chrome Web S
 .\package-extension.ps1
 ```
 
-This PowerShell script validates your manifest, confirms that all icons and required assets exist, and builds `YouTube-Blacklister-v1.5.2.zip`.
+This PowerShell script validates your manifest, confirms that all icons and required assets exist, and builds `YouTube-Blacklister-v1.8.0.zip`.
 
 ---
 

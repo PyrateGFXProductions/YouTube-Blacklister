@@ -21,9 +21,9 @@
 
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
-      width: 400px;
-      min-height: 520px;
-      max-height: 600px;
+      width: 420px;
+      min-height: 560px;
+      max-height: 640px;
       background: var(--bg);
       color: var(--text);
       font-family: var(--font);
@@ -31,6 +31,7 @@
       display: flex;
       flex-direction: column;
       overflow: hidden;
+      position: relative;
     }
 
     /* Header */
@@ -407,9 +408,381 @@
     }
     .link { color: #5ea8ff; text-decoration: none; cursor: pointer; }
     .link:hover { text-decoration: underline; }
+
+    /* Level & Gamification */
+    .gamification-strip {
+      padding: 10px 16px 8px;
+      background: #141414;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      gap: 7px;
+    }
+    .level-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .rank-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: linear-gradient(135deg, rgba(255, 215, 0, 0.16), rgba(255, 140, 0, 0.12));
+      border: 1px solid rgba(255, 215, 0, 0.38);
+      border-radius: 14px;
+      padding: 3px 9px;
+      font-size: 11px;
+      font-weight: 700;
+      color: #ffd700;
+      cursor: pointer;
+      user-select: none;
+      transition: transform 0.15s, box-shadow 0.15s;
+    }
+    .rank-pill:hover {
+      transform: scale(1.03);
+      box-shadow: 0 0 10px rgba(255, 215, 0, 0.3);
+    }
+    .stats-strip {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .stat-pill {
+      display: flex;
+      align-items: baseline;
+      gap: 4px;
+    }
+    .stat-num {
+      font-weight: 700;
+      font-size: 12px;
+      color: #fff;
+    }
+    .stat-lbl {
+      font-size: 9.5px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.3px;
+    }
+    .level-progress-bar {
+      width: 100%;
+      height: 4px;
+      background: #252525;
+      border-radius: 4px;
+      overflow: hidden;
+    }
+    .level-progress-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #ff0033, #ff8c00, #ffd700);
+      border-radius: 4px;
+      transition: width 0.4s ease;
+    }
+
+    /* Algorithm Wisdom */
+    .wisdom-bar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: #101010;
+      border-bottom: 1px solid #222;
+      padding: 6px 16px;
+      font-size: 11px;
+      color: #aaa;
+      cursor: pointer;
+      user-select: none;
+      transition: background 0.15s, color 0.15s;
+    }
+    .wisdom-bar:hover { background: #181818; color: #f1f1f1; }
+    .wisdom-icon { font-size: 12px; flex-shrink: 0; }
+    .wisdom-text {
+      flex: 1;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      font-style: italic;
+    }
+
+    /* Starter Packs */
+    .starter-packs {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      background: #141414;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 8px 10px;
+    }
+    .starter-title {
+      font-size: 10.5px;
+      font-weight: 600;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.3px;
+    }
+    .packs-grid {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    .pack-btn {
+      background: #222;
+      border: 1px solid #383838;
+      color: #ddd;
+      border-radius: 12px;
+      padding: 4px 9px;
+      font-size: 11px;
+      font-weight: 500;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      transition: all 0.15s ease;
+    }
+    .pack-btn:hover {
+      background: #303030;
+      border-color: #555;
+      color: #fff;
+      transform: translateY(-1px);
+    }
+    .pack-btn.applied {
+      background: rgba(43, 166, 64, 0.2);
+      border-color: rgba(43, 166, 64, 0.5);
+      color: #4ade80;
+    }
+
+    /* Confetti Canvas */
+    #confettiCanvas {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      z-index: 9999;
+    }
+
+    /* AI Guardian Styles */
+    .ai-card {
+      background: linear-gradient(135deg, rgba(138, 43, 226, 0.12), rgba(75, 0, 130, 0.08));
+      border: 1px solid rgba(138, 43, 226, 0.35);
+      border-radius: 8px;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .ai-status-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .ai-status-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 3px 8px;
+      border-radius: 12px;
+      font-size: 11px;
+      font-weight: 600;
+      background: rgba(0, 255, 128, 0.12);
+      color: #00ff80;
+      border: 1px solid rgba(0, 255, 128, 0.3);
+    }
+    .ai-status-pill.offline {
+      background: rgba(255, 180, 0, 0.12);
+      color: #ffb400;
+      border-color: rgba(255, 180, 0, 0.3);
+    }
+    .ai-select {
+      background: var(--surface);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 4px 8px;
+      font-size: 11px;
+      outline: none;
+      max-width: 180px;
+    }
+    .ai-preset-chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 5px;
+    }
+    .ai-chip {
+      background: #202020;
+      border: 1px solid #383838;
+      border-radius: 10px;
+      padding: 3px 8px;
+      font-size: 10.5px;
+      color: #bbb;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .ai-chip:hover {
+      background: rgba(138, 43, 226, 0.25);
+      border-color: #8a2be2;
+      color: #fff;
+    }
+    .ai-textarea {
+      width: 100%;
+      background: #181818;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      padding: 8px 10px;
+      font-size: 12px;
+      min-height: 55px;
+      font-family: inherit;
+      resize: vertical;
+      outline: none;
+    }
+    .ai-textarea:focus { border-color: #8a2be2; }
+    .ai-action-btn {
+      background: linear-gradient(135deg, #8a2be2, #5a009d);
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      padding: 8px 14px;
+      font-size: 11.5px;
+      font-weight: 700;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      transition: opacity 0.15s, transform 0.15s;
+    }
+    .ai-action-btn:hover { opacity: 0.92; transform: translateY(-1px); }
+    .ai-action-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .ai-result-box {
+      display: none;
+      background: #141414;
+      border: 1px solid rgba(138, 43, 226, 0.3);
+      border-radius: 6px;
+      padding: 8px 10px;
+      font-size: 11px;
+      color: #ddd;
+      line-height: 1.4;
+    }
+    .ai-log-list {
+      max-height: 120px;
+      overflow-y: auto;
+      background: #141414;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      display: flex;
+      flex-direction: column;
+      font-size: 11px;
+    }
+    .ai-log-item {
+      padding: 6px 8px;
+      border-bottom: 1px solid #222;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    .ai-log-item:last-child { border-bottom: none; }
+    .ai-log-title { font-weight: 600; color: #fff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .ai-log-reason { color: #aaa; font-style: italic; font-size: 10px; }
+
+    /* Feed Forensic Diagnostic Roast */
+    .roast-result { padding: 12px; display: none; gap: 8px; }
+    .roast-cta {
+      background: linear-gradient(135deg, #b8295e, #7b1fa2);
+      box-shadow: 0 0 16px rgba(217, 35, 93, 0.4);
+    }
+    .roast-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .roast-tox {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 3px;
+      flex-shrink: 0;
+    }
+    .roast-tox-bar {
+      width: 84px;
+      height: 8px;
+      background: #2a2a2a;
+      border-radius: 6px;
+      overflow: hidden;
+      display: block;
+    }
+    .roast-tox-bar i {
+      display: block;
+      height: 100%;
+      border-radius: 6px;
+      transition: width 0.5s ease;
+    }
+    .roast-tox-num { font-weight: 800; font-size: 15px; color: #fff; line-height: 1.1; }
+    .roast-tox-lbl { font-size: 9px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.4px; }
+    .roast-tactics {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 5px;
+      margin: 8px 0;
+    }
+    .roast-tactic {
+      background: rgba(217, 35, 93, 0.15);
+      border: 1px solid rgba(217, 35, 93, 0.35);
+      color: #ff8fa3;
+      padding: 3px 8px;
+      border-radius: 10px;
+      font-size: 10.5px;
+      font-weight: 600;
+    }
+    .roast-diagnosis {
+      background: #181818;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px 10px;
+      font-size: 11.5px;
+      line-height: 1.5;
+      color: #ddd;
+      font-style: italic;
+      margin: 4px 0;
+    }
+    .roast-channels-title {
+      font-size: 10.5px;
+      font-weight: 700;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.3px;
+      margin: 4px 0;
+    }
+    .roast-channels {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .roast-channel {
+      background: #1a1214;
+      border: 1px solid rgba(217, 35, 93, 0.25);
+      color: #ffb4c2;
+      padding: 4px 8px;
+      border-radius: 6px;
+      font-size: 11px;
+    }
+    .roast-channel.subtle {
+      background: #171717;
+      border-color: var(--border);
+      color: #888;
+      font-style: italic;
+    }
+    .roast-purge {
+      width: 100%;
+      background: linear-gradient(135deg, #d92323, #8a1a1a);
+      margin-top: 4px;
+    }
   </style>
 </head>
 <body>
+  <canvas id="confettiCanvas"></canvas>
 
   <!-- Header -->
   <header>
@@ -420,12 +793,42 @@
     <span class="link" id="openYoutube">Open YouTube ↗</span>
   </header>
 
+  <!-- Level & Impact Metrics -->
+  <div class="gamification-strip">
+    <div class="level-row">
+      <div class="rank-pill" id="rankPill" title="Your Feed Cleaner Rank - Click for celebration!">
+        <span id="rankEmoji">🌱</span>
+        <span id="rankTitle">Novice Scroller</span>
+      </div>
+      <div class="stats-strip">
+        <div class="stat-pill" title="Estimated time saved from clickbait (10 min/video)">
+          <span class="stat-num" id="lifeSavedVal">0.0h</span>
+          <span class="stat-lbl">Saved</span>
+        </div>
+        <div class="stat-pill" title="Algorithm Cleanliness Rating">
+          <span class="stat-num" id="purityVal">100%</span>
+          <span class="stat-lbl">Pure</span>
+        </div>
+      </div>
+    </div>
+    <div class="level-progress-bar" title="Progress toward next level rank">
+      <div class="level-progress-fill" id="levelProgressFill" style="width: 5%"></div>
+    </div>
+  </div>
+
+  <!-- Algorithm Defense Wisdom -->
+  <div class="wisdom-bar" id="wisdomBar" title="Click for more algorithm wisdom!">
+    <span class="wisdom-icon">💡</span>
+    <span class="wisdom-text" id="wisdomText">Feed your mind, not the recommendation engine.</span>
+  </div>
+
   <!-- Navigation Tabs -->
   <nav class="tabs">
     <button class="tab-btn active" data-tab="channelsTab">Channels (<span id="channelCount">0</span>)</button>
     <button class="tab-btn" data-tab="keywordsTab">Keywords (<span id="keywordCount">0</span>)</button>
     <button class="tab-btn" data-tab="whitelistTab">Whitelist (<span id="whitelistCount">0</span>)</button>
-    <button class="tab-btn" data-tab="settingsTab">Settings & Tools</button>
+    <button class="tab-btn" data-tab="aiTab">🧠 AI Guardian</button>
+    <button class="tab-btn" data-tab="settingsTab">Settings</button>
   </nav>
 
   <!-- Main Content Areas -->
@@ -453,6 +856,16 @@
 
     <!-- Tab 2: Keywords -->
     <div class="tab-pane" id="keywordsTab">
+      <div class="starter-packs">
+        <span class="starter-title">⚡ 1-Click Starter Packs:</span>
+        <div class="packs-grid">
+          <button class="pack-btn" data-pack="brainrot" title="Filter out common hype/clickbait words">🧠 Anti-Brainrot</button>
+          <button class="pack-btn" data-pack="crypto" title="Filter out get-rich-quick and crypto spam">🪙 Crypto/Hustle</button>
+          <button class="pack-btn" data-pack="aislop" title="Filter out low-effort AI slop">🤖 AI Slop</button>
+          <button class="pack-btn" data-pack="drama" title="Filter out influencer drama and gossip">🎭 Drama/Gossip</button>
+        </div>
+      </div>
+
       <div class="search-row">
         <svg class="search-icon" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
         <input type="text" id="keywordSearch" placeholder="Search keyword rules…" />
@@ -486,7 +899,108 @@
       </div>
     </div>
 
-    <!-- Tab 4: Settings & Tools -->
+    <!-- Tab 4: AI Guardian (Mind Reader) -->
+    <div class="tab-pane" id="aiTab">
+      <!-- Connection Status Bar -->
+      <div class="ai-card">
+        <div class="ai-status-row">
+          <span class="ai-status-pill" id="aiStatusPill">⚡ Scanning local AI...</span>
+          <select class="ai-select" id="aiModelSelect" title="Active local model">
+            <option value="">Auto-detecting...</option>
+          </select>
+        </div>
+        <div style="font-size: 11px; color: var(--muted); line-height: 1.4;">
+          Posh local intelligence powered by your local Ollama / LM Studio daemon. Zero telemetry, 100% offline.
+        </div>
+      </div>
+
+      <!-- Mind Reader Taste Profiler -->
+      <div class="setting-group" style="gap: 8px;">
+        <div style="display: flex; justify-content: space-between; align-items: baseline;">
+          <span class="setting-title">🔮 Mind Reader Taste Profiler</span>
+          <span style="font-size: 10px; color: #b162ff; font-weight: 600;">Neural Synthesizer</span>
+        </div>
+        <p class="help-hint">Describe your dream feed in plain English. The AI will read your intent and synthesize precision blacklist keywords and regex rules.</p>
+
+        <div class="ai-preset-chips">
+          <span class="ai-chip" data-persona="scholar">🧘 Zen Scholar</span>
+          <span class="ai-chip" data-persona="engineer">🛠️ Tech & Hardware</span>
+          <span class="ai-chip" data-persona="antislop">🛡️ Anti-Dopamine</span>
+          <span class="ai-chip" data-persona="creative">🎨 Art & Cinema</span>
+        </div>
+
+        <textarea class="ai-textarea" id="aiTastePrompt" placeholder="E.g., I want deep educational content, retro game dev, and woodworking. Completely eradicate manufactured reaction faces, crypto hype, dropshipping advice, and drama..."></textarea>
+
+        <button class="ai-action-btn" id="aiSynthesizeBtn">
+          <span>🔮 Synthesize Rules from My Mind</span>
+        </button>
+
+        <div class="ai-result-box" id="aiResultBox"></div>
+      </div>
+
+      <!-- Autonomous Predictive Slop Interceptor -->
+      <div class="setting-group">
+        <div class="setting-item">
+          <div class="setting-label">
+            <span class="setting-title">🤖 Autonomous Feed Guardian</span>
+            <span class="setting-desc">Evaluate incoming video cards with AI and block slop before you see it</span>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="toggleAiAutonomous" />
+            <span class="slider"></span>
+          </label>
+        </div>
+
+        <div class="setting-item">
+          <div class="setting-label">
+            <span class="setting-title">Interceptor Sensitivity</span>
+            <span class="setting-desc">How aggressively the AI purges questionable video cards</span>
+          </div>
+          <select class="ai-select" id="aiSensitivitySelect">
+            <option value="conservative">Conservative</option>
+            <option value="balanced" selected>Balanced</option>
+            <option value="ruthless">Ruthless Purge</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Feed Forensic Diagnostic Roast -->
+      <div class="setting-group" style="gap: 8px;">
+        <div style="display: flex; justify-content: space-between; align-items: baseline;">
+          <span class="setting-title">🩻 Feed Forensic Diagnostic Roast</span>
+          <span style="font-size: 10px; color: #ff8fa3; font-weight: 600;">Psychological Audit</span>
+        </div>
+        <p class="help-hint">Pulls up to 15 visible cards from your active YouTube tab and psychoanalyzes the algorithm's manipulation tactics — toxicity score, dirty tricks, and the toxic channels generating the slop.</p>
+        <button class="ai-action-btn roast-cta" id="aiRoastBtn">
+          <span>🩻 Run Feed Diagnostic Roast</span>
+        </button>
+        <div class="ai-result-box roast-result" id="aiRoastResult"></div>
+      </div>
+
+      <!-- AI Title De-Baiter -->
+      <div class="setting-group">
+        <div class="setting-item">
+          <div class="setting-label">
+            <span class="setting-title">✨ AI Title De-Baiter</span>
+            <span class="setting-desc">Neutralize sensationalist feed titles. Click the ✨ badge on any de-baited card to reveal the clickbait original.</span>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="toggleAiDebait" />
+            <span class="slider"></span>
+          </label>
+        </div>
+      </div>
+
+      <!-- Live AI Interception Audit Log -->
+      <div class="setting-group" style="gap: 6px;">
+        <span class="setting-title" style="font-size: 11px;">📜 Recent Autonomous Interceptions:</span>
+        <div class="ai-log-list" id="aiInterceptLog">
+          <div class="empty-state" style="padding: 14px;">No autonomous blocks yet. Enable Autonomous Guardian to see live intercepts.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tab 5: Settings & Tools -->
     <div class="tab-pane" id="settingsTab">
       <div class="setting-group">
         <div class="setting-item">
@@ -532,6 +1046,39 @@
             <span class="slider"></span>
           </label>
         </div>
+
+        <div class="setting-item">
+          <div class="setting-label">
+            <span class="setting-title">✨ AI Title De-Baiter</span>
+            <span class="setting-desc">Replace sensational titles with calm AI summaries. ✨ badge toggles original.</span>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="toggleAiDebaitSettings" />
+            <span class="slider"></span>
+          </label>
+        </div>
+
+        <div class="setting-item">
+          <div class="setting-label">
+            <span class="setting-title">🎯 Hunt Mode (minigame)</span>
+            <span class="setting-desc">Hover any card to reveal a roaming ⛔ in its thumbnail (+100 per hit, no blacklist). Quick-block still works as normal.</span>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="toggleHuntMode" />
+            <span class="slider"></span>
+          </label>
+        </div>
+
+        <div class="setting-item">
+          <div class="setting-label">
+            <span class="setting-title">⏱️ TL;DW Inspect Button</span>
+            <span class="setting-desc">Show a TL;DW pill on video thumbnails with an AI clickbait verdict & transcript summary</span>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="toggleTldw" checked />
+            <span class="slider"></span>
+          </label>
+        </div>
       </div>
 
       <div class="tools-grid">
@@ -556,7 +1103,7 @@
     <div class="footer-left">
       <span id="statusMsg">Ready</span>
       <span class="footer-dot">•</span>
-      <span id="versionText">v1.5.2</span>
+      <span id="versionText">v1.8.0</span>
     </div>
     <div class="footer-right">
       <button class="kofi-link" id="kofiFooterBtn" title="Support developer on Ko-fi">
