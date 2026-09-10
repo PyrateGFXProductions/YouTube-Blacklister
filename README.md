@@ -5,8 +5,8 @@
 </p>
 
 <p align="center">
-  <strong>Permanently un-break your YouTube feed.</strong><br>
-  A high-performance Manifest V3 browser extension with server-invisible channel blacklisting, instant thumbnail quick-blocking, intelligent keyword filtering, and automated feed replenishment.
+  <strong>Un-break your YouTube feed.</strong><br>
+  A high-performance Manifest V3 browser extension with server-invisible channel blacklisting, instant thumbnail quick-blocking, intelligent keyword filtering, local AI-powered content filtering, and automated feed replenishment.
 </p>
 
 <p align="center">
@@ -110,6 +110,12 @@ When you click YouTube's native dismissal buttons, YouTube's server immediately 
 - Quick **"Blacklist Channel"** action directly inside the modal.
 - Toggle in **Settings & Tools**.
 
+### 🎯 Hunt Mode (Minigame)
+- Toggle in Settings: crosshair cursor, a roaming `⛔` prey appears on the thumbnail you're hovering.
+- Click the prey for +100 points (no blacklist action — purely score).
+- Miss (click anywhere else) costs 10 points. Score and best score persist locally.
+- Quick-block button remains fully functional — Hunt Mode is additive, not a replacement.
+
 ### ⚡ Zero-Latency Local Blacklist
 - Hide channels instantly with zero network delay.
 - Cleanly matches channel names, `@handles`, and video link formats.
@@ -198,15 +204,15 @@ The extension features a responsive, dark-themed management popup designed to fe
 │ └─────────────────────────────────────────────────┘ │
 │ [ Enter channel name, @handle, or URL...  ] [ Add ] │
 ├─────────────────────────────────────────────────────┤
-│ Ready • v1.5.2                 [ ☕ Support on Ko-fi ]│
+│ Ready • v1.8.0                 [ ☕ Support on Ko-fi ]│
 └─────────────────────────────────────────────────────┘
 ```
 
 - **Channels Tab**: View, search, and unblock blacklisted channels. Add channels by name, `@handle`, or direct video URL. Bulk entry supported (comma or newline separated).
 - **Keywords Tab**: Add and search word-boundary keywords or `/pattern/flags` regular expressions.
 - **Whitelist Tab**: Safeguard trusted channels against broad keyword rules.
-- **Settings & Tools Tab**: Toggle the hover quick-block button, Shorts blocker, Community posts blocker, AI Title De-Baiter, and the TL;DW inspect button. Export and import JSON backups.
 - **AI Guardian Tab**: Local model connection status, Mind Reader taste profiler, Autonomous Guardian sensitivity, the **🩻 Feed Forensic Diagnostic Roast**, the AI Title De-Baiter toggle, and the live interception audit log.
+- **Settings & Tools Tab**: Toggle the hover quick-block button, Shorts blocker, Community posts blocker, AI Title De-Baiter, TL;DW inspect button, and **Hunt Mode** minigame. Export and import JSON backups.
 
 ---
 
@@ -261,8 +267,10 @@ The extension features a responsive, dark-themed management popup designed to fe
 3. When an unwanted channel appears:
    - **Method A (1-Click Hover)**: Hover your mouse over the video thumbnail and click the red **"✕ Block Channel"** badge in the upper corner.
    - **Method B (3-Dot Menu)**: Click the **3 dots (⋮)** on the video card and select **"Blacklist Channel (Local)"** at the very top.
+   - **Method C (Keyboard)**: Hover the card and press **`B`** to block instantly.
 4. The channel's videos disappear from your feed instantly with a confirmation toast.
 5. Click the extension toolbar icon at any time to review your list, adjust keywords, or export your configuration.
+6. **Optional — Local AI**: Run Ollama (`ollama serve`) or LM Studio with any model. Open the popup → **AI Guardian** tab → it will auto-detect. Pick a persona or type your taste, hit **Synthesize**, and watch precision rules populate your blacklist.
 
 ---
 
@@ -287,6 +295,9 @@ Modern YouTube does not use static HTML tables or standard server-rendered feeds
 4. **Exception-Shielded Async Architecture**:
    Chrome disables extensions if an unhandled promise rejection occurs during network hooks. Every async operation, fetch interceptor, and mutation callback in this extension is wrapped in defensive exception guards.
 
+5. **Fixed-Position Overlay for Hunt Mode**:
+   The Hunt Mode prey uses `position: fixed` at maximum z-index (`2147483647`) on `document.body`, completely detached from YouTube's DOM churn. Visibility is driven by the existing `hoveredVideoCard` tracker, so it rides over thumbnail, preview overlay, and everything in between — no flicker, no flash.
+
 ---
 
 ## Privacy & Offline Security
@@ -302,7 +313,7 @@ Modern YouTube does not use static HTML tables or standard server-rendered feeds
 
 ## Support the Project & Donations
 
-This extension is 100% free and open-source under the MIT license. 
+This extension is 100% free and open-source under the MIT license.
 
 YouTube updates its web frontend and internal class selectors multiple times each month. Keeping this extension perfectly resilient, updated, and feature-rich requires constant testing and development.
 
@@ -351,4 +362,5 @@ Contributions, bug reports, and suggestions are warmly welcomed! Please read our
 Created and maintained by **[PyrateGFX Productions](https://github.com/PyrateGFXProductions)**.
 
 Released under the **[MIT License](LICENSE)**.
+
 Feel free to use, modify, and distribute this project freely.
