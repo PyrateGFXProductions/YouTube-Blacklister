@@ -567,19 +567,30 @@ function isViewCountOrTimeText(text) {
          /^live$/i.test(s);
 }
 
+// Catastrophic-backtracking signatures: a group containing a nested quantifier OR an
+// alternation, itself quantified from outside — e.g. (a+)+, (a|aa)+$, (ab|a)*. Checked
+// before any user/imported regex runs.
+function isReDoSSuspect(pattern) {
+  return /\([^()]*(?:[*+{]|\|)[^()]*\)\s*[*+{]/.test(pattern);
+}
+
 function hasWordBoundaryKeyword(text, keyword) {
   if (!text || !keyword) return false;
   if (keyword.startsWith('/') && keyword.lastIndexOf('/') > 0) {
-    try {
-      const lastSlash = keyword.lastIndexOf('/');
-      const pattern = keyword.slice(1, lastSlash);
-      const flags = keyword.slice(lastSlash + 1) || 'i';
-      return new RegExp(pattern, flags).test(text);
-    } catch (_) {}
+    // Bounded: an oversized or hostile pattern must never stall every tab's title scan.
+    const lastSlash = keyword.lastIndexOf('/');
+    const pattern = keyword.slice(1, lastSlash);
+    const flags = keyword.slice(lastSlash + 1) || 'i';
+    if (pattern.length <= 200 && !isReDoSSuspect(pattern)) {
+      try {
+        return new RegExp(pattern, flags).test(text);
+      } catch (_) {}
+    }
   }
   try {
     const cleanKw = cleanChannelText(keyword);
     const cleanT = cleanChannelText(text);
+    if (cleanKw.length > 200) return cleanT.includes(cleanKw.toLowerCase());
     return new RegExp(`\\b${escapeRegExp(cleanKw)}\\b`, 'i').test(cleanT);
   } catch (_) {
     return text.toLowerCase().includes(keyword.toLowerCase());
@@ -2042,7 +2053,8 @@ function escapeHtml(str) {
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 async function analyzeTldw(ctx) {

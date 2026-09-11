@@ -455,6 +455,35 @@ function exportBackup() {
   setStatus('Backup exported.');
 }
 
+// Catastrophic-backtracking signatures: a group containing a nested quantifier OR an
+// alternation, itself quantified from outside — e.g. (a+)+, (a|aa)+$, (ab|a)*. Rejected
+// at import time.
+function isReDoSSuspect(pattern) {
+  return /\([^()]*(?:[*+{]|\|)[^()]*\)\s*[*+{]/.test(pattern);
+}
+
+// Import-time guard for keyword entries.
+// Regex-form keywords keep their case and flags (lowercasing them silently corrupts
+// the pattern source); every keyword is length-capped; slash-form regex rules must
+// actually compile — and must not be ReDoS-suspect — or they're dropped.
+function sanitizeImportedKeyword(raw) {
+  const s = String(raw == null ? '' : raw).trim();
+  if (!s || s.length > 200) return '';
+  if (s.startsWith('/') && s.lastIndexOf('/') > 0) {
+    try {
+      const lastSlash = s.lastIndexOf('/');
+      const pattern = s.slice(1, lastSlash);
+      const flags = s.slice(lastSlash + 1);
+      new RegExp(pattern, flags);
+      if (isReDoSSuspect(pattern)) return '';
+      return s;
+    } catch (_) {
+      return '';
+    }
+  }
+  return s.toLowerCase();
+}
+
 // Import backup
 function importBackup(file) {
   if (!file) return;
@@ -478,7 +507,7 @@ function importBackup(file) {
       let addedKeywords = 0;
       if (Array.isArray(json.keywords)) {
         json.keywords.forEach(k => {
-          const clean = String(k).trim().toLowerCase();
+          const clean = sanitizeImportedKeyword(k);
           if (clean && !data.keywords.includes(clean)) {
             data.keywords.push(clean);
             addedKeywords++;
@@ -593,7 +622,8 @@ function escapeHtml(str) {
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 function getActiveYoutubeTab(cb) {
@@ -1335,7 +1365,7 @@ function initAiGuardian() {
 
           if (resultBox) {
             resultBox.style.display = 'block';
-            resultBox.innerHTML = `<strong>${res.isFallback ? '⚡ Heuristic' : '🧠 AI'} Rationale:</strong> ${res.rationale}<br><span style="color:#4ade80;">Synthesized & injected ${added} new precision rules!</span>`;
+            resultBox.innerHTML = `<strong>${res.isFallback ? '⚡ Heuristic' : '🧠 AI'} Rationale:</strong> ${escapeHtml(res.rationale || '')}<br><span style="color:#4ade80;">Synthesized & injected ${added} new precision rules!</span>`;
           }
           setStatus(`Injected ${added} rules from AI!`);
         } else {

@@ -24,6 +24,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Mirror scan auto-triggers a feed diversity measurement once synthesis succeeds.
 - Bumped version to `1.10.0` in `manifest.json`, popup UI, backup export payloads (includes the new `shortsSubOnly` setting on import), and script headers.
 
+### Security
+- **Fixed XSS: the Mind Reader's rationale output is now HTML-escaped before injection into the popup result box** (`popup.js`). LLM prose is untrusted input; previously it was interpolated into `innerHTML` verbatim, which put extension-storage access and message-passing reachable from a crafted LLM response or a crafted rule that seeded it.
+- **`escapeHtml` now also escapes single quotes** (defense in depth against future single-quoted attribute sinks) in both `popup.js` and `content.js`.
+- **Backup import hardening** (`sanitizeImportedKeyword`): imported keywords are length-capped at 200 chars; regex-form keywords (`/…/flags`) keep their case and flags — previously backup restore lowercased them, silently corrupting regex rules — must actually compile, and must not carry catastrophic-backtracking signatures or they are dropped.
+- **Runtime ReDoS guard** (`isReDoSSuspect` + size caps): keyword regex patterns longer than 200 chars, or containing nested-quantifier / quantified-alternation signatures (`(a+)+`, `(a|aa)+$`, …), are refused before they ever run — an imported or edited hostile pattern can no longer freeze every YouTube tab during the title scan.
+
 ---
 
 ### Added
