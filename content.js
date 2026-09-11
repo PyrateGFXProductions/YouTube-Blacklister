@@ -1105,6 +1105,53 @@ function getVisibleCardCount(cards) {
   return count;
 }
 
+function collectVisibleFeedItems(limit = 15) {
+  const items = [];
+  const seen = new Set();
+  const max = Math.max(1, Number(limit) || 15);
+
+  const addItem = (title, channel, vid) => {
+    const cleanTitle = String(title || '').replace(/\s+/g, ' ').trim();
+    if (cleanTitle.length < 3 || items.length >= max) return;
+    const cleanChannel = String(channel || '').replace(/\s+/g, ' ').trim();
+    const cleanVid = String(vid || '').trim();
+    const key = cleanVid || `${cleanChannel.toLowerCase()}|${cleanTitle.toLowerCase()}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    items.push({ title: cleanTitle, channel: cleanChannel, vid: cleanVid });
+  };
+
+  const cards = document.querySelectorAll(VIDEO_CARD_SELECTORS);
+  for (let i = 0; i < cards.length && items.length < max; i++) {
+    const card = cards[i];
+    if (!card || card.dataset.hiddenByLocalBlacklist === 'true') continue;
+    addItem(getVideoTitle(card), getChannelName(card), getVideoId(card));
+  }
+
+  // YouTube periodically changes its card hosts. Fall back to title links so
+  // the diagnostic still works while the main card selectors are catching up.
+  if (items.length < max) {
+    const titleLinks = document.querySelectorAll(
+      'a#video-title, a#video-title-link, ' +
+      'a.yt-lockup-metadata-view-model-wiz__title, ' +
+      '.yt-lockup-metadata-view-model-wiz__heading-reset a, ' +
+      'a[href*="/watch?v="], a[href*="/shorts/"]'
+    );
+    for (let i = 0; i < titleLinks.length && items.length < max; i++) {
+      const link = titleLinks[i];
+      const card = link.closest?.(VIDEO_CARD_SELECTORS);
+      if (card?.dataset.hiddenByLocalBlacklist === 'true') continue;
+      const title = card ? getVideoTitle(card) : link.textContent;
+      const channel = card ? getChannelName(card) : '';
+      const href = link.getAttribute?.('href') || '';
+      const vid = card ? getVideoId(card) : extractEntityKey(href);
+      addItem(title || link.textContent, channel, vid);
+    }
+  }
+
+  return items;
+}
+
 function checkFeedReplenishment(cards) {
   const now = Date.now();
   if (now - lastSeedTime < 4000) return;
@@ -2492,17 +2539,7 @@ if (isExtensionValid() && chrome?.runtime?.onMessage) {
       }
       if (msg && typeof msg === 'object' && msg.type === 'GET_VISIBLE_FEED_ITEMS') {
         try {
-          const items = [];
-          const cards = document.querySelectorAll(VIDEO_CARD_SELECTORS);
-          for (let i = 0; i < cards.length && items.length < 15; i++) {
-            const card = cards[i];
-            if (!card || card.dataset.hiddenByLocalBlacklist === 'true') continue;
-            const title = getVideoTitle(card);
-            const channel = getChannelName(card);
-            const vid = getVideoId(card);
-            if (!title || title.length < 3) continue;
-            items.push({ title, channel: channel || '', vid: vid || '' });
-          }
+          const items = collectVisibleFeedItems(15);
           try { sendResponse({ ok: true, items }); } catch (_) {}
         } catch (_) {
           try { sendResponse({ ok: true, items: [] }); } catch (__) {}

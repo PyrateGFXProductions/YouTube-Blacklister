@@ -616,9 +616,13 @@ function runFeedRoast() {
     }
     try {
       chrome.tabs.sendMessage(tab.id, { type: 'GET_VISIBLE_FEED_ITEMS' }, (res) => {
+        if (chrome.runtime?.lastError) {
+          finishRoast(roastBtn, 'Could not contact the YouTube page. Reload the YouTube tab, then run the diagnostic again.');
+          return;
+        }
         const items = (res && Array.isArray(res.items)) ? res.items : [];
         if (!items.length) {
-          finishRoast(roastBtn, 'No visible feed cards detected. Scroll your YouTube home feed, then run again.');
+          finishRoast(roastBtn, 'No feed titles were found yet. Wait for Home recommendations to load, then try again.');
           return;
         }
         chrome.runtime.sendMessage({

@@ -1,366 +1,269 @@
 # Always New To You — YouTube Smart Blacklister
 
 <p align="center">
-  <img src="icon128.png" alt="Always New To You Logo" width="100" height="100" />
+  <img src="icon128.png" width="112" height="112" alt="Always New To You icon">
 </p>
 
 <p align="center">
-  <strong>Un-break your YouTube feed.</strong><br>
-  A high-performance Manifest V3 browser extension with server-invisible channel blacklisting, instant thumbnail quick-blocking, intelligent keyword filtering, local AI-powered content filtering, and automated feed replenishment.
+  <strong>Take your YouTube feed back.</strong><br>
+  A fast, local-first Manifest V3 extension that turns “I never want to see this again” into a clean, reversible decision.
 </p>
 
 <p align="center">
-  <a href="https://github.com/PyrateGFXProductions/YouTube-Blacklister/releases"><img src="https://img.shields.io/badge/Release-v1.8.0-brightgreen?style=for-the-badge" alt="Version 1.8.0"></a>
-  <a href="https://developer.chrome.com/docs/extensions/mv3/intro/"><img src="https://img.shields.io/badge/Manifest-V3-4285F4?style=for-the-badge&logo=googlechrome&logoColor=white" alt="Manifest V3"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge" alt="MIT License"></a>
-  <a href="#privacy--offline-security"><img src="https://img.shields.io/badge/Privacy-100%25%20Local-success?style=for-the-badge&logo=shield" alt="100% Local Privacy"></a>
+  <a href="https://github.com/PyrateGFXProductions/YouTube-Blacklister/releases"><img src="https://img.shields.io/github/v/release/PyrateGFXProductions/YouTube-Blacklister?display_name=tag&style=for-the-badge" alt="Latest release"></a>
+  <a href="https://developer.chrome.com/docs/extensions/develop/migrate/what-is-mv3"><img src="https://img.shields.io/badge/Manifest-V3-4285F4?style=for-the-badge&logo=googlechrome&logoColor=white" alt="Manifest V3"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge" alt="MIT license"></a>
+  <a href="#privacy--local-first-by-default"><img src="https://img.shields.io/badge/Privacy-Local--first-success?style=for-the-badge&logo=shield" alt="Local-first privacy"></a>
   <a href="https://ko-fi.com/pyrategfxproductions"><img src="https://img.shields.io/badge/Ko--fi-Support%20Development-F16061?style=for-the-badge&logo=ko-fi&logoColor=white" alt="Support on Ko-fi"></a>
 </p>
 
 <p align="center">
-  <a href="https://ko-fi.com/pyrategfxproductions">
-    <img src="https://ko-fi.com/img/githubbutton_sm.svg" alt="Support me on Ko-fi" width="190">
-  </a>
+  <a href="#install">Install</a> ·
+  <a href="#what-you-get">Features</a> ·
+  <a href="#optional-local-ai">Local AI</a> ·
+  <a href="#privacy--local-first-by-default">Privacy</a> ·
+  <a href="CONTRIBUTING.md">Contribute</a>
 </p>
 
 ---
 
-## Table of Contents
-- [The Problem: The YouTube Server Cache Trap](#the-problem-the-youtube-server-cache-trap)
-- [How Always New To You Solves It](#how-always-new-to-you-solves-it)
-- [Key Features](#key-features)
-- [🧠 Autonomous AI Guardian & Mind Reader Mode](#-autonomous-ai-guardian--mind-reader-mode)
-- [Gamified Level System & Impact Metrics](#gamified-level-system--impact-metrics)
-- [Extension Popup Tour](#extension-popup-tour)
-- [Installation Guide](#installation-guide)
-- [Usage & Quick Start](#usage--quick-start)
-- [Technical Architecture & Under the Hood](#technical-architecture--under-the-hood)
-- [Support the Project & Donations](#support-the-project--donations)
-- [Changelog & Versioning](#changelog--versioning)
-- [Contributing](#contributing)
-- [License & Credits](#license--credits)
+## Your feed should feel like yours
 
----
+YouTube is spectacular at finding one more thing to show you. It is less useful when you have already decided that a channel, a recurring clickbait format, or a genre of recommendation is not for you.
 
-## The Problem: The YouTube Server Cache Trap
+Always New To You adds the missing control layer. Block a creator with one click, filter a title pattern, whitelist the people you trust, clear out Shorts or community posts, and keep your entire setup in local browser storage. The result is a feed that gets quieter, more intentional, and much easier to enjoy.
 
-Have you ever used YouTube's native **"Not Interested"** or **"Don't recommend channel"** buttons on the **"New to You"** discovery feed, only to have your homepage run completely dry?
-
-```
-Native YouTube Behavior (The Depletion Trap):
-┌─────────────────────────┐
-│ YouTube Server Cache    │
-│ [Batch of ~24 videos]   │
-└────────────┬────────────┘
-             │
-             ├─ User clicks "Don't recommend channel" (Sends POST to YouTube)
-             ├─ YouTube marks video as consumed on the server
-             ├─ YouTube DOES NOT replenish the batch!
-             ▼
-┌─────────────────────────┐
-│ The Result: DEAD FEED   │
-│ Refreshing page? Same!  │
-│ 1-2 hour cooldown lock! │
-└─────────────────────────┘
+```text
+YouTube card appears
+        │
+        ├── Keep it ──────────────────────────────────────────────► carry on watching
+        │
+        └── Block it locally
+                │
+                ├── channel / handle / video rule
+                ├── keyword or regex rule
+                └── optional local-AI assessment
+                         │
+                         ▼
+                 card disappears from your page
+                 without normal local filtering sending feedback to YouTube
 ```
 
-When you click YouTube's native dismissal buttons, YouTube's server immediately marks those slots as consumed without fetching a replacement batch. Your client is trapped with a depleted server-side recommendation queue for **1 to 2 hours**. Refreshing the page, toggling "All", or cache-busting does nothing because the server simply re-serves the depleted cached batch.
+> [!TIP]
+> The default Blacklister action is local and reversible. If you explicitly enable **Server Recommendation Feedback**, the extension can also attempt YouTube's native “Don't recommend channel” action when it is available.
+
+## What you get
+
+| | Feature | Why it matters |
+| --- | --- | --- |
+| ⚡ | **Instant local blacklisting** | Hide a channel, handle, channel URL, or video ID directly in the page—without waiting for a recommendation model to catch up. |
+| 🖱️ | **Three ways to block** | Use the thumbnail control, the injected three-dot menu action, or press <kbd>B</kbd> while hovering a card. |
+| 🧠 | **Smart title rules** | Add word-boundary-aware keywords or full `/pattern/flags` regular expressions for recurring tropes and formats. |
+| ⭐ | **Whitelist protection** | Keep favorite creators visible even when a broad keyword rule would otherwise match. |
+| 🧹 | **Feed decluttering** | Hide Shorts shelves and community posts when you want a calmer browse. |
+| ↩️ | **Undo without regret** | Manual blocks show a five-second Undo option, so a misclick is never permanent. |
+| 💾 | **Portable setup** | Export or import your rules and settings as JSON. |
+| 🎯 | **Hunt Mode** | Turn a quick browsing break into a small local minigame—no blacklist changes, just score, accuracy, and a moving target. |
 
 ---
 
-## How Always New To You Solves It
+## The Blacklister, in detail
 
-**Always New To You** operates entirely on the client side inside the browser's DOM:
+### ⚡ Block now. Decide later.
 
-1. **100% Server-Invisible Filtering**: Videos and channels are filtered instantly in the DOM. YouTube's recommendation servers are **never** notified, meaning your server recommendation queue remains intact and your feed never enters a cooldown lockout.
-2. **Auto-Pinning "New to You"**: Automatically selects and maintains YouTube's "New to You" discovery chip as you browse, ensuring you are constantly exposed to fresh creators.
-3. **Automated Feed Replenishment**: When multiple hidden videos deplete visible rows below an optimal threshold, a gentle, non-disruptive scroll trigger prompts YouTube to pull the next chunk down the pipe.
-4. **Watch-Page Isolation**: Filtering strictly targets feed lockups and search grids (`ytd-rich-item-renderer`, `yt-lockup-view-model`). Player wrappers (`ytd-watch-flexy`, metadata panels) are strictly isolated so video playback is never disrupted.
+The core feature is intentionally simple: unwanted cards disappear from the current page as soon as they match one of your local rules. You can add a channel from the thumbnail, a native-looking **Blacklist Channel (Local)** entry in YouTube's three-dot menu, or the <kbd>B</kbd> keyboard shortcut.
 
----
+The extension recognizes channel names, `@handles`, channel URLs, and direct video links. When YouTube does not expose a reliable channel identity, it falls back to a video-specific rule rather than polluting your channel list with opaque IDs.
 
-## Key Features
+Every manual block is followed by an Undo toast. Open the extension popup whenever you want to search, review, or remove a saved rule.
 
-### 🧠 Autonomous AI Guardian & Mind Reader Mode
-- **Local AI Daemon Link**: Auto-detects local Ollama (`http://localhost:11434`) and LM Studio (`http://localhost:1234`), letting you select any local model (Phi, Gemma, Qwen, LLaMA).
-- **Mind Reader Taste Synthesizer**: Type what content you love or hate in plain English (or pick from curated personas like *Zen Scholar*, *Tech & Hardware*, or *Anti-Dopamine*), and the AI automatically synthesizes precision keyword and regex rules into your active blacklist.
-- **Predictive Autonomous Slop Interceptor**: Analyzes incoming YouTube home feed videos in real time, purging clickbait and ragebait before you even have to see it.
-- **100% Local & Private**: All inference runs locally on your own machine. Zero data or video titles are sent to external cloud APIs.
-- **Built-In Heuristic Fallback**: Runs intelligent neural heuristic scoring even when local LLM daemons are offline.
+### 🧠 A keyword engine that understands the difference
 
-### ✨ AI Title De-Baiter (Real-Time Title Neutralizer)
-- Detects sensationalist titles on the feed and rewrites them into factual, dry, low-key descriptions via batched, zero-temperature local LLM calls.
-- Prepends a subtle clickable `✨` badge to every de-baited title — click it any time to **smoothly toggle** between the calm AI title and the raw clickbait original.
-- Original titles are preserved in `dataset.originalTitle` and a per-video cache, so toggling is instant and offline.
-- Instant heuristic neutralizer fallback strips ALL-CAPS, exclamation spam, and hype hooks when the local daemon is closed.
-- Toggle in **Settings & Tools** or the **AI Guardian** tab.
+Not every unwanted recommendation comes from one channel. Use the **Keywords** tab to filter repeat formats, tired buzzwords, or spoilers across your whole feed.
 
-### 🩻 AI Feed Forensic Diagnostic Roast
-- Glowing **"Run Feed Diagnostic Roast"** action in the AI Guardian tab pulls up to 15 visible titles/channels from the active YouTube tab.
-- Local LLM returns a **Toxicity Score (0–100%)**, named **Manipulation Tactics** (e.g. *Manufactured Outrage*, *Parasocial Dopamine Trap*, *Algorithmic Desperation*), and a **Savage Psychological Diagnosis** of your current algorithm.
-- 1-Click **"⚡ Purge All Identified Manipulators"** button immediately blacklists every offending channel.
+| What you want to filter | Add this rule |
+| --- | --- |
+| A whole word | `crypto` |
+| A recurring series format | `/vlog\s*#?\d+/i` |
+| Hype-filled 24-hour challenges | `in 24 hours` |
+| A specific creator | `@creator`, a channel URL, or the creator name |
 
-### ⏱️ 1-Click TL;DW (Too Long; Didn't Watch) Video Inspector
-- Hover any video thumbnail to reveal a sleek `⏱️ TL;DW` pill alongside Quick-Block.
-- Opens a dark glassmorphism modal with an animated neural-scan effect and summarizes the video into:
-  - 🔍 **Clickbait Truth Verdict** — exposes whether the title was false or exaggerated.
-  - 📝 **Core Takeaways** — three bullet points of actual substance.
-  - ⏱️ **Time Saved** — calculated minutes saved.
-- Captions are fetched with YouTube's standard client-side `/timedtext` endpoint (zero API keys), parsed from JSON3/XML, with a metadata fallback when captions are disabled.
-- Quick **"Blacklist Channel"** action directly inside the modal.
-- Toggle in **Settings & Tools**.
+Plain-text rules are word-boundary aware: blocking `cat` catches “cute cat” without hiding “category.” If you need more control, use a JavaScript-style regular expression with flags.
 
-### 🎯 Hunt Mode (Minigame)
-- Toggle in Settings: crosshair cursor, a roaming `⛔` prey appears on the thumbnail you're hovering.
-- Click the prey for +100 points (no blacklist action — purely score).
-- Miss (click anywhere else) costs 10 points. Score and best score persist locally.
-- Quick-block button remains fully functional — Hunt Mode is additive, not a replacement.
+### ⭐ Your favorites are safe
 
-### ⚡ Zero-Latency Local Blacklist
-- Hide channels instantly with zero network delay.
-- Cleanly matches channel names, `@handles`, and video link formats.
-- Persistent offline storage via `chrome.storage.local`.
+The whitelist wins. Add a trusted channel to **Whitelist** and it remains visible—even if its title matches one of your broader keyword rules. That means you can block a topic aggressively without losing the creators who cover it thoughtfully.
 
-### 🎯 1-Click Thumbnail Quick-Block & Keyboard Shortcut (`B`)
-- Hover over any video thumbnail on YouTube to reveal a dedicated quick-block button.
-- Tap **`B`** on your keyboard while hovering over any video card to block it instantly without clicking.
-- Can be toggled on/off in Settings.
+### 🧹 Clean the feed, not just the channels
 
-### ↩️ Floating "Undo" Toast Notification
-- Misclick or change your mind? A floating YouTube-native dark pill toast in the bottom-left corner gives you a **5-second Undo window** to instantly unhide the video and restore the channel.
-
-### 🎮 Gamified Level System & Milestones
-- Earn rank promotions as you clean your digital space, from 🌱 **Novice Scroller** up to 🌌 **Cosmic Mind**, complete with milestone confetti celebrations!
-- Track **Hours of Life Reclaimed** and your real-time **Algorithm Purity Score**.
-
-### 📦 1-Click Curated "Starter Packs"
-- Pre-loaded anti-slop keyword filters in the Keywords tab:
-  - 🧠 **Anti-Brainrot**: `prank`, `skibidi`, `in 24 hours`, `you won't believe`, `exposed`, `reaction`
-  - 🪙 **Crypto / Hustle**: `crypto`, `bitcoin`, `memecoin`, `100x`, `passive income`, `dropshipping`
-  - 🤖 **AI Slop**: `ai generated`, `faceless channel`, `text to speech`, `midjourney`
-  - 🎭 **Drama / Gossip**: `drama`, `canceled`, `apology video`, `responds to`, `clout`
-
-### 💡 Algorithm Defense Wisdom
-- Interactive header quote bar cycling daily philosophical and witty reminders on digital autonomy and algorithmic intentionality.
-
-### 📋 Seamless 3-Dot Menu Integration
-- Injects a native-styled **"Blacklist Channel (Local)"** action directly into YouTube's 3-dot context menu.
-- Deep-clones native renderer contexts to guarantee the action renders enabled, clickable, and responsive across YouTube redesigns.
-
-### 🔄 Virtual Scroller & DOM Recycling Resilient
-- YouTube recycles DOM containers as you scroll through infinite feeds.
-- The extension tracks unique video signatures rather than simple static tags, ensuring recycled elements are re-evaluated accurately on the fly.
-
-### 🛡️ Smart Word-Boundary & Regex Keyword Engine
-- Block annoying video tropes, clickbait buzzwords, or spoilers.
-- **Word-boundary aware**: Blocking `"cat"` will hide `"cute cat"` but **will not** hide `"category"` or `"catastrophe"`.
-- **Regex support**: Full support for regular expressions with flags (e.g. `/vlog\s*#?\d+/i`, `/unboxing/i`).
-
-### ⭐ Whitelist Channel Safeguards
-- Whitelist favorite channels so they are **never blocked**, even if their video title matches an active keyword rule (e.g., allow your favorite tech reviewer even if you blocked the word `"crypto"`).
-
-### 🚫 Feed Decluttering Toggles
-- **Hide YouTube Shorts**: Completely remove Shorts shelves and compact Shorts reels from your home and subscription feeds.
-- **Hide Community Posts**: Eliminate text posts, polls, and image promotions from your feed.
-
-### 💾 Complete Data Portability (JSON Backup)
-- Export your entire rule set, keywords, whitelist, and settings to a JSON file with one click.
-- Import backups effortlessly to sync rules across multiple computers or browsers.
+The Settings tab includes switches for hiding Shorts shelves and community posts. It also lets you turn the quick-block control, TL;DW inspector, title de-baiter, server feedback, and Hunt Mode on or off independently.
 
 ---
 
-## Gamified Level System & Impact Metrics
+## Optional local AI
 
-| Rank Level | Emoji | Title | Videos Blocked |
-|:---:|:---:|:---|:---:|
-| **Level 1** | 🌱 | Novice Scroller | 0 – 9 |
-| **Level 2** | 🛡️ | Feed Defender | 10 – 49 |
-| **Level 3** | ⚔️ | Slop Slayer | 50 – 99 |
-| **Level 4** | 🧙 | Algorithm Whisperer | 100 – 249 |
-| **Level 5** | 👑 | Zen Master | 250 – 499 |
-| **Level 6** | 🚀 | Feed Ascendant | 500 – 999 |
-| **Level 7** | 🌌 | Cosmic Mind | 1,000+ |
+Want a little more judgment before a card reaches your attention? Open **AI Guardian** in the popup. The extension works with a local Ollama or LM Studio server; no cloud model or API key is required.
 
-* **Hours Saved Formula**: Calculated at ~10 minutes saved per blocked clickbait video avoided (`totalBlocked * 10 / 60`).
-* **Purity Meter**: Real-time algorithm cleanliness score with dynamic gradient progress fill.
+| Tool | What it does |
+| --- | --- |
+| 🔮 **Mind Reader Taste Profiler** | Describe the feed you want—or choose a preset—and generate focused keywords and regex rules. |
+| 🤖 **Autonomous Feed Guardian** | Evaluates small batches of visible cards against your saved taste profile and can locally intercept likely clickbait or low-signal recommendations. |
+| ✨ **AI Title De-Baiter** | Rewrites sensationalist titles into calmer descriptions. Click the ✨ badge to reveal the original title at any time. |
+| 🩻 **Feed Forensic Diagnostic Roast** | Reviews visible feed cards, calls out manipulation patterns, and offers a one-click way to add identified channels to your local blacklist. |
+| ⏱️ **TL;DW inspector** | Summarizes available captions, offers a clickbait verdict, surfaces takeaways, and estimates time saved. |
+
+### Local model setup
+
+Run either supported local server, then open the **AI Guardian** tab. The extension detects available models automatically.
+
+| Provider | Default address |
+| --- | --- |
+| Ollama | `http://localhost:11434` |
+| LM Studio | `http://localhost:1234` |
+
+No local model running? Core blacklisting remains fully functional, and AI features fall back to built-in heuristics where applicable.
+
+### TL;DW: know the point before you give it your time
+
+Hover a supported thumbnail to reveal the `⏱️ TL;DW` control. It sits on the left edge above the Blacklister control so it stays out of YouTube's right-side clip and mute controls.
+
+When captions are available, the extension reads them from YouTube's standard client-side timed-text endpoint and produces:
+
+- a plain-language clickbait verdict;
+- up to three core takeaways; and
+- an estimate of the time you may save.
+
+If captions are unavailable, TL;DW still gives you a clear fallback result rather than leaving a dead button.
 
 ---
 
-## Extension Popup Tour
+## 🎯 Hunt Mode: a tiny game in your feed
 
-The extension features a responsive, dark-themed management popup designed to feel right at home alongside YouTube's native styling:
+Hunt Mode is intentionally separate from filtering. Enable it in Settings and a roaming ⛔ target appears on the thumbnail you are hovering.
 
-```
-┌─────────────────────────────────────────────────────┐
-│ 📺 YouTube Blacklister             [ 142 Blocked ] │
-├──────────────┬──────────────┬─────────────┬─────────┤
-│ Channels (8) │ Keywords (3) │ Whitelist(2)│ Settings│
-├──────────────┴──────────────┴─────────────┴─────────┤
-│ 🔍 Search blacklisted channels...                   │
-│ ┌─────────────────────────────────────────────────┐ │
-│ │ Clickbait Channel Name               [ Unblock ]│ │
-│ │ @spam_creator                        [ Unblock ]│ │
-│ │ AI Reactions HD                      [ Unblock ]│ │
-│ └─────────────────────────────────────────────────┘ │
-│ [ Enter channel name, @handle, or URL...  ] [ Add ] │
-├─────────────────────────────────────────────────────┤
-│ Ready • v1.8.0                 [ ☕ Support on Ko-fi ]│
-└─────────────────────────────────────────────────────┘
+- Hit the target: **+100 points**.
+- Miss anywhere else: **−10 points** (never below zero).
+- Your score and best score persist locally.
+- Normal Blacklister controls still work exactly as usual.
+
+It is a small, optional way to turn passive scrolling into a moment of attention—without changing your rules or affecting YouTube.
+
+---
+
+## Popup tour
+
+```text
+┌───────────────────────────────────────────────────────────────┐
+│  YouTube Blacklister                              142 Blocked │
+├───────────────────────────────────────────────────────────────┤
+│  Channels  ·  Keywords  ·  Whitelist  ·  AI Guardian  ·  Settings │
+├───────────────────────────────────────────────────────────────┤
+│  Search, add, remove, export, import, tune your feed.         │
+│                                                               │
+│  🌱 Rank progression  •  estimated time saved  •  purity meter │
+└───────────────────────────────────────────────────────────────┘
 ```
 
-- **Channels Tab**: View, search, and unblock blacklisted channels. Add channels by name, `@handle`, or direct video URL. Bulk entry supported (comma or newline separated).
-- **Keywords Tab**: Add and search word-boundary keywords or `/pattern/flags` regular expressions.
-- **Whitelist Tab**: Safeguard trusted channels against broad keyword rules.
-- **AI Guardian Tab**: Local model connection status, Mind Reader taste profiler, Autonomous Guardian sensitivity, the **🩻 Feed Forensic Diagnostic Roast**, the AI Title De-Baiter toggle, and the live interception audit log.
-- **Settings & Tools Tab**: Toggle the hover quick-block button, Shorts blocker, Community posts blocker, AI Title De-Baiter, TL;DW inspect button, and **Hunt Mode** minigame. Export and import JSON backups.
+- **Channels** — search, add, and unblock creators or direct video rules. Bulk entry supports commas and new lines.
+- **Keywords** — manage ordinary keyword rules and regular expressions; use curated starter packs for anti-brainrot, crypto/hustle, AI-slop, and drama/gossip patterns.
+- **Whitelist** — protect channels that should always remain visible.
+- **AI Guardian** — choose a local model, build a taste profile, run diagnostics, manage autonomous filtering, and review recent interceptions.
+- **Settings** — customize page controls, local decluttering, TL;DW, Hunt Mode, optional server feedback, and JSON import/export.
+
+The rank, “time saved,” and purity indicators are playful motivation—not scientific measurements. They are calculated from local block counts, using an estimate of ten minutes saved per avoided video.
 
 ---
 
-## Installation Guide
+## Install
 
-### Option 1: One-Click Quick Installer (Windows)
+Always New To You is an unpacked Manifest V3 extension for Chromium browsers: Chrome, Edge, Brave, Opera, and Vivaldi.
 
-1. Download the [Latest Release ZIP](https://github.com/PyrateGFXProductions/YouTube-Blacklister/releases) and extract it anywhere.
-2. Double-click **`install.bat`**:
-   - It automatically copies the folder path to your clipboard.
-   - It automatically launches your browser's extensions manager.
-3. Turn on **Developer mode** (top-right switch) and click **Load unpacked** (top-left).
-4. Paste (`Ctrl+V`) the copied folder path and click **Select Folder**. Done!
+### Option 1: Windows quick installer
 
----
+1. Download the [latest release](https://github.com/PyrateGFXProductions/YouTube-Blacklister/releases) and extract it.
+2. Double-click [`install.bat`](install.bat). It opens your extensions manager and copies the folder path to your clipboard.
+3. Enable **Developer mode**.
+4. Choose **Load unpacked**, paste the path, and select the folder.
 
-### Option 2: Manual Load Unpacked (Chrome, Edge, Brave, Opera, Vivaldi)
+### Option 2: Load it yourself
 
-1. **Download or Clone the Repository**:
+1. Clone or download this repository.
+
    ```bash
    git clone https://github.com/PyrateGFXProductions/YouTube-Blacklister.git
    ```
-   *(Or download the ZIP from [Releases](https://github.com/PyrateGFXProductions/YouTube-Blacklister/releases) and extract it).*
 
-2. **Open your browser's Extension Manager**:
-   - **Google Chrome**: Navigate to `chrome://extensions`
-   - **Microsoft Edge**: Navigate to `edge://extensions`
-   - **Brave**: Navigate to `brave://extensions`
-   - **Opera / Vivaldi**: Open Settings → Extensions
+2. Open your browser's extension page:
 
-3. **Enable Developer Mode**:
-   - Toggle the **Developer mode** switch in the top-right corner.
+   | Browser | Address |
+   | --- | --- |
+   | Chrome | `chrome://extensions` |
+   | Edge | `edge://extensions` |
+   | Brave | `brave://extensions` |
 
-4. **Load the Extension**:
-   - Click the **Load unpacked** button in the top-left corner.
-   - Select the extracted `YouTube-Blacklister` directory.
-
-5. **Pin the Extension**:
-   - Click the puzzle piece icon in your browser toolbar and pin **Always New To You**.
+3. Enable **Developer mode**, choose **Load unpacked**, and select the repository folder.
+4. Pin **Always New To You** from your browser's extensions menu.
+5. Open [YouTube](https://www.youtube.com/) and start curating.
 
 ---
 
-### Option 3: Chrome Web Store / Edge Add-ons (Coming Soon)
-*We have pre-packaged the store-compliant bundle (`YouTube-Blacklister-v1.8.0.zip`). Once published, users will be able to install directly with one click from the official web stores.*
+## Privacy — local first by default
+
+The point of this extension is control without unnecessary data collection.
+
+- **Local rules and settings:** stored in `chrome.storage.local` on your device.
+- **Local blacklisting:** standard filtering hides matching cards in the page DOM; it does not send ordinary blacklist actions to YouTube.
+- **Optional YouTube feedback:** enabling **Server Recommendation Feedback** makes a deliberate, best-effort attempt to click YouTube's native “Don't recommend channel” option. It depends on YouTube's current UI and language.
+- **Local AI only:** AI requests go to your own Ollama or LM Studio server at `localhost`; no cloud AI provider is used.
+- **TL;DW captions:** retrieved from YouTube in the active browser session. There is no third-party transcript service or API key.
+- **No telemetry:** no analytics SDKs, trackers, or ad networks are included.
+
+The extension requests `storage`, `tabs`, and localhost host permissions for the optional local-AI servers. See [`manifest.json`](manifest.json) for the authoritative permission list.
 
 ---
 
-## Usage & Quick Start
+## Under the hood
 
-1. Navigate to [https://www.youtube.com](https://www.youtube.com).
-2. Notice the **"New to You"** chip is automatically selected and held active.
-3. When an unwanted channel appears:
-   - **Method A (1-Click Hover)**: Hover your mouse over the video thumbnail and click the red **"✕ Block Channel"** badge in the upper corner.
-   - **Method B (3-Dot Menu)**: Click the **3 dots (⋮)** on the video card and select **"Blacklist Channel (Local)"** at the very top.
-   - **Method C (Keyboard)**: Hover the card and press **`B`** to block instantly.
-4. The channel's videos disappear from your feed instantly with a confirmation toast.
-5. Click the extension toolbar icon at any time to review your list, adjust keywords, or export your configuration.
-6. **Optional — Local AI**: Run Ollama (`ollama serve`) or LM Studio with any model. Open the popup → **AI Guardian** tab → it will auto-detect. Pick a persona or type your taste, hit **Synthesize**, and watch precision rules populate your blacklist.
+YouTube continuously replaces and recycles feed elements as you scroll. Always New To You watches for these changes and re-evaluates cards using their current title, channel, and video identity instead of assuming a DOM element always represents the same recommendation.
 
----
+The extension also:
 
-## Technical Architecture & Under the Hood
+- keeps whitelist precedence ahead of all blacklist and keyword rules;
+- reapplies settings after YouTube navigation and extension storage changes;
+- keeps feed-card work scoped away from YouTube's main player containers; and
+- serializes block-count updates so fast actions do not lose progress.
 
-Modern YouTube does not use static HTML tables or standard server-rendered feeds. Instead, it employs:
-- **Polymer / Web Components** (`ytd-rich-grid-renderer`, `ytd-rich-item-renderer`, `yt-lockup-view-model`)
-- **Innertube JSON Endpoint APIs** (`/youtubei/v1/browse`, `/youtubei/v1/search`)
-- **DOM Virtualization and Recycle Pools** (reusing existing DOM nodes as the viewport scrolls)
+YouTube can change its markup at any time. If a menu item, card type, or page layout stops behaving correctly, please [open an issue](https://github.com/PyrateGFXProductions/YouTube-Blacklister/issues) with your browser version, the affected YouTube URL type, and a short description.
 
-### How We Overcame YouTube's Modern Architecture:
+## Development and packaging
 
-1. **Renderer Context Deep-Cloning**:
-   In modern YouTube UI releases, injecting a standard HTML `<button>` or a bare `yt-list-item-view-model` results in an inert, disabled row. YouTube requires an active `rendererContext` carrying a recognized command endpoint. We deep-clone the native row's context and supply an inert `feedbackEndpoint` with `sendPost: false`, rendering the item active and styled correctly while **guaranteeing zero network requests** are dispatched to YouTube.
+There is no build step: this is vanilla JavaScript, HTML, and CSS.
 
-2. **Innertube Hook & DOM Fallback Dual Pipeline**:
-   The extension hooks into the `window.fetch` pipeline for innertube JSON responses to inject the menu option at the data layer, while simultaneously running a robust DOM mutation observer fallback to handle legacy lockups and delayed rendering.
+1. Load the repository as an unpacked extension.
+2. Make your change.
+3. Choose **Reload** on the browser's extensions page.
+4. Test on YouTube's home, search, subscription, and watch/recommendation surfaces where relevant.
 
-3. **Virtual DOM Element Recycling**:
-   Unlike basic content scripts that stamp a `data-processed="true"` attribute on elements and forget them, Always New To You checks a computed content fingerprint (`title + channel + href`). When YouTube recycles an existing DOM wrapper for a completely different video, the extension re-evaluates the card instantaneously.
-
-4. **Exception-Shielded Async Architecture**:
-   Chrome disables extensions if an unhandled promise rejection occurs during network hooks. Every async operation, fetch interceptor, and mutation callback in this extension is wrapped in defensive exception guards.
-
-5. **Fixed-Position Overlay for Hunt Mode**:
-   The Hunt Mode prey uses `position: fixed` at maximum z-index (`2147483647`) on `document.body`, completely detached from YouTube's DOM churn. Visibility is driven by the existing `hoveredVideoCard` tracker, so it rides over thumbnail, preview overlay, and everything in between — no flicker, no flash.
-
----
-
-## Privacy & Offline Security
-
-- **Zero External Connections**: The extension communicates only with `chrome.storage.local` on your device — plus your own **local** AI daemon (`localhost:11434` / `localhost:1234`) when AI features are enabled.
-- **AI stays on your machine**: All title de-baiting, feed roasting, taste synthesis, and transcript summarizing run against your local Ollama / LM Studio model. Nothing is sent to any cloud API.
-- **Captions fetched client-side**: TL;DW transcripts use YouTube's standard `/timedtext` endpoint, retrieved in-page the same way YouTube's own player does — no API keys, no third-party transcript services.
-- **No Analytics or Telemetry**: No trackers, no logging services, no third-party libraries.
-- **Minimal Permissions**: Requests only `"storage"` (to remember your blocked rules), `"tabs"` (to notify open YouTube tabs when rules change), and `localhost` host permissions for your local AI server.
-- **Inspectable Source**: Every line of code is human-readable Vanilla JavaScript and CSS.
-
----
-
-## Support the Project & Donations
-
-This extension is 100% free and open-source under the MIT license.
-
-YouTube updates its web frontend and internal class selectors multiple times each month. Keeping this extension perfectly resilient, updated, and feature-rich requires constant testing and development.
-
-If this extension has saved your YouTube experience from algorithm fatigue and endless clickbait, please consider supporting development:
-
-<p align="center">
-  <a href="https://ko-fi.com/pyrategfxproductions">
-    <img src="https://ko-fi.com/img/githubbutton_sm.svg" alt="Support me on Ko-fi" width="220">
-  </a>
-</p>
-
-- ☕ **Ko-fi**: [https://ko-fi.com/pyrategfxproductions](https://ko-fi.com/pyrategfxproductions)
-- ⭐ **GitHub Star**: Star this repository to help others discover the project!
-- 🐛 **Feedback**: Open an issue if you encounter a new YouTube layout variation or have a feature idea.
-
-Every coffee and contribution directly fuels ongoing updates, selector maintenance, and new features!
-
----
-
-## Packaging for Release
-
-To create a clean, distributable ZIP archive for GitHub Releases or Chrome Web Store:
+To package a release from the repository root:
 
 ```powershell
 .\package-extension.ps1
 ```
 
-This PowerShell script validates your manifest, confirms that all icons and required assets exist, and builds `YouTube-Blacklister-v1.8.0.zip`.
+The script verifies required assets and creates `YouTube-Blacklister-v1.8.0.zip`.
 
----
+Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request, and see [CHANGELOG.md](CHANGELOG.md) for release history.
 
-## Changelog & Versioning
+## Support the project
 
-See [CHANGELOG.md](CHANGELOG.md) for full release history and version notes.
+YouTube changes constantly. Selector maintenance, browser testing, and feature work keep this project useful. If it has made your feed feel better, consider supporting development on [Ko-fi](https://ko-fi.com/pyrategfxproductions).
 
----
+<p align="center">
+  <a href="https://ko-fi.com/pyrategfxproductions">
+    <img src="https://ko-fi.com/img/githubbutton_sm.svg" width="190" alt="Support PyrateGFX Productions on Ko-fi">
+  </a>
+</p>
 
-## Contributing
+## License
 
-Contributions, bug reports, and suggestions are warmly welcomed! Please read our [CONTRIBUTING.md](CONTRIBUTING.md) guide before submitting pull requests.
-
----
-
-## License & Credits
-
-Created and maintained by **[PyrateGFX Productions](https://github.com/PyrateGFXProductions)**.
-
-Released under the **[MIT License](LICENSE)**.
-
-Feel free to use, modify, and distribute this project freely.
+Copyright © 2026 [PyrateGFX Productions](https://github.com/PyrateGFXProductions). Released under the [MIT License](LICENSE).
