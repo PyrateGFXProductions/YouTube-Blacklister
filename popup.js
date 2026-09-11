@@ -420,7 +420,15 @@ function exportBackup() {
       blockShorts: data.blockShorts,
       blockCommunity: data.blockCommunity,
       enableQuickBlock: data.enableQuickBlock,
-      triggerServerFeedback: data.triggerServerFeedback
+      triggerServerFeedback: data.triggerServerFeedback,
+      aiAutonomous: data.aiAutonomous,
+      aiSensitivity: data.aiSensitivity,
+      aiModel: data.aiModel,
+      aiTastePrompt: data.aiTastePrompt,
+      aiDebaitTitles: data.aiDebaitTitles,
+      aiDebaitModel: data.aiDebaitModel,
+      tldwEnabled: data.tldwEnabled,
+      huntMode: data.huntMode
     }
   };
 
@@ -479,6 +487,14 @@ function importBackup(file) {
         if ('blockCommunity' in json.settings) data.blockCommunity = Boolean(json.settings.blockCommunity);
         if ('enableQuickBlock' in json.settings) data.enableQuickBlock = Boolean(json.settings.enableQuickBlock);
         if ('triggerServerFeedback' in json.settings) data.triggerServerFeedback = Boolean(json.settings.triggerServerFeedback);
+        if ('aiAutonomous' in json.settings) data.aiAutonomous = Boolean(json.settings.aiAutonomous);
+        if ('aiSensitivity' in json.settings) data.aiSensitivity = String(json.settings.aiSensitivity || 'balanced');
+        if ('aiModel' in json.settings) data.aiModel = String(json.settings.aiModel || '');
+        if ('aiTastePrompt' in json.settings) data.aiTastePrompt = String(json.settings.aiTastePrompt || '');
+        if ('aiDebaitTitles' in json.settings) data.aiDebaitTitles = Boolean(json.settings.aiDebaitTitles);
+        if ('aiDebaitModel' in json.settings) data.aiDebaitModel = String(json.settings.aiDebaitModel || '');
+        if ('tldwEnabled' in json.settings) data.tldwEnabled = Boolean(json.settings.tldwEnabled);
+        if ('huntMode' in json.settings) data.huntMode = Boolean(json.settings.huntMode);
       }
 
       save();
@@ -518,15 +534,22 @@ function initToggles() {
   }
 
   const dbGuard = document.getElementById('toggleAiDebait');
+  const dbSettings = document.getElementById('toggleAiDebaitSettings');
+  const setAiDebaitTitles = (enabled) => {
+    data.aiDebaitTitles = Boolean(enabled);
+    if (dbGuard) dbGuard.checked = data.aiDebaitTitles;
+    if (dbSettings) dbSettings.checked = data.aiDebaitTitles;
+    save();
+  };
+
   if (dbGuard) {
     dbGuard.checked = data.aiDebaitTitles;
-    dbGuard.onchange = () => { data.aiDebaitTitles = dbGuard.checked; save(); };
+    dbGuard.onchange = () => setAiDebaitTitles(dbGuard.checked);
   }
 
-  const dbSettings = document.getElementById('toggleAiDebaitSettings');
   if (dbSettings) {
     dbSettings.checked = data.aiDebaitTitles;
-    dbSettings.onchange = () => { data.aiDebaitTitles = dbSettings.checked; save(); };
+    dbSettings.onchange = () => setAiDebaitTitles(dbSettings.checked);
   }
 
   const tlSettings = document.getElementById('toggleTldw');

@@ -38,3 +38,6 @@ yarn-error.log*
 scratch/
 temp/
 tmp/
+
+# graft's local graph cache — regenerable, not committed (run `graft build`).
+/graft/

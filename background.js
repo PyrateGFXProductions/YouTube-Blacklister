@@ -3,6 +3,25 @@
 
 const OLLAMA_DEFAULT_URL = 'http://localhost:11434';
 const LMSTUDIO_DEFAULT_URL = 'http://localhost:1234';
+let blockedCounterQueue = Promise.resolve();
+
+function incrementBlockedTotal(inc) {
+  blockedCounterQueue = blockedCounterQueue.then(() => new Promise((resolve) => {
+    try {
+      chrome.storage.local.get(['nyt_totalBlocked'], (res) => {
+        if (chrome.runtime?.lastError) { resolve(null); return; }
+        const current = Number(res.nyt_totalBlocked) || 0;
+        const total = Math.max(0, current + inc);
+        chrome.storage.local.set({ nyt_totalBlocked: total }, () => {
+          resolve(chrome.runtime?.lastError ? null : total);
+        });
+      });
+    } catch (_) {
+      resolve(null);
+    }
+  }));
+  return blockedCounterQueue;
+}
 
 // Check local AI server status
 async function checkAiStatus(customUrl) {
@@ -483,12 +502,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 
   if (msg.type === 'INCREMENT_BLOCKED') {
-    const inc = Number(msg.inc) || 1;
-    chrome.storage.local.get(['nyt_totalBlocked'], (res) => {
-      const current = Number(res.nyt_totalBlocked) || 0;
-      chrome.storage.local.set({ nyt_totalBlocked: Math.max(0, current + inc) });
-    });
-    sendResponse({ ok: true });
+    const requested = Number(msg.inc);
+    const inc = Number.isFinite(requested) ? Math.trunc(requested) : 1;
+    incrementBlockedTotal(inc).then((total) => sendResponse({ ok: total !== null, total }));
     return true;
   }
 

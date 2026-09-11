@@ -72,13 +72,22 @@ function isExtensionValid() {
   }
 }
 
-function safeSendRuntimeMessage(msg) {
-  if (!isExtensionValid()) return;
+function safeSendRuntimeMessage(msg, callback) {
+  if (!isExtensionValid()) {
+    if (typeof callback === 'function') callback(null);
+    return;
+  }
   try {
-    chrome.runtime.sendMessage(msg, () => {
-      if (chrome.runtime?.lastError) { /* consume to prevent unhandled rejection */ }
+    chrome.runtime.sendMessage(msg, (response) => {
+      if (chrome.runtime?.lastError) {
+        if (typeof callback === 'function') callback(null);
+        return;
+      }
+      if (typeof callback === 'function') callback(response);
     });
-  } catch (_) {}
+  } catch (_) {
+    if (typeof callback === 'function') callback(null);
+  }
 }
 
 // ------------------------------------------------------------------
@@ -256,6 +265,13 @@ function injectBlacklistStyles() {
         backdrop-filter: blur(4px);
         box-shadow: 0 2px 6px rgba(0,0,0,0.5);
       }
+      ytd-thumbnail:has(.nyt-tldw-btn) .nyt-quick-block-btn,
+      #thumbnail:has(.nyt-tldw-btn) .nyt-quick-block-btn,
+      a#thumbnail:has(.nyt-tldw-btn) .nyt-quick-block-btn,
+      .yt-lockup-view-model-wiz__thumbnail:has(.nyt-tldw-btn) .nyt-quick-block-btn,
+      yt-thumbnail-view-model:has(.nyt-tldw-btn) .nyt-quick-block-btn {
+        top: 44px;
+      }
       .nyt-quick-block-btn:hover {
         background: #d92323 !important;
         color: #ffffff !important;
@@ -297,7 +313,7 @@ function getAiFeatureCss() {
       .nyt-tldw-btn {
         position: absolute;
         top: 8px;
-        right: 8px;
+        left: 8px;
         z-index: 999;
         background: rgba(18, 18, 18, 0.85);
         color: #7be2ff;
@@ -1379,6 +1395,25 @@ function closeOpenMenu() {
   } catch (_) {}
 }
 
+function requestNativeServerFeedback() {
+  if (!settings.triggerServerFeedback) return false;
+  try {
+    const scope = document.querySelector('ytd-popup-container') || document.body;
+    const items = scope.querySelectorAll(
+      '[role="menuitem"], ytd-menu-service-item-renderer, yt-list-item-view-model'
+    );
+    for (const item of items) {
+      if (item.classList?.contains(CUSTOM_MENU_MARKER)) continue;
+      const label = cleanChannelText(item.textContent);
+      if (/^(?:don'?t|do not) recommend (?:this )?channel$/i.test(label)) {
+        item.click();
+        return true;
+      }
+    }
+  } catch (_) {}
+  return false;
+}
+
 function blacklistActiveChannel(targetCard) {
   if (targetCard) {
     activeMenuVideoCard = targetCard;
@@ -1405,8 +1440,10 @@ function blacklistActiveChannel(targetCard) {
   const primaryName = channel || (cardKeys.find(k => !k.startsWith('youtu') && k.length > 2)) || vid || 'Unknown Channel';
   let addedAny = false;
   const newlyAddedKeys = [];
+  const normalizedVideoId = vid.toLowerCase();
+  const channelKeys = cardKeys.filter(k => k && k !== normalizedVideoId);
 
-  for (const k of cardKeys) {
+  for (const k of channelKeys) {
     if (k && !settings.channels.includes(k)) {
       settings.channels.push(k);
       newlyAddedKeys.push(k);
@@ -1419,10 +1456,11 @@ function blacklistActiveChannel(targetCard) {
     newlyAddedKeys.push(norm);
     addedAny = true;
   }
-  if (vid && !settings.channels.includes(vid.toLowerCase())) {
-    const vLower = vid.toLowerCase();
-    settings.channels.push(vLower);
-    newlyAddedKeys.push(vLower);
+  // If YouTube did not expose a channel identity, preserve a useful fallback
+  // by blocking only this video instead of adding opaque IDs beside channels.
+  if (!channelKeys.length && !channel && vid && !settings.channels.includes(normalizedVideoId)) {
+    settings.channels.push(normalizedVideoId);
+    newlyAddedKeys.push(normalizedVideoId);
     addedAny = true;
   }
 
@@ -1430,17 +1468,15 @@ function blacklistActiveChannel(targetCard) {
     saveSettings();
   }
 
-  // Hide the clicked card immediately
-  hideCardElement(card);
-
   // Re-scan and hide all matching cards across the document
-  let hidCount = 1;
+  let hidCount = 0;
   const allCards = document.querySelectorAll(VIDEO_CARD_SELECTORS);
   allCards.forEach(c => {
     delete c.dataset.lastSignature;
     if (channelMatches(c, settings.channels)) {
+      const wasHidden = c.dataset.hiddenByLocalBlacklist === 'true';
       hideCardElement(c);
-      hidCount++;
+      if (!wasHidden) hidCount++;
     }
   });
 
@@ -1474,6 +1510,7 @@ function blacklistActiveChannel(targetCard) {
     } catch (_) {}
   }
 
+  const serverFeedbackSent = requestNativeServerFeedback();
   closeOpenMenu();
 
   const handleUndo = () => {
@@ -1488,7 +1525,10 @@ function blacklistActiveChannel(targetCard) {
     showToast(`Unblocked: ${primaryName}`);
   };
 
-  showToast(`Blacklisted: ${primaryName}`, handleUndo);
+  showToast(
+    `Blacklisted: ${primaryName}${serverFeedbackSent ? ' (YouTube feedback sent)' : ''}`,
+    handleUndo
+  );
 }
 
 function showToast(message, onUndo) {
@@ -1910,9 +1950,9 @@ function parseTimedtextXml(xmlText) {
 
 function readVerdictClass(text) {
   const t = String(text || '').toLowerCase();
-  if (t.includes('true clickbait') || t.includes('clickbait')) return 'clickbait';
+  if (t.includes('not clickbait')) return 'clean';
   if (t.includes('partial')) return 'partial';
-  if (t.includes('not clickbait') || t.includes('not false')) return 'clean';
+  if (t.includes('true clickbait') || t.includes('clickbait')) return 'clickbait';
   return 'dim';
 }
 
@@ -2219,20 +2259,6 @@ function huntPersist() {
   } catch (_) {}
 }
 
-function huntMovePreyEl(el) {
-  try {
-    const thumb = el && el.parentNode;
-    if (!thumb || !thumb.clientWidth) return;
-    const maxX = Math.max(0, thumb.clientWidth - 38);
-    const maxY = Math.max(0, thumb.clientHeight - 38);
-    let x = 2 + Math.random() * maxX;
-    let y = 2 + Math.random() * maxY;
-    if (maxY > 90 && y < 46 && x < 54) y = 46 + Math.random() * Math.max(1, maxY - 46);
-    el.style.left = `${x}px`;
-    el.style.top = `${y}px`;
-  } catch (_) {}
-}
-
 function huntAddPrey(card, thumb) {
   try {
     if (!huntActive || !card || !thumb) return;
@@ -2247,6 +2273,8 @@ function huntAddPrey(card, thumb) {
     el.addEventListener('pointerdown', stopNav, true);
     el.addEventListener('mousedown', (ev) => { stopNav(ev); huntHit(el); }, true);
     el.addEventListener('click', stopNav, true);
+    el._nytHuntCard = card;
+    el._nytHuntThumb = thumb;
     document.body.appendChild(el);
     huntMovePreyEl(el, thumb);
   } catch (_) {}
@@ -2285,14 +2313,19 @@ function huntRoamAll() {
     if (!huntActive) return;
     document.querySelectorAll('.nyt-hunt-prey').forEach((el) => {
       try {
-        const card = el.closest ? el.closest(VIDEO_CARD_SELECTORS) : null;
+        const card = el._nytHuntCard;
         if (!el.isConnected || !card || card.dataset.hiddenByLocalBlacklist === 'true') {
           if (el.parentNode) el.parentNode.removeChild(el);
           return;
         }
-        const thumb = card.querySelector(
+        const thumb = el._nytHuntThumb?.isConnected ? el._nytHuntThumb : card.querySelector(
           'ytd-thumbnail, #thumbnail, a#thumbnail, .yt-lockup-view-model-wiz__thumbnail, yt-thumbnail-view-model'
         );
+        if (!thumb) {
+          if (el.parentNode) el.parentNode.removeChild(el);
+          return;
+        }
+        el._nytHuntThumb = thumb;
         huntMovePreyEl(el, thumb);
         // Show only for hovered card
         if (card === hoveredVideoCard) {
@@ -2329,7 +2362,7 @@ function huntHit(el) {
       try {
         if (el && el.isConnected) {
           el.classList.remove('nyt-hunt-hit');
-          huntMovePreyEl(el);
+          huntMovePreyEl(el, el._nytHuntThumb);
         }
       } catch (_) {}
     }, 160);
