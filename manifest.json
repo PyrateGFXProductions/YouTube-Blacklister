@@ -5,8 +5,9 @@
   "author": "PyrateGFX Productions",
   "homepage_url": "https://github.com/PyrateGFXProductions/YouTube-Blacklister",
   "description": "Permanently pins YouTube's 'New to You' feed and adds a smart, local, server-invisible blacklist so the feed never runs dry or enters YouTube's cooldown lockout.",
-  "permissions": ["storage", "tabs"],
+  "permissions": ["storage"],
   "host_permissions": [
+    "https://www.youtube.com/*",
     "http://localhost:11434/*",
     "http://127.0.0.1:11434/*",
     "http://localhost:1234/*"

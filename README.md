@@ -218,7 +218,10 @@ The point of this extension is control without unnecessary data collection.
 - **TL;DW captions:** retrieved from YouTube in the active browser session. There is no third-party transcript service or API key.
 - **No telemetry:** no analytics SDKs, trackers, or ad networks are included.
 
-The extension requests `storage`, `tabs`, and localhost host permissions for the optional local-AI servers. See [`manifest.json`](manifest.json) for the authoritative permission list.
+- **Subscription scanning:** the Mirror feature briefly opens `youtube.com/feed/channels` in a background tab, reads only the channel names, handles, and channel URLs on that page, and stores that identity snapshot in `chrome.storage.local` for the Diversity Meter and "Shorts: Subscribed Only" features. The scan never touches your watch history or recommendations.
+- **Subscribed-vs-New-to-You measurement:** the Diversity Meter compares the *currently visible* feed cards against that local snapshot inside the page; nothing about what you see is transmitted anywhere.
+
+The extension requests `storage` and a small set of `host_permissions`: YouTube (to read and modify your feed page) and the localhost ports used by the optional local-AI servers. It deliberately does **not** request the `tabs` permission, so it cannot read your browsing history outside YouTube. See [`manifest.json`](manifest.json) for the authoritative permission list and [PRIVACY.md](PRIVACY.md) for the complete data-flow disclosure.
 
 ---
 

@@ -29,6 +29,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`escapeHtml` now also escapes single quotes** (defense in depth against future single-quoted attribute sinks) in both `popup.js` and `content.js`.
 - **Backup import hardening** (`sanitizeImportedKeyword`): imported keywords are length-capped at 200 chars; regex-form keywords (`/…/flags`) keep their case and flags — previously backup restore lowercased them, silently corrupting regex rules — must actually compile, and must not carry catastrophic-backtracking signatures or they are dropped.
 - **Runtime ReDoS guard** (`isReDoSSuspect` + size caps): keyword regex patterns longer than 200 chars, or containing nested-quantifier / quantified-alternation signatures (`(a+)+`, `(a|aa)+$`, …), are refused before they ever run — an imported or edited hostile pattern can no longer freeze every YouTube tab during the title scan.
+- **Permission minimization:** dropped the `tabs` permission entirely. YouTube access now comes from a scoped `https://www.youtube.com/*` host permission, so the extension's read reach is exactly one site — it can never inspect browsing history outside YouTube. (All `chrome.tabs` uses were audited: every `tab.url` read is YouTube-only and null-guarded; message passing and tab creation need no `tabs` permission under MV3.)
+- **New [`PRIVACY.md`](PRIVACY.md):** a complete data-flow disclosure (what is read, stored, and sent; Local-AI loopback only; retention/deletion; store-listing permission narrative) grounded in a line-level audit of the shipped code. README privacy section updated to match the new permission set.
 
 ---
 
