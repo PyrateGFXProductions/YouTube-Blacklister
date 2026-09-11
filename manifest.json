@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Always New To You - Smart Feed Blacklist",
-  "version": "1.8.0",
+  "version": "1.10.0",
   "author": "PyrateGFX Productions",
   "homepage_url": "https://github.com/PyrateGFXProductions/YouTube-Blacklister",
   "description": "Permanently pins YouTube's 'New to You' feed and adds a smart, local, server-invisible blacklist so the feed never runs dry or enters YouTube's cooldown lockout.",

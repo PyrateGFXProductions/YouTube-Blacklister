@@ -942,6 +942,36 @@
         <div class="ai-result-box" id="aiResultBox"></div>
       </div>
 
+      <!-- Subscription Mirror Synthesizer (companion to Mind Reader) -->
+      <div class="setting-group" style="gap: 8px;">
+        <div style="display: flex; justify-content: space-between; align-items: baseline;">
+          <span class="setting-title">🔭 Subscription Mirror Synthesizer</span>
+          <span style="font-size: 10px; color: #4db6ff; font-weight: 600;">Feed Archaeology</span>
+        </div>
+        <p class="help-hint">Scans your actual YouTube subscriptions and synthesizes rules that blacklist the parasitic slop riding those topics' coattails. Reads <code>youtube.com/feed/channels</code> locally — nothing leaves your machine.</p>
+
+        <button class="ai-action-btn" id="aiSubSynthBtn">
+          <span>🔭 Synthesize Rules from My Subscriptions</span>
+        </button>
+
+        <div class="ai-result-box" id="aiSubResultBox"></div>
+      </div>
+
+      <!-- Feed Diversity Meter -->
+      <div class="setting-group" style="gap: 8px;">
+        <div style="display: flex; justify-content: space-between; align-items: baseline;">
+          <span class="setting-title">📊 Feed Diversity Meter</span>
+          <span style="font-size: 10px; color: #c4b5fd; font-weight: 600;">Anti-Algorithm</span>
+        </div>
+        <p class="help-hint">What share of your <em>visible</em> feed is actually from channels you subscribe to? The rest is the algorithm's New-to-You pool. Uses the subscription snapshot captured by the Mirror — everything stays on your machine.</p>
+
+        <button class="ai-action-btn" id="feedDiversityBtn" style="background:linear-gradient(135deg,#6d28d9,#8b5cf6);">
+          <span>📊 Measure feed</span>
+        </button>
+
+        <div class="ai-result-box" id="feedDiversityLine" style="display:none;"></div>
+      </div>
+
       <!-- Autonomous Predictive Slop Interceptor -->
       <div class="setting-group">
         <div class="setting-item">
@@ -1042,6 +1072,17 @@
 
         <div class="setting-item">
           <div class="setting-label">
+            <span class="setting-title">Shorts: Subscribed Only</span>
+            <span class="setting-desc">Keep Shorts from channels you subscribe to, hide everyone else's (run a subscription scan first)</span>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="toggleSubOnlyShorts" />
+            <span class="slider"></span>
+          </label>
+        </div>
+
+        <div class="setting-item">
+          <div class="setting-label">
             <span class="setting-title">Hide Community Posts</span>
             <span class="setting-desc">Hide text posts and polls from home feed</span>
           </div>
@@ -1107,7 +1148,7 @@
     <div class="footer-left">
       <span id="statusMsg">Ready</span>
       <span class="footer-dot">•</span>
-      <span id="versionText">v1.8.0</span>
+      <span id="versionText">v1.10.0</span>
     </div>
     <div class="footer-right">
       <button class="kofi-link" id="kofiFooterBtn" title="Support developer on Ko-fi">

@@ -1,5 +1,5 @@
 /*
- * Always New To You - Smart Feed Blacklist (v1.8.0)
+ * Always New To You - Smart Feed Blacklist (v1.10.0)
  * ---------------------------------------------------------------
  * Core mechanisms:
  *
@@ -98,6 +98,8 @@ let settings = {
   keywords: [],
   whitelistChannels: [],
   blockShorts: false,
+  shortsSubOnly: false,
+  subsSnapshot: [],
   blockCommunity: false,
   enableQuickBlock: true,
   triggerServerFeedback: false,
@@ -105,6 +107,7 @@ let settings = {
   aiSensitivity: 'balanced',
   aiModel: '',
   aiTastePrompt: '',
+  aiSubscriptionProfile: '',
   aiDebaitTitles: false,
   aiDebaitModel: '',
   tldwEnabled: true,
@@ -126,6 +129,8 @@ function loadSettings() {
         'keywords',
         'whitelistChannels',
         'blockShorts',
+        'shortsSubOnly',
+        'subsSnapshot',
         'blockCommunity',
         'enableQuickBlock',
         'triggerServerFeedback',
@@ -133,6 +138,7 @@ function loadSettings() {
         'aiSensitivity',
         'aiModel',
         'aiTastePrompt',
+        'aiSubscriptionProfile',
         'aiDebaitTitles',
         'aiDebaitModel',
         'tldwEnabled',
@@ -144,6 +150,8 @@ function loadSettings() {
         settings.whitelistChannels = Array.isArray(res.whitelistChannels)
           ? res.whitelistChannels : settings.whitelistChannels;
         settings.blockShorts = Boolean(res.blockShorts);
+        settings.shortsSubOnly = Boolean(res.shortsSubOnly);
+        settings.subsSnapshot = Array.isArray(res.subsSnapshot) ? res.subsSnapshot : settings.subsSnapshot;
         settings.blockCommunity = Boolean(res.blockCommunity);
         settings.enableQuickBlock = res.enableQuickBlock !== false;
         settings.triggerServerFeedback = Boolean(res.triggerServerFeedback);
@@ -151,12 +159,14 @@ function loadSettings() {
         settings.aiSensitivity = res.aiSensitivity || 'balanced';
         settings.aiModel = res.aiModel || '';
         settings.aiTastePrompt = res.aiTastePrompt || '';
+        settings.aiSubscriptionProfile = res.aiSubscriptionProfile || '';
         settings.aiDebaitTitles = Boolean(res.aiDebaitTitles);
         settings.aiDebaitModel = res.aiDebaitModel || settings.aiModel || '';
         settings.tldwEnabled = res.tldwEnabled !== false;
         settings.huntMode = Boolean(res.huntMode);
 
         injectBlacklistStyles();
+        refreshSubscriptionKeySet();
         try { syncHuntMode(); } catch (_) {}
         resolve();
       });
@@ -797,6 +807,118 @@ function channelMatches(card, list) {
 }
 
 // ------------------------------------------------------------------
+// SUBSCRIPTION MIRROR: IDENTITY MATCHING
+// (feed diversity meter + "Shorts: subscribed only" both key off this set)
+// ------------------------------------------------------------------
+
+// Normalized Set<string> of every identity in settings.subsSnapshot.
+// Fed by loadSettings(); rebuilt on every RULES_UPDATED / storage change.
+let subscriptionKeySet = null;
+
+function buildSubscriptionKeySet() {
+  const set = new Set();
+  const channels = Array.isArray(settings.subsSnapshot) ? settings.subsSnapshot : [];
+  for (let i = 0; i < channels.length; i++) {
+    const ch = channels[i];
+    if (!ch || typeof ch !== 'object') continue;
+    if (ch.name) {
+      const n = normalizeChannel(ch.name);
+      if (n) set.add(n);
+    }
+    if (ch.handle) {
+      const h = normalizeChannel(ch.handle);
+      if (h) set.add(h);
+    }
+    if (ch.url) {
+      const ek = extractEntityKey(ch.url);
+      if (ek) set.add(ek.toLowerCase());
+    }
+  }
+  return set;
+}
+
+function refreshSubscriptionKeySet() {
+  subscriptionKeySet = buildSubscriptionKeySet();
+}
+
+function getSubscriptionKeySet() {
+  if (!subscriptionKeySet) refreshSubscriptionKeySet();
+  return subscriptionKeySet;
+}
+
+// Does this feed card's channel identity appear in the subscription snapshot?
+// Mirrors channelMatches() semantics: normalized name / handle / channel URL (video IDs never match).
+function cardIsSubscribed(card) {
+  if (!card) return false;
+  const set = getSubscriptionKeySet();
+  if (!set.size) return false;
+  const keys = getCardChannelKeys(card);
+  if (!keys.length) return false;
+  for (let i = 0; i < keys.length; i++) {
+    if (set.has(normalizeChannel(keys[i]))) return true;
+  }
+  return false;
+}
+
+// ------------------------------------------------------------------
+// SHORTS: SUBSCRIBED-ONLY MODE (hybrid of the all-or-nothing blockShorts)
+// ------------------------------------------------------------------
+function filterShortsToSubscriptions() {
+  if (!settings.shortsSubOnly || settings.blockShorts) return;
+  const set = getSubscriptionKeySet();
+  if (!set.size) return;
+
+  const reels = document.querySelectorAll(
+    'ytd-reel-item-renderer, yt-shorts-lockup-view-model, ' +
+    'ytd-rich-shelf-renderer[is-shorts] ytd-rich-item-renderer, ' +
+    'ytd-reel-shelf-renderer ytd-reel-item-renderer'
+  );
+  for (let i = 0; i < reels.length; i++) {
+    const reel = reels[i];
+    if (!reel || reel.dataset.hiddenByLocalBlacklist === 'true') continue;
+    if (cardIsSubscribed(reel)) continue;
+    hideCardElement(reel);
+  }
+
+  // A shelf whose every reel got hidden should vanish entirely.
+  const shelves = document.querySelectorAll('ytd-reel-shelf-renderer, ytd-rich-shelf-renderer[is-shorts]');
+  for (let i = 0; i < shelves.length; i++) {
+    const shelf = shelves[i];
+    if (!shelf || shelf.dataset.hiddenByLocalBlacklist === 'true') continue;
+    const survivors = shelf.querySelectorAll(
+      'ytd-reel-item-renderer:not([data-hidden-by-local-blacklist="true"]), ' +
+      'yt-shorts-lockup-view-model:not([data-hidden-by-local-blacklist="true"]), ' +
+      'ytd-rich-item-renderer:not([data-hidden-by-local-blacklist="true"])'
+    );
+    if (!survivors.length) hideCardElement(shelf);
+  }
+}
+
+// ------------------------------------------------------------------
+// FEED DIVERSITY METER
+// ------------------------------------------------------------------
+function measureFeedDiversity() {
+  const cards = [];
+  document.querySelectorAll(VIDEO_CARD_SELECTORS).forEach(card => {
+    const title = getVideoTitle(card);
+    if (!title || title.length < 2) return;
+    cards.push(card);
+  });
+
+  let visible = 0, hidden = 0, subscribed = 0;
+  for (let i = 0; i < cards.length; i++) {
+    const card = cards[i];
+    const isHidden = card.dataset.hiddenByLocalBlacklist === 'true' ||
+      Boolean(card.closest('[data-hidden-by-local-blacklist="true"]'));
+    if (isHidden) { hidden++; continue; }
+    visible++;
+    if (cardIsSubscribed(card)) subscribed++;
+  }
+
+  return { measured: true, total: cards.length, visible, hidden, subscribed, newToYou: visible - subscribed };
+}
+
+// ------------------------------------------------------------------
 // CARD EVALUATION & REVERSIBLE HIDING
 // ------------------------------------------------------------------
 function hideCardElement(card) {
@@ -974,6 +1096,12 @@ function processFeed(force = false) {
     }
   }
 
+  // Shorts: subscribed-only hybrid — hide reels from channels we don't subscribe to.
+  // (Global blockShorts mode is handled entirely by CSS and takes precedence.)
+  if (settings.shortsSubOnly && !settings.blockShorts) {
+    try { filterShortsToSubscriptions(); } catch (_) {}
+  }
+
   // End-screen cards on watch page
   if (window.location.pathname.startsWith('/watch')) {
     document.querySelectorAll('.ytp-ce-element').forEach(el => {
@@ -1053,7 +1181,7 @@ function runAiEvaluationBatch() {
   safeSendRuntimeMessage({
     type: 'AI_EVALUATE_BATCH',
     videos: candidates.map(c => ({ id: c.id, title: c.title, channel: c.channel })),
-    persona: settings.aiTastePrompt,
+    persona: [settings.aiTastePrompt, settings.aiSubscriptionProfile].filter(Boolean).join(' — '),
     sensitivity: settings.aiSensitivity,
     modelChoice: settings.aiModel
   }, (res) => {
@@ -1150,6 +1278,62 @@ function collectVisibleFeedItems(limit = 15) {
   }
 
   return items;
+}
+
+// Scrape subscribed channels from the YouTube subscriptions page (youtube.com/feed/channels)
+async function scrapeSubscriptions() {
+  const channels = [];
+  const seen = new Set();
+  const MAX_CHANNELS = 500;
+
+  const addChannel = (name, handle, href) => {
+    const cleanName = String(name || '').replace(/\s+/g, ' ').trim();
+    if (!cleanName || cleanName.length < 2 || channels.length >= MAX_CHANNELS) return;
+    const cleanHandle = String(handle || '').replace(/\s+/g, ' ').trim();
+    const cleanHref = String(href || '').trim();
+    const key = cleanHandle || cleanName.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    channels.push({ name: cleanName, handle: cleanHandle, url: cleanHref });
+  };
+
+  // YouTube periodically reshapes this page; tiered selectors keep the scrape working
+  const collectFromDom = () => {
+    // Tier 1: standard ytd-channel-renderer anchors
+    document.querySelectorAll('ytd-channel-renderer a#main-link').forEach(a => {
+      const renderer = a.closest('ytd-channel-renderer');
+      const nameEl = a.querySelector('yt-formatted-string#text, #channel-title, yt-formatted-string');
+      const handleEl = (renderer || a).querySelector(
+        'yt-formatted-string#handle, #handle, .yt-content-metadata-view-model-wiz__metadata-text'
+      );
+      addChannel(nameEl?.textContent || a.getAttribute('aria-label'), handleEl?.textContent, a.getAttribute('href'));
+    });
+
+    // Tier 2: anchors missing entirely — pull straight from the renderer nodes
+    if (channels.length < 3) {
+      document.querySelectorAll('ytd-channel-renderer').forEach(r => {
+        const nameEl = r.querySelector('#channel-title, yt-formatted-string#text');
+        if (!nameEl) return;
+        const link = r.querySelector('a#main-link, a[href^="/@"]');
+        const handleEl = r.querySelector('yt-formatted-string#handle, #handle');
+        addChannel(nameEl.textContent, handleEl?.textContent, link?.getAttribute('href'));
+      });
+    }
+  };
+
+  // The list is lazy-loaded — scroll a few passes so YouTube hydrates the full set.
+  // Bounded loop with an early break once the DOM stops growing.
+  let prevCount = -1;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    collectFromDom();
+    if (channels.length === prevCount) break;
+    prevCount = channels.length;
+    window.scrollTo(0, document.body.scrollHeight);
+    await new Promise(r => setTimeout(r, 700));
+  }
+  window.scrollTo(0, 0); // restore the user's scroll position
+
+  return { ok: true, channels, count: channels.length, url: location.href };
 }
 
 function checkFeedReplenishment(cards) {
@@ -2544,6 +2728,23 @@ if (isExtensionValid() && chrome?.runtime?.onMessage) {
         } catch (_) {
           try { sendResponse({ ok: true, items: [] }); } catch (__) {}
         }
+        return true;
+      }
+      if (msg && typeof msg === 'object' && msg.type === 'MEASURE_FEED_DIVERSITY') {
+        try {
+          const stats = measureFeedDiversity();
+          try { sendResponse({ ok: true, ...stats }); } catch (_) {}
+        } catch (_) {
+          try { sendResponse({ ok: false }); } catch (__) {}
+        }
+        return true;
+      }
+      if (msg && typeof msg === 'object' && msg.type === 'SCRAPE_SUBSCRIPTIONS') {
+        scrapeSubscriptions()
+          .then(res => { try { sendResponse(res); } catch (_) {} })
+          .catch(() => {
+            try { sendResponse({ ok: false, channels: [], count: 0 }); } catch (_) {}
+          });
         return true;
       }
     });

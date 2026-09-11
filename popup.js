@@ -1,4 +1,4 @@
-// Popup manager for YouTube Smart Blacklister v1.8.0
+// Popup manager for YouTube Smart Blacklister v1.10.0
 // Manages rules, settings, AI Guardian, search filtering, import/export, and stats.
 
 const RANKS = [
@@ -34,7 +34,9 @@ let data = {
   channels: [],
   keywords: [],
   whitelistChannels: [],
+  subsSnapshot: [],
   blockShorts: false,
+  shortsSubOnly: false,
   blockCommunity: false,
   enableQuickBlock: true,
   triggerServerFeedback: false,
@@ -43,6 +45,7 @@ let data = {
   aiSensitivity: 'balanced',
   aiModel: '',
   aiTastePrompt: '',
+  aiSubscriptionProfile: '',
   aiLog: [],
   aiDebaitTitles: false,
   aiDebaitModel: '',
@@ -59,7 +62,9 @@ function load() {
       'channels',
       'keywords',
       'whitelistChannels',
+      'subsSnapshot',
       'blockShorts',
+      'shortsSubOnly',
       'blockCommunity',
       'enableQuickBlock',
       'triggerServerFeedback',
@@ -68,6 +73,7 @@ function load() {
       'aiSensitivity',
       'aiModel',
       'aiTastePrompt',
+      'aiSubscriptionProfile',
       'aiLog',
       'aiDebaitTitles',
       'aiDebaitModel',
@@ -77,7 +83,9 @@ function load() {
       data.channels = Array.isArray(res.channels) ? res.channels : [];
       data.keywords = Array.isArray(res.keywords) ? res.keywords : [];
       data.whitelistChannels = Array.isArray(res.whitelistChannels) ? res.whitelistChannels : [];
+      data.subsSnapshot = Array.isArray(res.subsSnapshot) ? res.subsSnapshot : [];
       data.blockShorts = Boolean(res.blockShorts);
+      data.shortsSubOnly = Boolean(res.shortsSubOnly);
       data.blockCommunity = Boolean(res.blockCommunity);
       data.enableQuickBlock = res.enableQuickBlock !== false;
       data.triggerServerFeedback = Boolean(res.triggerServerFeedback);
@@ -86,6 +94,7 @@ function load() {
       data.aiSensitivity = res.aiSensitivity || 'balanced';
       data.aiModel = res.aiModel || '';
       data.aiTastePrompt = res.aiTastePrompt || '';
+      data.aiSubscriptionProfile = res.aiSubscriptionProfile || '';
       data.aiLog = Array.isArray(res.aiLog) ? res.aiLog : [];
       data.aiDebaitTitles = Boolean(res.aiDebaitTitles);
       data.aiDebaitModel = res.aiDebaitModel || res.aiModel || '';
@@ -101,7 +110,9 @@ function save() {
     channels: data.channels,
     keywords: data.keywords,
     whitelistChannels: data.whitelistChannels,
+    subsSnapshot: data.subsSnapshot,
     blockShorts: data.blockShorts,
+    shortsSubOnly: data.shortsSubOnly,
     blockCommunity: data.blockCommunity,
     enableQuickBlock: data.enableQuickBlock,
     triggerServerFeedback: data.triggerServerFeedback,
@@ -109,6 +120,7 @@ function save() {
     aiSensitivity: data.aiSensitivity,
     aiModel: data.aiModel,
     aiTastePrompt: data.aiTastePrompt,
+    aiSubscriptionProfile: data.aiSubscriptionProfile,
     aiLog: data.aiLog,
     aiDebaitTitles: data.aiDebaitTitles,
     aiDebaitModel: data.aiDebaitModel,
@@ -411,13 +423,14 @@ function wireAdd(inputId, btnId, handler) {
 // Export backup
 function exportBackup() {
   const payload = {
-    version: '1.8.0',
+    version: '1.10.0',
     exportedAt: new Date().toISOString(),
     channels: data.channels,
     keywords: data.keywords,
     whitelistChannels: data.whitelistChannels,
     settings: {
       blockShorts: data.blockShorts,
+      shortsSubOnly: data.shortsSubOnly,
       blockCommunity: data.blockCommunity,
       enableQuickBlock: data.enableQuickBlock,
       triggerServerFeedback: data.triggerServerFeedback,
@@ -484,6 +497,7 @@ function importBackup(file) {
 
       if (json.settings) {
         if ('blockShorts' in json.settings) data.blockShorts = Boolean(json.settings.blockShorts);
+        if ('shortsSubOnly' in json.settings) data.shortsSubOnly = Boolean(json.settings.shortsSubOnly);
         if ('blockCommunity' in json.settings) data.blockCommunity = Boolean(json.settings.blockCommunity);
         if ('enableQuickBlock' in json.settings) data.enableQuickBlock = Boolean(json.settings.enableQuickBlock);
         if ('triggerServerFeedback' in json.settings) data.triggerServerFeedback = Boolean(json.settings.triggerServerFeedback);
@@ -525,6 +539,12 @@ function initToggles() {
   if (bs) {
     bs.checked = data.blockShorts;
     bs.onchange = () => { data.blockShorts = bs.checked; save(); };
+  }
+
+  const ss = document.getElementById('toggleSubOnlyShorts');
+  if (ss) {
+    ss.checked = data.shortsSubOnly;
+    ss.onchange = () => { data.shortsSubOnly = ss.checked; save(); };
   }
 
   const bc = document.getElementById('toggleBlockCommunity');
@@ -717,6 +737,336 @@ function purgeManipulators() {
   }
   setStatus(`Purged ${added} toxic channels!`);
   triggerConfetti();
+}
+
+// ------------------------------------------------------------------
+// SUBSCRIPTION SYNTHESIZER (companion to Mind Reader)
+// ------------------------------------------------------------------
+
+// Shared rule-injection used by BOTH the Mind Reader and the Subscription Synthesizer.
+// Keywords are lowercased; regex patterns are preserved verbatim. Dedupes against data.keywords.
+function injectRulesIntoBlacklist(rules) {
+  let added = 0;
+  if (rules && Array.isArray(rules.keywords)) {
+    rules.keywords.forEach(k => {
+      const clean = String(k).trim().toLowerCase();
+      if (clean && !data.keywords.includes(clean)) {
+        data.keywords.push(clean);
+        added++;
+      }
+    });
+  }
+  if (rules && Array.isArray(rules.regex)) {
+    rules.regex.forEach(r => {
+      const clean = String(r).trim();
+      if (clean && !data.keywords.includes(clean)) {
+        data.keywords.push(clean);
+        added++;
+      }
+    });
+  }
+  return added;
+}
+
+const SUBSCRIPTIONS_URL = 'https://www.youtube.com/feed/channels';
+
+function isSubscriptionsUrl(url) {
+  return typeof url === 'string' && /^https:\/\/www\.youtube\.com\/feed\/channels(\/|$)/.test(url);
+}
+
+function finishSubSynth(btn, msg) {
+  if (btn) {
+    btn.disabled = false;
+    btn.innerHTML = '<span>🔭 Synthesize Rules from My Subscriptions</span>';
+  }
+  const card = document.getElementById('aiSubResultBox');
+  if (card) {
+    card.style.display = 'block';
+    card.className = 'ai-result-box';
+    card.innerHTML = `<div style="font-size:11.5px;color:#ffb400;line-height:1.4;">${escapeHtml(msg)}</div>`;
+  }
+}
+
+// Amber warning rows: new rules that word-boundary match a subscribed channel's name.
+// Mirrors the extension's actual matcher semantics, so these collisions would REALLY hide
+// the user's own subscriptions — surfaced here for a one-click keyword removal.
+function renderConflictRows(conflicts) {
+  if (!Array.isArray(conflicts) || !conflicts.length) return '';
+  const rows = conflicts.map(c => {
+    const names = (Array.isArray(c.channels) ? c.channels : [])
+      .map(escapeHtml)
+      .join(', ') + (c.more ? ` <span style="color:#9aa3b2;">+${c.more} more</span>` : '');
+    return `<div class="sub-conflict-row" data-kw="${escapeHtml(c.keyword)}" style="font-size:10.5px;line-height:1.5;margin-top:5px;">
+      <span style="color:#ffb400;">⚠️ “${escapeHtml(c.keyword)}” would hide your subscription:</span>
+      <span style="color:#e5e7eb;"> ${names}</span>
+      <button class="sub-conflict-remove" style="margin-left:6px;background:transparent;border:1px solid #ffb400;color:#ffb400;border-radius:10px;font-size:10px;padding:1px 8px;cursor:pointer;">✕ remove</button>
+    </div>`;
+  }).join('');
+  return `<div style="margin-top:8px;border-top:1px solid rgba(255,180,0,0.25);padding-top:6px;">${rows}</div>`;
+}
+
+function wireConflictRows(container, conflicts) {
+  if (!container || !Array.isArray(conflicts)) return;
+  container.querySelectorAll('.sub-conflict-remove').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const row = btn.closest('.sub-conflict-row');
+      const kw = row && row.dataset.kw;
+      if (kw) {
+        const idx = data.keywords.indexOf(kw);
+        if (idx !== -1) {
+          data.keywords.splice(idx, 1);
+          save();
+          renderAll();
+          setStatus(`Removed “${kw}” from the blacklist.`);
+        }
+      }
+      if (row) {
+        row.style.textDecoration = 'line-through';
+        row.style.opacity = '0.5';
+      }
+      btn.disabled = true;
+    });
+  });
+}
+
+// Opt-in action: whitelist every scanned subscription in one click.
+// Deliberately NOT automatic — the whitelist wins over the blacklist in the matcher,
+// so silently adding subscriptions would resurrect channels the user explicitly blacklisted.
+function renderProtectAction(channels) {
+  const protectable = (channels || []).filter(ch => ch && String(ch.name || '').trim());
+  if (!protectable.length) return '';
+  return `<div style="margin-top:10px;border-top:1px solid rgba(43,166,64,0.25);padding-top:8px;">
+    <button class="ai-action-btn" id="subProtectBtn" style="background:linear-gradient(135deg,#1f7a33,#2ba640);font-size:12px;">
+      🛡️ Protect my ${protectable.length} scanned subscriptions (whitelist)
+    </button>
+  </div>`;
+}
+
+function wireProtectAction(container, channels) {
+  const btn = container && container.querySelector('#subProtectBtn');
+  if (!btn) return;
+  btn.addEventListener('click', () => {
+    const protectable = (channels || []).filter(ch => ch && String(ch.name || '').trim());
+    const existing = new Set(data.whitelistChannels.map(w => String(w).trim().toLowerCase()));
+    const blacklisted = new Set(data.channels.map(c => String(c).trim().toLowerCase()));
+
+    let addedCount = 0;
+    protectable.forEach(ch => {
+      const name = String(ch.name || '').trim();
+      const handle = String(ch.handle || '').trim();
+      const url = String(ch.url || '').trim();
+      const id = handle || url || name;
+      const normId = id.replace(/^@/, '').trim().toLowerCase();
+
+      // Blacklist wins: a channel the user explicitly blocked is never auto-whitelisted.
+      if (existing.has(id.trim().toLowerCase()) || blacklisted.has(normId) || blacklisted.has(name.toLowerCase())) return;
+
+      data.whitelistChannels.push(id);
+      existing.add(id.trim().toLowerCase());
+      addedCount++;
+    });
+
+    save();
+    renderAll();
+    btn.disabled = true;
+    btn.textContent = addedCount > 0
+      ? `✅ Protected ${addedCount} subscriptions (whitelist tab updated)`
+      : '✅ All scanned subscriptions already protected';
+    if (addedCount > 0) triggerConfetti();
+    setStatus(addedCount > 0 ? `Whitelisted ${addedCount} subscriptions!` : 'Subscriptions already whitelisted.');
+  });
+}
+
+// ------------------------------------------------------------------
+// FEED DIVERSITY METER
+// ------------------------------------------------------------------
+function measureFeedDiversity() {
+  const line = document.getElementById('feedDiversityLine');
+  const btn = document.getElementById('feedDiversityBtn');
+
+  const renderHint = (msg) => {
+    if (line) {
+      line.style.display = 'block';
+      line.className = 'ai-result-box';
+      line.innerHTML = `<div style="font-size:11.5px;color:#9aa3b2;line-height:1.4;">${escapeHtml(msg)}</div>`;
+    }
+  };
+
+  if (btn) { btn.disabled = true; btn.textContent = '📊 Measuring…'; }
+  const done = () => { if (btn) { btn.disabled = false; btn.textContent = '📊 Measure feed'; } };
+
+  if (!data.subsSnapshot || !data.subsSnapshot.length) {
+    renderHint('No subscription snapshot yet — run "🔭 Synthesize Rules from My Subscriptions" first, then re-measure. (Or open the popup after a scan to keep the snapshot.)');
+    done();
+    return;
+  }
+
+  getActiveYoutubeTab((tab) => {
+    if (!tab || !tab.id || !tab.url) {
+      renderHint('Open a YouTube tab first, then measure from there (Home feed works best).');
+      done();
+      return;
+    }
+    try {
+      chrome.tabs.sendMessage(tab.id, { type: 'MEASURE_FEED_DIVERSITY' }, (res) => {
+        if (chrome.runtime?.lastError || !res || !res.ok) {
+          renderHint('Could not reach the YouTube page — reload it and press Measure again.');
+          done();
+          return;
+        }
+        if (!res.visible || res.visible < 1) {
+          renderHint('No feed cards found on this page — open your YouTube Home feed to measure.');
+          done();
+          return;
+        }
+
+        const total = Math.max(res.total || res.visible, res.visible);
+        const pct = Math.round((res.subscribed / res.visible) * 100);
+        const newPct = Math.max(0, 100 - pct);
+
+        if (line) {
+          line.style.display = 'block';
+          line.className = 'ai-result-box';
+          line.innerHTML =
+            `<div style="font-size:11.5px;font-weight:700;color:#fff;margin-bottom:4px;">📊 Feed Diversity</div>` +
+            `<div style="font-size:11px;line-height:1.6;">
+              <span style="color:#4ade80;">🔵 ${pct}% subscribed</span>
+              <span style="color:#9aa3b2;">·</span>
+              <span style="color:#c4b5fd;">🟣 ${newPct}% New-to-You</span>
+              ${res.hidden ? `<span style="color:#9aa3b2;">·</span> <span style="color:#f87171;">🚫 ${res.hidden} hidden by rules</span>` : ''}
+            </div>` +
+            `<div style="position:relative;height:6px;background:#262a33;border-radius:3px;margin-top:5px;overflow:hidden;">
+              <div style="position:absolute;left:0;top:0;bottom:0;width:${pct}%;background:linear-gradient(90deg,#1f7a33,#2ba640);border-radius:3px 0 0 3px;"></div>
+              <div style="position:absolute;left:${pct}%;top:0;bottom:0;width:${newPct}%;background:linear-gradient(90deg,#6d28d9,#8b5cf6);"></div>
+            </div>` +
+            `<div style="font-size:10px;color:#9aa3b2;margin-top:4px;">${res.visible} visible cards on this page${res.hidden ? ` · ${res.hidden} hidden` : ''} · ${total} total tracked</div>`;
+        }
+        done();
+      });
+    } catch (_) {
+      renderHint('Could not reach the YouTube tab — reload it and try again.');
+      done();
+    }
+  });
+}
+
+function runSubscriptionSynthesize() {
+  const btn = document.getElementById('aiSubSynthBtn');
+  const card = document.getElementById('aiSubResultBox');
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = '<span>🔭 Scanning your subscriptions...</span>';
+  }
+  if (card) card.style.display = 'none';
+
+  let createdTabId = null;
+
+  const releaseCreatedTab = () => {
+    if (createdTabId != null) {
+      try { chrome.tabs.remove(createdTabId); } catch (_) {}
+      createdTabId = null;
+    }
+  };
+
+  const handleScrape = (res) => {
+    if (!res || !res.ok || !Array.isArray(res.channels) || res.channels.length < 3) {
+      // Deliberately keep the tab open on failure: the user may need to sign in there.
+      finishSubSynth(btn, 'No subscriptions were found on that page. If you just opened it: confirm you are signed in to YouTube on this browser profile, let the page finish loading, then press Scan again.');
+      return;
+    }
+    const count = res.channels.length;
+
+    chrome.runtime.sendMessage({
+      type: 'AI_SYNTHESIZE_SUBSCRIPTION_RULES',
+      channels: res.channels,
+      modelChoice: data.aiModel
+    }, (aiRes) => {
+      if (!aiRes || !aiRes.ok || !Array.isArray(aiRes.keywords)) {
+        finishSubSynth(btn, 'Could not synthesize rules. Your local AI may be busy — wait a second and try again.');
+        return;
+      }
+
+      const added = injectRulesIntoBlacklist({ keywords: aiRes.keywords, regex: aiRes.regex });
+      // Seed the Autonomous Guardian's persona with the inferred taste profile.
+      data.aiSubscriptionProfile = `${aiRes.profile || 'Subscription Insights'} (${count} subs)`;
+      // Persist the scanned identities — powers the Feed Diversity Meter and Shorts: Subscribed Only.
+      data.subsSnapshot = res.channels;
+      save();
+      renderAll();
+      triggerConfetti();
+
+      const out = document.getElementById('aiSubResultBox');
+      if (out) {
+        out.style.display = 'block';
+        out.className = 'ai-result-box';
+        out.innerHTML =
+          `<div style="font-size:12px;font-weight:700;color:#4db6ff;margin-bottom:4px;">🔭 Taste Profile: ${escapeHtml(aiRes.profile || 'Subscription Insights')} — ${count} subscriptions analyzed</div>` +
+          `<div style="font-size:11.5px;color:#e5e7eb;line-height:1.45;">${escapeHtml(aiRes.rationale || '')}</div>` +
+          `<div style="font-size:11.5px;color:#4ade80;margin-top:6px;">${aiRes.isFallback ? '⚡ Heuristic' : '🧠 AI'} synthesis — ${added} new precision rules injected!</div>` +
+          renderConflictRows(aiRes.conflicts) +
+          renderProtectAction(res.channels);
+        wireConflictRows(out, aiRes.conflicts);
+        wireProtectAction(out, res.channels);
+      }
+      setStatus(`Synthesized ${added} rules from ${count} subscriptions!`);
+
+      // Only close a tab we spawned ourselves; never touch the user's own tab.
+      if (createdTabId != null) releaseCreatedTab();
+
+      // Give the RULES_UPDATED broadcast time to land, then auto-measure feed diversity.
+      setTimeout(() => { measureFeedDiversity(); }, 600);
+    });
+  };
+
+  const tryScrape = (tabId, attemptsLeft, onFailure) => {
+    try {
+      chrome.tabs.sendMessage(tabId, { type: 'SCRAPE_SUBSCRIPTIONS' }, (res) => {
+        if (chrome.runtime?.lastError || !res || !res.ok) {
+          if (attemptsLeft > 0) {
+            setTimeout(() => tryScrape(tabId, attemptsLeft - 1, onFailure), 600);
+          } else {
+            onFailure();
+          }
+          return;
+        }
+        handleScrape(res);
+      });
+    } catch (_) {
+      if (attemptsLeft > 0) {
+        setTimeout(() => tryScrape(tabId, attemptsLeft - 1, onFailure), 600);
+      } else {
+        onFailure();
+      }
+    }
+  };
+
+  const createSubscriptionsTab = () => {
+    try {
+      chrome.tabs.create({ url: SUBSCRIPTIONS_URL, active: false }, (tab) => {
+        if (chrome.runtime?.lastError || !tab || tab.id == null) {
+          finishSubSynth(btn, 'Could not open a YouTube tab. Check your browser permissions and try again.');
+          return;
+        }
+        createdTabId = tab.id;
+        tryScrape(createdTabId, 10, () => {
+          finishSubSynth(btn, 'The subscriptions page is still loading. Give it a moment, then press Scan again — the tab stays open for you.');
+        });
+      });
+    } catch (_) {
+      finishSubSynth(btn, 'Could not open a YouTube tab. Try again in a moment.');
+    }
+  };
+
+  getActiveYoutubeTab((tab) => {
+    if (tab && isSubscriptionsUrl(tab.url)) {
+      // Already viewing the subscriptions page — scrape in place, never navigate their tab.
+      tryScrape(tab.id, 3, () => {
+        finishSubSynth(btn, 'Could not reach the YouTube page. Reload the subscriptions tab and press Scan again.');
+      });
+    } else {
+      createSubscriptionsTab();
+    }
+  });
 }
 
 async function init() {
@@ -977,22 +1327,7 @@ function initAiGuardian() {
         synthBtn.innerHTML = '<span>🔮 Synthesize Rules from My Mind</span>';
 
         if (res && res.ok && Array.isArray(res.keywords)) {
-          let added = 0;
-          res.keywords.forEach(k => {
-            const clean = String(k).trim().toLowerCase();
-            if (clean && !data.keywords.includes(clean)) {
-              data.keywords.push(clean);
-              added++;
-            }
-          });
-          if (Array.isArray(res.regex)) {
-            res.regex.forEach(r => {
-              if (r && !data.keywords.includes(r)) {
-                data.keywords.push(r);
-                added++;
-              }
-            });
-          }
+          const added = injectRulesIntoBlacklist({ keywords: res.keywords, regex: res.regex });
 
           save();
           renderAll();
@@ -1008,6 +1343,18 @@ function initAiGuardian() {
         }
       });
     });
+  }
+
+  // Subscription Synthesizer button
+  const subSynthBtn = document.getElementById('aiSubSynthBtn');
+  if (subSynthBtn) {
+    subSynthBtn.addEventListener('click', runSubscriptionSynthesize);
+  }
+
+  // Feed Diversity Meter button
+  const feedDiversityBtn = document.getElementById('feedDiversityBtn');
+  if (feedDiversityBtn) {
+    feedDiversityBtn.addEventListener('click', measureFeedDiversity);
   }
 
   renderAiLog();

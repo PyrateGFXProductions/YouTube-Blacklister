@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.10.0] - 2026-09-10
+
+### Added
+- **📊 Feed Diversity Meter** (uses the Mirror's subscription snapshot — everything stays local):
+  - Measures your *visible* feed on any YouTube tab: what share comes from channels you actually subscribe to vs. the algorithm's New-to-You pool.
+  - Renders a 🔵 subscribed / 🟣 New-to-You ratio bar plus how many cards your own rules already hid on that page.
+  - Auto-measures once right after a successful subscription scan; re-measure anytime from the meter's own button.
+- **Shorts: Subscribed Only** (`shortsSubOnly`):
+  - Hybrid of the all-or-nothing "Hide YouTube Shorts" toggle: keeps Shorts from channels in your subscription snapshot, hides everyone else's, per-reel.
+  - Reel shelves with zero surviving Shorts collapse entirely. Global `blockShorts` still wins when both are on.
+  - Identity matching reuses the extension's own normalized name / handle / channel-URL semantics — video URLs never match.
+- **Subscription scan now persists the identity snapshot** (`subsSnapshot`): the Mirror stores every scanned channel (`name`, `handle`, `url`) so the Diversity Meter and Subscribed-Only Shorts keep working after the popup closes, without a re-scan.
+
+### Changed
+- Mirror scan auto-triggers a feed diversity measurement once synthesis succeeds.
+- Bumped version to `1.10.0` in `manifest.json`, popup UI, backup export payloads (includes the new `shortsSubOnly` setting on import), and script headers.
+
+---
+
+### Added
+- **🔭 Subscription Mirror Synthesizer** (companion to the Mind Reader):
+  - Scans your actual YouTube subscriptions (`youtube.com/feed/channels`) entirely locally — no API keys, no data leaves the browser.
+  - Automatically opens the subscriptions page in a background tab (or reuses the one you already have open — your tab is never navigated or closed).
+  - Your local LLM (Ollama / LM Studio) infers your dominant taste profile from subscribed channel names and synthesizes 6-12 precision blacklist keywords + regex rules targeting the parasitic clickbait clusters that ride those topics' coattails (fake "top 10" lists beside science subs, crypto hype beside hardware subs, …).
+  - **Self-subscription guardrail**: any keyword colliding with your own subscribed channel names or handles is filtered out before injection — the feature can never blacklist the creators you chose.
+  - **Subscription ↔ Rule Conflict Audit**: every new rule is checked against your scanned channel names with the extension's *own* word-boundary matcher semantics; genuine collisions surface as amber warnings with a one-click ✕ remove per keyword.
+  - **🛡️ Opt-in "Protect my subscriptions" whitelist action**: one click whitelists every scanned subscription. Deliberately opt-in, never automatic — the whitelist wins over the blacklist in the matcher, and channels you explicitly blacklisted are always skipped (your blacklist stays authoritative).
+  - **Autonomous Guardian persona seeding**: the inferred taste profile is stored and fed into `AI_EVALUATE_BATCH`, so the Autonomous Slop Interceptor judges videos against your *actual subscribed topics*, not just the generic default persona.
+  - Instant offline heuristic fallback: topic-classifies channel names and injects the matching slop-cluster rules.
+  - 1-click injection with the same dedupe/save/confetti pipeline as the Mind Reader; the shared injection helper now powers both synthesizers.
+
+### Changed
+- Bumped version to `1.9.0` in `manifest.json`, popup UI, backup export payloads, and content script header.
+
+---
+
 ## [1.8.0] - 2026-09-07
 
 ### Added

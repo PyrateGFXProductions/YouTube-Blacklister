@@ -1,4 +1,4 @@
-// Background service worker for Always New To You - YouTube Blacklister v1.8.0
+// Background service worker for Always New To You - YouTube Blacklister v1.10.0
 // Manages badges, statistics, and the Autonomous AI Neural Slop Interceptor
 
 const OLLAMA_DEFAULT_URL = 'http://localhost:11434';
@@ -137,6 +137,234 @@ async function synthesizeRulesWithAi(prompt, modelChoice, customUrl) {
 
   const fallback = heuristicSynthesize(prompt);
   return { ok: true, ...fallback, isFallback: true };
+}
+
+// ------------------------------------------------------------------
+// SUBSCRIPTION SYNTHESIZER (companion to Mind Reader)
+// ------------------------------------------------------------------
+
+// Channel-name keyword signals for heuristic topic classification
+const SUB_TOPIC_SIGNALS = {
+  tech: ['tech', 'computer', 'code', 'coding', 'programm', 'dev', 'developer', 'linux', 'hardware', 'raspberry', 'arduino', 'electro', 'engineer', 'fireship', 'primeagen', 'unbox', 'benchmark', 'pixel'],
+  science: ['science', 'physics', 'space', 'astro', 'cosmo', 'chem', 'bio', 'math', 'numberphile', 'universe', 'document', 'explain', 'veritasium', 'kurzgesagt', 'minutephysics', '3blue1brown'],
+  crypto: ['crypto', 'bitcoin', 'blockchain', 'defi', 'nft', 'wallet', 'kucoin', 'binance', 'coinbase', 'trading', 'altcoin'],
+  finance: ['finance', 'money', 'invest', 'stock', 'market', 'econom', 'wealth', 'retire', 'budget', 'frugal'],
+  gaming: ['game', 'gaming', 'speedrun', 'minecraft', 'fortnite', 'valorant', 'esport', 'lets play', 'retro', 'emulation'],
+  music: ['music', 'guitar', 'piano', 'drum', 'producer', 'synth', 'audio', 'sound', 'band', 'beat', 'rap', 'mix'],
+  art: ['art', 'draw', 'paint', 'blender', 'vfx', 'animation', 'design', 'photoshop', 'cinema', 'film', 'movie', 'edit', 'lighting', 'color'],
+  cooking: ['cook', 'recipe', 'kitchen', 'bake', 'baking', 'food', 'chef', 'meal', 'grill', 'culinary'],
+  fitness: ['fitness', 'gym', 'workout', 'muscle', 'yoga', 'run', 'running', 'strength', 'calisthenic', 'health', 'athl', 'training']
+};
+
+// Parasitic junk clusters that ride each topic's coattails (for heuristic mode)
+const SUB_TOPIC_JUNK = {
+  tech: ['crypto', 'bitcoin', 'memecoin', 'dropshipping', 'ai generated', 'faceless channel', 'text to speech', '100x', 'passive income'],
+  science: ["you won't believe", 'shocking', 'exposed', 'top 10', 'end of the world', 'conspiracy', 'mystery'],
+  crypto: ['100x', 'signals', 'guaranteed', 'airdrops', 'pump', 'get rich quick', 'reversal packed'],
+  finance: ['get rich quick', 'guaranteed', 'to the moon', 'passive income', 'crypto wealth', 'forex guru'],
+  gaming: ['prank', 'skibidi', 'brainrot', 'in 24 hours', 'reaction', "you won't believe", 'shocking'],
+  music: ['reaction', 'lyric video', 'tiktok compilation', 'try not to sing', 'nightcore'],
+  art: ['ai generated', 'faceless channel', 'text to speech', '5 minute crafts', 'free stock clips'],
+  cooking: ['5 minute crafts', 'life hacks', 'satisfying', 'oddly satisfying', 'instant noodles', 'mukbang'],
+  fitness: ['before and after', '7 day transformation', 'detox', 'miracle', '6 pack in 30 days', 'fat burning']
+};
+
+const SUB_TOPIC_LABELS = {
+  tech: 'Tech & Hardware', science: 'Science & Education', crypto: 'Web3 & Crypto',
+  finance: 'Finance & Investing', gaming: 'Gaming', music: 'Music & Audio',
+  art: 'Art & Film', cooking: 'Food & Cooking', fitness: 'Health & Fitness'
+};
+
+// Fallback heuristic: topic-classify subscription names, block junk-neighbor clusters
+function heuristicSubscriptionSynthesize(channels) {
+  const names = (channels || [])
+    .map(c => String((c && c.name) || '').trim() || String((c && c.handle) || '').trim())
+    .filter(Boolean);
+
+  const topicHits = {};
+  names.forEach(raw => {
+    const n = raw.toLowerCase();
+    Object.keys(SUB_TOPIC_SIGNALS).forEach(topic => {
+      if (SUB_TOPIC_SIGNALS[topic].some(sig => n.includes(sig))) {
+        topicHits[topic] = (topicHits[topic] || 0) + 1;
+      }
+    });
+  });
+
+  const ranked = Object.keys(topicHits)
+    .sort((a, b) => topicHits[b] - topicHits[a])
+    .slice(0, 3);
+
+  const seen = new Set();
+  ranked.forEach(topic => {
+    (SUB_TOPIC_JUNK[topic] || []).forEach(k => seen.add(k));
+  });
+  if (!seen.size) {
+    ['reaction', 'prank', 'skibidi', "you won't believe", 'shocking', 'in 24 hours'].forEach(k => seen.add(k));
+  }
+
+  const profile = ranked.length
+    ? ranked.map(t => SUB_TOPIC_LABELS[t] || t).join(' + ')
+    : 'General Interest';
+
+  return {
+    keywords: [...seen],
+    regex: ['/\\b(vlog|prank|reaction)\\s*#?\\d+/i'],
+    rationale: `Heuristic synthesis from ${names.length} subscriptions (profile: ${profile}). Blacklists the junk-neighbor clusters that parasitically ride your subscribed topics.`,
+    profile
+  };
+}
+
+// ------------------------------------------------------------------
+// SUBSCRIPTION ↔ RULE CONFLICT AUDIT
+// Mirrors content.js's hasWordBoundaryKeyword() semantics so the audit
+// reports exactly what the real matcher would do against channel names.
+// ------------------------------------------------------------------
+function auditEscapeRegExp(str) {
+  return String(str).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function auditCleanText(str) {
+  return String(str || '')
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function auditRuleHitsName(rule, channelName) {
+  const kw = auditCleanText(rule);
+  const name = auditCleanText(channelName);
+  if (!kw || !name) return false;
+
+  // Regex rule — test directly against the name, same as the content matcher
+  if (kw.startsWith('/') && kw.lastIndexOf('/') > 0) {
+    try {
+      const lastSlash = kw.lastIndexOf('/');
+      return new RegExp(kw.slice(1, lastSlash), kw.slice(lastSlash + 1) || 'i').test(channelName);
+    } catch (_) { return false; }
+  }
+  // Plain keyword — word-boundary match, same as hasWordBoundaryKeyword()
+  try {
+    return new RegExp(`\\b${auditEscapeRegExp(kw)}\\b`, 'i').test(name);
+  } catch (_) {
+    return name.toLowerCase().includes(kw.toLowerCase());
+  }
+}
+
+// Semantic collision report: newly synthesized rules vs the user's own subscriptions.
+// The exact-name guardrail already strips identity collisions silently; this one
+// surfaces *semantic* overlaps ("reaction" vs a subscribed "Reaction Time TV") for the user to judge.
+function auditKeywordConflicts(rules, channelEntries) {
+  const conflicts = [];
+  if (!Array.isArray(rules)) return conflicts;
+
+  const names = (channelEntries || [])
+    .map(entry => {
+      const s = String(entry || '');
+      return s.includes(' (') ? s.slice(0, s.indexOf(' (')) : s;
+    })
+    .map(s => s.trim())
+    .filter(Boolean);
+
+  const uniqRules = [...new Set(rules.map(r => String(r || '').trim()).filter(Boolean))];
+  uniqRules.forEach(rule => {
+    const hits = [];
+    names.forEach(n => { if (auditRuleHitsName(rule, n)) hits.push(n); });
+    if (hits.length) conflicts.push({ keyword: rule, channels: hits.slice(0, 3), more: Math.max(0, hits.length - 3) });
+  });
+  return conflicts;
+}
+
+// Synthesize blacklist rules from the user's actual YouTube subscriptions
+async function synthesizeSubscriptionRulesWithAi(channels, modelChoice, customUrl) {
+  const baseUrl = customUrl || OLLAMA_DEFAULT_URL;
+
+  // Flatten + bound the channel list (name + handle), defensive against malformed entries
+  const cleanChannels = (channels || []).slice(0, 500).map(c => {
+    const name = String((c && c.name) || '').trim();
+    const handle = String((c && c.handle) || '').trim();
+    if (!name && !handle) return '';
+    return handle ? `${name} (${handle})` : name;
+  }).filter(Boolean);
+
+  const systemPrompt =
+    'You are the YouTube Slop Defense Intelligence. A user has provided their subscribed channel list. ' +
+    'Infer their dominant taste topics, then output ONLY valid JSON in this exact structure: ' +
+    '{"keywords": string[], "regex": string[], "rationale": string, "profile": string}. ' +
+    '"keywords" must contain 6-12 high-impact clickbait/slop keywords that parasitically ride the coattails of those topics ' +
+    '(e.g. fake "top 10" fact lists beside science subscriptions, crypto hype beside hardware subscriptions). ' +
+    'Never output a keyword that matches a subscribed channel name or handle. ' +
+    '"regex": 1-3 regex patterns. "profile": a short 2-4 word taste label. Do not output markdown codeblocks, just raw JSON.';
+
+  let keywords = [];
+  let regex = [];
+  let rationale = '';
+  let profile = '';
+  let isFallback = false;
+
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 15000);
+    const res = await fetch(`${baseUrl}/api/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: modelChoice || 'gemma4:12b',
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: `Subscribed channels:\n${cleanChannels.join(', ').slice(0, 6000)}` }
+        ],
+        stream: false,
+        format: 'json'
+      }),
+      signal: ctrl.signal
+    });
+    clearTimeout(timer);
+
+    if (res.ok) {
+      const data = await res.json();
+      const rawText = data?.message?.content || '';
+      const parsed = JSON.parse(rawText);
+      if (parsed && Array.isArray(parsed.keywords)) {
+        // Guardrail: never synthesize a rule that collides with the user's own subscriptions
+        const forbidden = new Set();
+        cleanChannels.forEach(entry => {
+          const [name, handle] = entry.split(' (');
+          if (name) forbidden.add(name.trim().toLowerCase());
+          if (handle) forbidden.add(handle.replace(/\)$/, '').trim().toLowerCase().replace(/^@/, ''));
+        });
+
+        keywords = [];
+        parsed.keywords.forEach(k => {
+          const clean = String(k).trim().toLowerCase();
+          if (clean && clean.length > 1 && !forbidden.has(clean)) keywords.push(clean);
+        });
+
+        regex = Array.isArray(parsed.regex) ? parsed.regex.filter(r => String(r).trim()) : [];
+        rationale = parsed.rationale || 'Synthesized from subscription patterns by local neural model.';
+        profile = typeof parsed.profile === 'string' && parsed.profile.trim()
+          ? parsed.profile.trim().slice(0, 60)
+          : '';
+      }
+    }
+  } catch (err) {
+    // Fallback if LLM fails or times out
+  }
+
+  // Empty or failed AI pass → heuristic fallback
+  if (!keywords.length) {
+    const fallback = heuristicSubscriptionSynthesize(channels);
+    keywords = fallback.keywords;
+    regex = fallback.regex;
+    rationale = fallback.rationale;
+    profile = fallback.profile;
+    isFallback = true;
+  }
+
+  // Semantic audit: which of the user's own subscriptions could these rules surface?
+  const conflicts = auditKeywordConflicts([...keywords, ...regex], cleanChannels);
+
+  return { ok: true, keywords, regex, rationale, profile, conflicts, isFallback };
 }
 
 // Evaluate candidate videos in batch
@@ -515,6 +743,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
   if (msg.type === 'AI_SYNTHESIZE_RULES') {
     synthesizeRulesWithAi(msg.prompt, msg.modelChoice, msg.customUrl).then(res => sendResponse(res));
+    return true;
+  }
+
+  if (msg.type === 'AI_SYNTHESIZE_SUBSCRIPTION_RULES') {
+    synthesizeSubscriptionRulesWithAi(msg.channels, msg.modelChoice, msg.customUrl).then(res => sendResponse(res));
     return true;
   }
 
