@@ -1197,7 +1197,12 @@ function runAiEvaluationBatch() {
     modelChoice: settings.aiModel
   }, (res) => {
     aiBatchPending = false;
-    if (!res || !Array.isArray(res.evaluations)) return;
+    if (!res || !Array.isArray(res.evaluations)) {
+      candidates.forEach(c => {
+        if (c.card && c.card.dataset) delete c.card.dataset.aiEvaluated;
+      });
+      return;
+    }
 
     res.evaluations.forEach(ev => {
       if (ev && ev.block) {

@@ -7,7 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [1.10.0] - 2026-09-10
+## [1.10.1] - 2026-09-17
+
+### Fixed
+- **🔮 Mind Reader Taste Profiler & AI Guardian Rule Synthesis**:
+  - Added `think: false` to Ollama chat queries and bumped timeout to 35s. Reasoning/thinking models (e.g., Gemma 4, Qwen 2.5/3) previously generated ~1,100 thinking tokens across 40–50 seconds, exceeding the 12s abort timeout and silently dropping into fallback mode. With `think: false`, generation takes ~2–6s.
+  - Added resilient `cleanJsonParse` handling `<thought>` tags, markdown code blocks, and trailing annotations to prevent silent JSON parse failures.
+  - Added OpenAI / LM Studio fallback API endpoint support (`/v1/chat/completions`) when LM Studio is running.
+  - Expanded `heuristicSynthesize` domain coverage to include a comprehensive ball sports and athletics taxonomy (basketball, soccer, football, baseball, tennis, golf, volleyball, cricket, rugby, leagues, tournaments, and scoring terms).
+  - Added natural language directive extraction (`block all X`, `ban Y`, `filter out Z`) so arbitrary requested topics are parsed directly into target keywords.
+  - Normalized AI and heuristic regex rules with mandatory `/pattern/flags` wrappers and syntax compilation checks before storage.
+- **🤖 Autonomous Feed Guardian (`evaluateBatchWithAi`)**:
+  - Batch evaluation queries now pass `think: false` and use `cleanJsonParse`.
+  - Fallback evaluation now respects the user's negative persona restrictions (including ball sports) instead of ignoring persona.
+  - When candidate card batches fail or time out, `content.js` clears candidate `aiEvaluated` markers to prevent false-negative retention.
 
 ### Added
 - **📊 Feed Diversity Meter** (uses the Mirror's subscription snapshot — everything stays local):

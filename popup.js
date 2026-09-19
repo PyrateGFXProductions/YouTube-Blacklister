@@ -105,8 +105,8 @@ function load() {
   });
 }
 
-function save() {
-  chrome.storage.local.set({
+async function save() {
+  await chrome.storage.local.set({
     channels: data.channels,
     keywords: data.keywords,
     whitelistChannels: data.whitelistChannels,
@@ -128,19 +128,18 @@ function save() {
     huntMode: data.huntMode
   });
 
-  // Notify active YouTube tabs to re-apply rules immediately
+  // Notify active YouTube tabs to re-apply rules immediately.
+  // At this point the storage write has completed, so content scripts that
+  // receive RULES_UPDATED and re-read from storage will see the new data.
   try {
-    chrome.tabs.query({}, (tabs) => {
-      tabs.forEach((tab) => {
-        if (tab.url && tab.url.startsWith('https://www.youtube.com')) {
-          try {
-            chrome.tabs.sendMessage(tab.id, { type: 'RULES_UPDATED' }, () => {
-              if (chrome.runtime?.lastError) { /* tab not ready — ignore */ }
-            });
-          } catch (_) {}
-        }
-      });
-    });
+    const tabs = await chrome.tabs.query({});
+    await Promise.allSettled(
+      tabs
+        .filter((tab) => tab.url && tab.url.startsWith('https://www.youtube.com'))
+        .map((tab) =>
+          chrome.tabs.sendMessage(tab.id, { type: 'RULES_UPDATED' }).catch(() => {})
+        )
+    );
   } catch (_) {}
 }
 
@@ -626,13 +625,21 @@ function escapeHtml(str) {
     .replace(/'/g, '&#39;');
 }
 
-function getActiveYoutubeTab(cb) {
-  chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-    const tab = tabs && tabs[0];
-    if (tab && tab.url && tab.url.startsWith('https://www.youtube.com')) {
-      cb(tab);
-    } else {
-      cb(null);
+function getActiveYoutubeTab() {
+  return new Promise((resolve) => {
+    try {
+      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        const tab = tabs && tabs[0];
+        if (tab && tab.url && tab.url.startsWith('https://www.youtube.com')) {
+          resolve(tab);
+        } else {
+          resolve(null);
+        }
+      });
+    } catch (_) {
+      // Transient: user is dragging/resizing a tab. Resolve null so callers fall back
+      // to their "open a YouTube tab first" message instead of throwing into the popup.
+      resolve(null);
     }
   });
 }
@@ -659,7 +666,7 @@ function runFeedRoast() {
   }
   if (roastCard) roastCard.style.display = 'none';
 
-  getActiveYoutubeTab((tab) => {
+  getActiveYoutubeTab().then((tab) => {
     if (!tab) {
       finishRoast(roastBtn, 'Open a YouTube tab first, then run the diagnostic from there.');
       return;
@@ -788,8 +795,22 @@ function injectRulesIntoBlacklist(rules) {
   }
   if (rules && Array.isArray(rules.regex)) {
     rules.regex.forEach(r => {
-      const clean = String(r).trim();
-      if (clean && !data.keywords.includes(clean)) {
+      let clean = String(r).trim();
+      if (!clean) return;
+      if (!clean.startsWith('/')) {
+        clean = `/${clean}/i`;
+      } else if (clean.lastIndexOf('/') === 0) {
+        clean = `${clean}/i`;
+      }
+      const lastSlash = clean.lastIndexOf('/');
+      const pattern = clean.slice(1, lastSlash);
+      const flags = clean.slice(lastSlash + 1) || 'i';
+      try {
+        new RegExp(pattern, flags);
+      } catch (_) {
+        return;
+      }
+      if (!data.keywords.includes(clean)) {
         data.keywords.push(clean);
         added++;
       }
@@ -931,7 +952,7 @@ function measureFeedDiversity() {
     return;
   }
 
-  getActiveYoutubeTab((tab) => {
+  getActiveYoutubeTab().then((tab) => {
     if (!tab || !tab.id || !tab.url) {
       renderHint('Open a YouTube tab first, then measure from there (Home feed works best).');
       done();
@@ -1087,7 +1108,7 @@ function runSubscriptionSynthesize() {
     }
   };
 
-  getActiveYoutubeTab((tab) => {
+  getActiveYoutubeTab().then((tab) => {
     if (tab && isSubscriptionsUrl(tab.url)) {
       // Already viewing the subscriptions page — scrape in place, never navigate their tab.
       tryScrape(tab.id, 3, () => {
@@ -1172,13 +1193,13 @@ async function init() {
   const openYt = document.getElementById('openYoutube');
   if (openYt) {
     openYt.addEventListener('click', () => {
-      chrome.tabs.create({ url: 'https://www.youtube.com/' });
+      try { chrome.tabs.create({ url: 'https://www.youtube.com/' }); } catch (_) {}
     });
   }
 
   // Ko-fi support links
   const openKofi = () => {
-    chrome.tabs.create({ url: 'https://ko-fi.com/pyrategfxproductions' });
+    try { chrome.tabs.create({ url: 'https://ko-fi.com/pyrategfxproductions' }); } catch (_) {}
   };
   const kofiFooterBtn = document.getElementById('kofiFooterBtn');
   if (kofiFooterBtn) kofiFooterBtn.addEventListener('click', openKofi);
@@ -1281,8 +1302,11 @@ function initAiGuardian() {
     sensSelect.onchange = () => { data.aiSensitivity = sensSelect.value; save(); };
   }
 
-  // Check AI connection
-  chrome.runtime.sendMessage({ type: 'CHECK_AI_STATUS' }, (res) => {
+  // Check AI connection. Use promise form + explicit lastError consumer so a
+  // rejected sendMessage (e.g. service worker not ready) never becomes an unhandled
+  // rejection that bubbles into the popup.
+  chrome.runtime.sendMessage({ type: 'CHECK_AI_STATUS' })
+    .then((res) => {
     if (res && res.ok && Array.isArray(res.models) && res.models.length) {
       if (statusPill) {
         statusPill.className = 'ai-status-pill';
@@ -1294,14 +1318,21 @@ function initAiGuardian() {
           const opt = document.createElement('option');
           opt.value = m;
           opt.textContent = m;
-          if (m === data.aiModel) opt.selected = true;
+          const current = (data.aiModel || '').trim().toLowerCase();
+          const candidate = m.trim().toLowerCase();
+          if (current && (candidate === current || candidate.startsWith(current + ':') || current.startsWith(candidate + ':'))) {
+            opt.selected = true;
+          }
           modelSelect.appendChild(opt);
         });
-        if (!data.aiModel) {
-          data.aiModel = res.models[0];
+        if (modelSelect.value) {
+          data.aiModel = modelSelect.value;
           save();
         }
-        modelSelect.onchange = () => { data.aiModel = modelSelect.value; save(); };
+        modelSelect.addEventListener('change', () => {
+          data.aiModel = modelSelect.value;
+          save();
+        });
       }
     } else {
       if (statusPill) {
@@ -1313,7 +1344,8 @@ function initAiGuardian() {
         modelSelect.innerHTML = '<option value="heuristic">Built-in Heuristic</option>';
       }
     }
-  });
+  })
+    .catch(() => {});
 
   // Preset chips
   document.querySelectorAll('.ai-chip').forEach(chip => {
@@ -1348,10 +1380,16 @@ function initAiGuardian() {
       synthBtn.innerHTML = '<span>⚡ Reading mind & synthesizing...</span>';
       if (resultBox) resultBox.style.display = 'none';
 
+      const chosenModel = (modelSelect && modelSelect.value) ? modelSelect.value : (data.aiModel || '');
+      if (chosenModel) {
+        data.aiModel = chosenModel;
+        save();
+      }
+
       chrome.runtime.sendMessage({
         type: 'AI_SYNTHESIZE_RULES',
         prompt,
-        modelChoice: data.aiModel
+        modelChoice: chosenModel
       }, (res) => {
         synthBtn.disabled = false;
         synthBtn.innerHTML = '<span>🔮 Synthesize Rules from My Mind</span>';
@@ -1365,7 +1403,14 @@ function initAiGuardian() {
 
           if (resultBox) {
             resultBox.style.display = 'block';
-            resultBox.innerHTML = `<strong>${res.isFallback ? '⚡ Heuristic' : '🧠 AI'} Rationale:</strong> ${escapeHtml(res.rationale || '')}<br><span style="color:#4ade80;">Synthesized & injected ${added} new precision rules!</span>`;
+            const sampleKws = (res.keywords || []).slice(0, 10).map(k => `<span class="ai-chip" style="font-size:10px;padding:2px 6px;margin:2px 3px 2px 0;display:inline-block;background:#1e293b;border:1px solid #334155;color:#e2e8f0;">${escapeHtml(k)}</span>`).join('');
+            const sampleRegex = (res.regex || []).map(r => `<span class="ai-chip" style="font-size:10px;padding:2px 6px;margin:2px 3px 2px 0;display:inline-block;background:#2e1065;border:1px solid #6b21a8;color:#d8b4fe;">${escapeHtml(r)}</span>`).join('');
+            const modelLabel = res.isFallback ? '⚡ Heuristic' : `🧠 AI (${escapeHtml(res.modelUsed || chosenModel)})`;
+            resultBox.innerHTML =
+              `<div style="font-size:12px;font-weight:700;color:#c084fc;margin-bottom:4px;">${modelLabel} Rationale:</div>` +
+              `<div style="font-size:11.5px;color:#e2e8f0;line-height:1.45;margin-bottom:6px;">${escapeHtml(res.rationale || '')}</div>` +
+              `<div style="font-size:11.5px;color:#4ade80;font-weight:600;margin-bottom:4px;">✅ Synthesized & injected ${added} new precision rules:</div>` +
+              `<div style="margin-top:4px;line-height:1.5;">${sampleKws} ${sampleRegex}</div>`;
           }
           setStatus(`Injected ${added} rules from AI!`);
         } else {

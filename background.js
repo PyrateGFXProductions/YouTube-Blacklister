@@ -54,23 +54,201 @@ async function checkAiStatus(customUrl) {
   return { ok: false, provider: 'none', models: [] };
 }
 
-// Fallback heuristic rule synthesizer when no LLM is running
+// Helper to safely extract and parse JSON from local LLM outputs (handles thinking tags and codeblocks)
+function cleanJsonParse(rawText) {
+  if (!rawText || typeof rawText !== 'string') return null;
+  let text = rawText.replace(/<thought>[\s\S]*?<\/thought>/gi, '').trim();
+  const codeBlockMatch = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+  if (codeBlockMatch && codeBlockMatch[1]) {
+    text = codeBlockMatch[1].trim();
+  }
+  try {
+    return JSON.parse(text);
+  } catch (_) {}
+  const firstBrace = text.indexOf('{');
+  const lastBrace = text.lastIndexOf('}');
+  if (firstBrace !== -1 && lastBrace > firstBrace) {
+    try {
+      return JSON.parse(text.slice(firstBrace, lastBrace + 1));
+    } catch (_) {}
+  }
+  const firstBracket = text.indexOf('[');
+  const lastBracket = text.lastIndexOf(']');
+  if (firstBracket !== -1 && lastBracket > firstBracket) {
+    try {
+      return JSON.parse(text.slice(firstBracket, lastBracket + 1));
+    } catch (_) {}
+  }
+  return null;
+}
+
+// Normalizes a regex string into standard /pattern/flags format and validates compilation
+function normalizeRegexRule(raw) {
+  if (!raw) return null;
+  let str = String(raw).trim();
+  if (!str) return null;
+  if (!str.startsWith('/')) {
+    str = `/${str}/i`;
+  } else if (str.lastIndexOf('/') === 0) {
+    str = `${str}/i`;
+  }
+  const lastSlash = str.lastIndexOf('/');
+  const pattern = str.slice(1, lastSlash);
+  const flags = str.slice(lastSlash + 1) || 'i';
+  try {
+    new RegExp(pattern, flags);
+    return `/${pattern}/${flags}`;
+  } catch (_) {
+    return null;
+  }
+}
+
+// Resolves the exact active model: explicit choice > storage > Ollama detected > fallback
+async function resolveActiveModel(modelChoice) {
+  if (modelChoice && typeof modelChoice === 'string' && modelChoice.trim() && modelChoice !== 'heuristic') {
+    return modelChoice.trim();
+  }
+  try {
+    const store = await new Promise(r => chrome.storage.local.get(['aiModel'], r));
+    if (store && store.aiModel && typeof store.aiModel === 'string' && store.aiModel.trim() && store.aiModel !== 'heuristic') {
+      return store.aiModel.trim();
+    }
+  } catch (_) {}
+  try {
+    const status = await checkAiStatus();
+    if (status && status.ok && Array.isArray(status.models) && status.models.length) {
+      return status.models[0];
+    }
+  } catch (_) {}
+  return 'qwen3vl-instruct:latest';
+}
+
+// Unified query runner for local LLMs (Ollama with think:false + LM Studio / OpenAI-compatible)
+async function queryLocalLlm({ messages, format = 'json', model, customUrl, timeoutMs = 35000 }) {
+  const isCustom = Boolean(customUrl);
+  const targetUrl = customUrl || OLLAMA_DEFAULT_URL;
+  const timeout = Math.max(5000, Number(timeoutMs) || 35000);
+  const activeModel = await resolveActiveModel(model);
+
+  // Try Ollama endpoint first
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), timeout);
+    const body = {
+      model: activeModel,
+      messages,
+      stream: false,
+      think: false
+    };
+    if (format === 'json') body.format = 'json';
+
+    const res = await fetch(`${targetUrl}/api/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: ctrl.signal
+    });
+    clearTimeout(timer);
+
+    if (res.ok) {
+      const data = await res.json();
+      const content = data?.message?.content || '';
+      return { ok: true, content, provider: 'ollama', modelUsed: activeModel };
+    }
+  } catch (_) {}
+
+  // Fallback to OpenAI / LM Studio endpoint
+  const openAiUrl = isCustom ? customUrl : LMSTUDIO_DEFAULT_URL;
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), timeout);
+    const body = {
+      model: activeModel,
+      messages,
+      stream: false,
+      temperature: 0.1
+    };
+    if (format === 'json') {
+      body.response_format = { type: 'json_object' };
+    }
+
+    const res = await fetch(`${openAiUrl}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: ctrl.signal
+    });
+    clearTimeout(timer);
+
+    if (res.ok) {
+      const data = await res.json();
+      const content = data?.choices?.[0]?.message?.content || '';
+      return { ok: true, content, provider: 'lmstudio', modelUsed: activeModel };
+    }
+  } catch (_) {}
+
+  return { ok: false, content: '', modelUsed: activeModel };
+}
+
+// Fallback heuristic rule synthesizer when no LLM is running or query fails
 function heuristicSynthesize(prompt) {
   const p = (prompt || '').toLowerCase();
   const keywords = [];
   const regex = [];
 
-  if (p.includes('brainrot') || p.includes('slop') || p.includes('prank') || p.includes('reaction')) {
-    keywords.push('prank', 'skibidi', 'in 24 hours', "you won't believe", 'shocking', 'exposed', 'reaction');
+  // 1. Ball Sports & Athletics domain
+  const isSports = p.includes('sport') || p.includes('ball') || p.includes('game') ||
+    p.includes('athlet') || p.includes('nba') || p.includes('nfl') || p.includes('fifa');
+
+  if (isSports) {
+    keywords.push(
+      'basketball', 'football', 'soccer', 'baseball', 'tennis', 'golf', 'volleyball',
+      'cricket', 'rugby', 'hockey', 'pickleball', 'badminton', 'table tennis', 'ping pong',
+      'bowling', 'dodgeball', 'handball', 'lacrosse', 'ball sports', 'ball sport',
+      'nba', 'nfl', 'mlb', 'nhl', 'fifa', 'uefa', 'premier league', 'super bowl', 'world cup'
+    );
+    const sportsRegex = normalizeRegexRule('\\b(ball\\s*sports?|basketball|football|soccer|baseball|tennis|golf|volleyball|rugby|cricket|nba|nfl|mlb|fifa)\\b');
+    if (sportsRegex) regex.push(sportsRegex);
   }
-  if (p.includes('crypto') || p.includes('hustle') || p.includes('rich') || p.includes('money')) {
-    keywords.push('crypto', 'bitcoin', 'memecoin', '100x', 'passive income', 'dropshipping');
+
+  // 2. Clickbait, Brainrot, and Slop
+  if (p.includes('brainrot') || p.includes('slop') || p.includes('prank') || p.includes('reaction') || p.includes('dopamine')) {
+    keywords.push('prank', 'skibidi', 'in 24 hours', "you won't believe", 'shocking', 'exposed', 'reaction', 'challenge', '3am', 'cringe');
+    const slopRegex = normalizeRegexRule('\\b(vlog|prank)\\s*#?\\d+');
+    if (slopRegex) regex.push(slopRegex);
   }
-  if (p.includes('ai') || p.includes('faceless') || p.includes('voiceover')) {
-    keywords.push('ai generated', 'faceless channel', 'text to speech');
+
+  // 3. Crypto & Wealth Hustle
+  if (p.includes('crypto') || p.includes('hustle') || p.includes('rich') || p.includes('money') || p.includes('finance')) {
+    keywords.push('crypto', 'bitcoin', 'memecoin', '100x', 'passive income', 'dropshipping', 'forex', 'get rich quick');
   }
-  if (p.includes('drama') || p.includes('gossip') || p.includes('cancel')) {
-    keywords.push('drama', 'canceled', 'apology video', 'responds to', 'clout');
+
+  // 4. Low-effort AI & Faceless Channels
+  if (p.includes('ai') || p.includes('faceless') || p.includes('voiceover') || p.includes('generated')) {
+    keywords.push('ai generated', 'faceless channel', 'text to speech', 'ai voice');
+  }
+
+  // 5. Drama, Gossip & Outrage
+  if (p.includes('drama') || p.includes('gossip') || p.includes('cancel') || p.includes('tea')) {
+    keywords.push('drama', 'canceled', 'apology video', 'responds to', 'clout', 'drama alert');
+  }
+
+  // 6. Natural language directive extraction: "block all X", "ban Y", "no Z", "filter out W"
+  const directiveRegex = /\b(?:block|ban|filter(?:\s+out)?|stop(?:\s+(?:showing|recommending))?|no|eliminate|eradicate|avoid|hate|purge)\s+(?:all\s+|any\s+)?([a-z0-9\s\-]+?)(?:(?:\s+related)?\s+(?:videos|channels|shorts|content|feed)|[,.\n]|$)/gi;
+  let match;
+  while ((match = directiveRegex.exec(p)) !== null) {
+    const rawTarget = (match[1] || '').trim();
+    if (rawTarget && rawTarget.length > 2 && rawTarget.length < 50) {
+      const clean = rawTarget.replace(/\b(all|any|the|my|and|or|videos?|channels?|related)\b/gi, '').trim();
+      if (clean) {
+        keywords.push(clean);
+        if (clean.includes(' ')) {
+          clean.split(/\s+/).forEach(word => {
+            if (word.length > 3 && !['with', 'from', 'about'].includes(word)) keywords.push(word);
+          });
+        }
+      }
+    }
   }
 
   // Extract explicit quoted words or comma items
@@ -83,57 +261,54 @@ function heuristicSynthesize(prompt) {
     keywords.push('prank', 'reaction', 'shocking', 'exposed', 'crypto', 'drama');
   }
 
+  const dedupedKeywords = [...new Set(keywords.map(k => k.trim().toLowerCase()).filter(Boolean))];
+  const dedupedRegex = [...new Set(regex.map(normalizeRegexRule).filter(Boolean))];
+
   return {
-    keywords: [...new Set(keywords)],
-    regex: ['/\\b(vlog|prank)\\s*#?\\d+/i'],
-    rationale: 'Heuristic synthesis: extracted high-entropy bait tokens matching your taste prompt.'
+    keywords: dedupedKeywords,
+    regex: dedupedRegex.length ? dedupedRegex : ['/\\b(vlog|prank)\\s*#?\\d+/i'],
+    rationale: isSports
+      ? 'Synthesized precision rules to eradicate ball sports and athletic match coverage from your feed.'
+      : 'Heuristic synthesis: extracted high-entropy bait and topic tokens matching your taste prompt.'
   };
 }
 
 // Query local LLM for taste synthesis
 async function synthesizeRulesWithAi(prompt, modelChoice, customUrl) {
-  const baseUrl = customUrl || OLLAMA_DEFAULT_URL;
   const systemPrompt =
     'You are the YouTube Slop Defense Intelligence. Analyze the user\'s taste description and output ONLY valid JSON in this exact structure: ' +
     '{"keywords": string[], "regex": string[], "rationale": string}. ' +
-    'The "keywords" array should contain 6-12 high-impact clickbait/slop words to blacklist based on what they want to avoid. ' +
+    'The "keywords" array should contain 6-12 high-impact clickbait, slop, or specific topic words to blacklist based on what they want to avoid. ' +
+    'The "regex" array should contain 1-3 valid regex patterns formatted as /pattern/i to block these topics. ' +
     'Do not output markdown codeblocks, just raw JSON.';
 
   try {
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 12000);
-    const res = await fetch(`${baseUrl}/api/chat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: modelChoice || 'gemma4:12b',
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: `User Taste & Preferences: ${prompt}` }
-        ],
-        stream: false,
-        format: 'json'
-      }),
-      signal: ctrl.signal
+    const res = await queryLocalLlm({
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: `User Taste & Preferences: ${prompt}` }
+      ],
+      format: 'json',
+      model: modelChoice,
+      customUrl,
+      timeoutMs: 35000
     });
-    clearTimeout(timer);
 
-    if (res.ok) {
-      const data = await res.json();
-      const rawText = data?.message?.content || '';
-      const parsed = JSON.parse(rawText);
-      if (parsed && Array.isArray(parsed.keywords)) {
+    if (res.ok && res.content) {
+      const parsed = cleanJsonParse(res.content);
+      if (parsed && Array.isArray(parsed.keywords) && parsed.keywords.length) {
+        const rawRegex = Array.isArray(parsed.regex) ? parsed.regex : [];
+        const validRegex = rawRegex.map(normalizeRegexRule).filter(Boolean);
         return {
           ok: true,
-          keywords: parsed.keywords.map(k => String(k).trim().toLowerCase()),
-          regex: Array.isArray(parsed.regex) ? parsed.regex : [],
-          rationale: parsed.rationale || 'Synthesized by local neural model.'
+          keywords: parsed.keywords.map(k => String(k).trim().toLowerCase()).filter(Boolean),
+          regex: validRegex,
+          rationale: parsed.rationale || 'Synthesized by local neural model.',
+          modelUsed: res.modelUsed
         };
       }
     }
-  } catch (err) {
-    // Fallback if LLM fails or times out
-  }
+  } catch (_) {}
 
   const fallback = heuristicSynthesize(prompt);
   return { ok: true, ...fallback, isFallback: true };
@@ -303,28 +478,19 @@ async function synthesizeSubscriptionRulesWithAi(channels, modelChoice, customUr
   let isFallback = false;
 
   try {
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 15000);
-    const res = await fetch(`${baseUrl}/api/chat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: modelChoice || 'gemma4:12b',
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: `Subscribed channels:\n${cleanChannels.join(', ').slice(0, 6000)}` }
-        ],
-        stream: false,
-        format: 'json'
-      }),
-      signal: ctrl.signal
+    const res = await queryLocalLlm({
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: `Subscribed channels:\n${cleanChannels.join(', ').slice(0, 6000)}` }
+      ],
+      format: 'json',
+      model: modelChoice,
+      customUrl,
+      timeoutMs: 35000
     });
-    clearTimeout(timer);
 
-    if (res.ok) {
-      const data = await res.json();
-      const rawText = data?.message?.content || '';
-      const parsed = JSON.parse(rawText);
+    if (res.ok && res.content) {
+      const parsed = cleanJsonParse(res.content);
       if (parsed && Array.isArray(parsed.keywords)) {
         // Guardrail: never synthesize a rule that collides with the user's own subscriptions
         const forbidden = new Set();
@@ -340,7 +506,8 @@ async function synthesizeSubscriptionRulesWithAi(channels, modelChoice, customUr
           if (clean && clean.length > 1 && !forbidden.has(clean)) keywords.push(clean);
         });
 
-        regex = Array.isArray(parsed.regex) ? parsed.regex.filter(r => String(r).trim()) : [];
+        const rawRegex = Array.isArray(parsed.regex) ? parsed.regex : [];
+        regex = rawRegex.map(normalizeRegexRule).filter(Boolean);
         rationale = parsed.rationale || 'Synthesized from subscription patterns by local neural model.';
         profile = typeof parsed.profile === 'string' && parsed.profile.trim()
           ? parsed.profile.trim().slice(0, 60)
@@ -371,7 +538,6 @@ async function synthesizeSubscriptionRulesWithAi(channels, modelChoice, customUr
 async function evaluateBatchWithAi(videos, persona, sensitivity, modelChoice, customUrl) {
   if (!Array.isArray(videos) || !videos.length) return { evaluations: [] };
 
-  const baseUrl = customUrl || OLLAMA_DEFAULT_URL;
   const sens = sensitivity || 'balanced';
 
   // System prompt
@@ -381,45 +547,60 @@ async function evaluateBatchWithAi(videos, persona, sensitivity, modelChoice, cu
     'Respond ONLY with JSON: {"evaluations": [{"id": string, "block": boolean, "rationale": string}]}';
 
   try {
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 7000);
-    const res = await fetch(`${baseUrl}/api/chat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: modelChoice || 'gemma4:12b',
-        messages: [
-          { role: 'system', content: systemPrompt },
-          {
-            role: 'user',
-            content: `User Taste Persona: ${persona || 'High signal, thoughtful, educational, anti-clickbait'}\nSensitivity: ${sens}\nVideos:\n${JSON.stringify(videos)}`
-          }
-        ],
-        stream: false,
-        format: 'json'
-      }),
-      signal: ctrl.signal
+    const res = await queryLocalLlm({
+      messages: [
+        { role: 'system', content: systemPrompt },
+        {
+          role: 'user',
+          content: `User Taste Persona: ${persona || 'High signal, thoughtful, educational, anti-clickbait'}\nSensitivity: ${sens}\nVideos:\n${JSON.stringify(videos)}`
+        }
+      ],
+      format: 'json',
+      model: modelChoice,
+      customUrl,
+      timeoutMs: 25000
     });
-    clearTimeout(timer);
 
-    if (res.ok) {
-      const data = await res.json();
-      const parsed = JSON.parse(data?.message?.content || '{}');
-      if (Array.isArray(parsed.evaluations)) {
+    if (res.ok && res.content) {
+      const parsed = cleanJsonParse(res.content);
+      if (parsed && Array.isArray(parsed.evaluations)) {
         return { evaluations: parsed.evaluations };
       }
     }
   } catch (_) {}
 
-  // Fast heuristic evaluation fallback
+  // Fast heuristic evaluation fallback respecting user persona
+  const personaLower = (persona || '').toLowerCase();
+  const isAntiSports = personaLower.includes('sport') || personaLower.includes('ball');
+  const isAntiCrypto = personaLower.includes('crypto') || personaLower.includes('money') || personaLower.includes('hustle');
+  const isAntiSlop = personaLower.includes('slop') || personaLower.includes('brainrot') || personaLower.includes('clickbait') || !persona;
+
+  const sportsKeywords = [
+    'nba', 'nfl', 'mlb', 'nhl', 'fifa', 'uefa', 'football', 'soccer', 'basketball',
+    'baseball', 'tennis', 'golf', 'volleyball', 'rugby', 'cricket', 'touchdown',
+    'slam dunk', 'home run', 'super bowl', 'world cup', 'highlights'
+  ];
+  const cryptoKeywords = ['crypto', 'bitcoin', 'memecoin', '100x', 'passive income', 'dropshipping'];
+  const baitPats = [/you won'?t believe/i, /in 24 hours/i, /shocking/i, /exposed/i, /skibidi/i, /100x/i, /!!!/];
+
   const evaluations = videos.map(v => {
     const t = (v.title || '').toLowerCase();
+    const ch = (v.channel || '').toLowerCase();
+    const combined = `${t} ${ch}`;
+
+    // Check persona-specific topics
+    if (isAntiSports && sportsKeywords.some(k => new RegExp(`\\b${k}\\b`, 'i').test(combined))) {
+      return { id: v.id, block: true, rationale: 'Matches blocked persona topic: Sports' };
+    }
+    if (isAntiCrypto && cryptoKeywords.some(k => new RegExp(`\\b${k}\\b`, 'i').test(combined))) {
+      return { id: v.id, block: true, rationale: 'Matches blocked persona topic: Crypto / Finance' };
+    }
+
     const capsCount = (v.title || '').replace(/[^A-Z]/g, '').length;
     const isAllCaps = v.title && v.title.length > 10 && (capsCount / v.title.length) > 0.45;
-    const baitPats = [/you won'?t believe/i, /in 24 hours/i, /shocking/i, /exposed/i, /skibidi/i, /100x/i, /!!!/];
     const matchesBait = baitPats.some(p => p.test(v.title || ''));
 
-    const shouldBlock = matchesBait || (sens === 'ruthless' && isAllCaps);
+    const shouldBlock = (isAntiSlop && matchesBait) || (sens === 'ruthless' && isAllCaps);
     return {
       id: v.id,
       block: shouldBlock,
@@ -481,7 +662,6 @@ function heuristicDebaitTitle(title) {
 
 // De-bait a single title via local LLM with zero-temperature prompt.
 async function deBaitWithAi(titles, modelChoice, customUrl) {
-  const baseUrl = customUrl || OLLAMA_DEFAULT_URL;
   const systemPrompt =
     'You are the ultra-calm "Title De-Baiter". Rewrite sensationalist YouTube titles into factual, dry, low-key descriptions. ' +
     'Keep the real subject. Strip hype, ALL-CAPS, exclamation marks, outrage hooks, clickbait numbers and drama. ' +
@@ -489,29 +669,19 @@ async function deBaitWithAi(titles, modelChoice, customUrl) {
     'Each item must correspond 1-to-1 with the input titles array and remain under 12 words. Never editorialize.';
 
   try {
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 12000);
-    const res = await fetch(`${baseUrl}/api/chat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: modelChoice || 'gemma4:12b',
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: 'Titles:\n' + JSON.stringify(titles) }
-        ],
-stream: false,
-        format: 'json',
-        options: { temperature: 0 }
-      }),
-      signal: ctrl.signal
+    const res = await queryLocalLlm({
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: 'Titles:\n' + JSON.stringify(titles) }
+      ],
+      format: 'json',
+      model: modelChoice,
+      customUrl,
+      timeoutMs: 15000
     });
-    clearTimeout(timer);
 
-    if (res.ok) {
-      const data = await res.json();
-      const rawText = data?.message?.content || '';
-      const parsed = JSON.parse(rawText);
+    if (res.ok && res.content) {
+      const parsed = cleanJsonParse(res.content);
       if (parsed && Array.isArray(parsed.neutralTitles)) {
         return { ok: true, neutralTitles: parsed.neutralTitles };
       }
@@ -584,7 +754,6 @@ function roastHeuristic(items) {
 }
 
 async function roastFeedWithAi(items, modelChoice, customUrl) {
-  const baseUrl = customUrl || OLLAMA_DEFAULT_URL;
   const systemPrompt =
     'You are the savage but precise "Feed Forensic Psychologist". Analyze the given YouTube feed items for psychological manipulation tactics. ' +
     'Output ONLY valid JSON with this exact structure: ' +
@@ -592,35 +761,27 @@ async function roastFeedWithAi(items, modelChoice, customUrl) {
     'diagnosis must be witty, psychoanalytic, 2-3 sentences, roasting the algorithm. toxicChannels lists only channels whose titles show clear manipulation/clickbait.';
 
   try {
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 15000);
-    const res = await fetch(`${baseUrl}/api/chat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: modelChoice || 'gemma4:12b',
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: 'Current visible feed items:\n' + JSON.stringify(items) }
-        ],
-        stream: false,
-        format: 'json'
-      }),
-      signal: ctrl.signal
+    const res = await queryLocalLlm({
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: 'Current visible feed items:\n' + JSON.stringify(items) }
+      ],
+      format: 'json',
+      model: modelChoice,
+      customUrl,
+      timeoutMs: 20000
     });
-    clearTimeout(timer);
 
-    if (res.ok) {
-      const data = await res.json();
-      const parsed = JSON.parse(data?.message?.content || '{}');
-      if (typeof parsed.toxicity === 'number') {
+    if (res.ok && res.content) {
+      const parsed = cleanJsonParse(res.content);
+      if (parsed && typeof parsed.toxicity === 'number') {
         const tactics = Array.isArray(parsed.tactics) ? parsed.tactics : [];
         const toxicChannels = Array.isArray(parsed.toxicChannels) ? parsed.toxicChannels : [];
         return {
           ok: true,
           toxicity: Math.max(0, Math.min(100, Math.round(parsed.toxicity))),
           tactics,
-          diagnosis: parsed.diagnosis || 'No diagnosis provided.',
+          diagnosis: parsed.diagnosis || 'Audited by local neural model.',
           toxicChannels,
           items,
           isFallback: false
@@ -664,7 +825,6 @@ function summarizeFeedbackFallback(transcript) {
 }
 
 async function summarizeTranscriptWithAi(transcript, title, modelChoice, customUrl, opts) {
-  const baseUrl = customUrl || OLLAMA_DEFAULT_URL;
   const systemPrompt =
     'You are the strict "TL;DW Inspector" — a forensic media literacy machine. ' +
     'Compare the video transcript against its title and flag clickbait dishonesty. ' +
@@ -675,38 +835,32 @@ async function summarizeTranscriptWithAi(transcript, title, modelChoice, customU
   const clip = (transcript || '').slice(0, 14000);
 
   try {
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 20000);
-    const res = await fetch(`${baseUrl}/api/chat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: modelChoice || 'gemma4:12b',
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: `Video Title: ${title}\n\nTranscript:\n${clip}` }
-        ],
-        stream: false,
-        format: 'json'
-      }),
-      signal: ctrl.signal
+    const res = await queryLocalLlm({
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: `Video Title: ${title}\n\nTranscript:\n${clip}` }
+      ],
+      format: 'json',
+      model: modelChoice,
+      customUrl,
+      timeoutMs: 25000
     });
-    clearTimeout(timer);
 
-    if (res.ok) {
-      const data = await res.json();
-      const parsed = JSON.parse(data?.message?.content || '{}');
-      const takeaways = Array.isArray(parsed.takeaways) ? parsed.takeaways.slice(0, 3) : [];
-      if (parsed.clickbaitVerdict || takeaways.length) {
-        const durationSec = opts ? opts.durationSec || 0 : 0;
-        const timeSaved = durationSec > 0 ? Math.round(durationSec / 60) : Math.floor((transcript || '').split(/\s+/).length / 150);
-        return {
-          ok: true,
-          clickbaitVerdict: parsed.clickbaitVerdict || 'Inconclusive verdict.',
-          takeaways,
-          timeSaved,
-          isFallback: false
-        };
+    if (res.ok && res.content) {
+      const parsed = cleanJsonParse(res.content);
+      if (parsed) {
+        const takeaways = Array.isArray(parsed.takeaways) ? parsed.takeaways.slice(0, 3) : [];
+        if (parsed.clickbaitVerdict || takeaways.length) {
+          const durationSec = opts ? opts.durationSec || 0 : 0;
+          const timeSaved = durationSec > 0 ? Math.round(durationSec / 60) : Math.floor((transcript || '').split(/\s+/).length / 150);
+          return {
+            ok: true,
+            clickbaitVerdict: parsed.clickbaitVerdict || 'Inconclusive verdict.',
+            takeaways,
+            timeSaved,
+            isFallback: false
+          };
+        }
       }
     }
   } catch (_) {}
