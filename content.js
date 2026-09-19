@@ -1194,7 +1194,9 @@ function runAiEvaluationBatch() {
     videos: candidates.map(c => ({ id: c.id, title: c.title, channel: c.channel })),
     persona: [settings.aiTastePrompt, settings.aiSubscriptionProfile].filter(Boolean).join(' — '),
     sensitivity: settings.aiSensitivity,
-    modelChoice: settings.aiModel
+    modelChoice: settings.aiModel,
+    keywords: settings.keywords,
+    channels: settings.channels
   }, (res) => {
     aiBatchPending = false;
     if (!res || !Array.isArray(res.evaluations)) {

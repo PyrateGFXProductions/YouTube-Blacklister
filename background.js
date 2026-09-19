@@ -57,7 +57,13 @@ async function checkAiStatus(customUrl) {
 // Helper to safely extract and parse JSON from local LLM outputs (handles thinking tags and codeblocks)
 function cleanJsonParse(rawText) {
   if (!rawText || typeof rawText !== 'string') return null;
-  let text = rawText.replace(/<thought>[\s\S]*?<\/thought>/gi, '').trim();
+  // Strip common thought-block formats emitted by local LLM runtimes.
+  // Uses global replace so multiple blocks are removed, not just the first.
+  let text = rawText
+    .replace(/<thought>[\s\S]*?<\/thought>/gi, '')
+    .replace(/<\|thinking\|>[\s\S]*?<\|end\|think\|>/gi, '')
+    .replace(/<｜｜DSML｜｜think>[\s\S]*?<｜｜DSML｜｜end｜｜think｜｜>/gi, '')
+    .trim();
   const codeBlockMatch = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
   if (codeBlockMatch && codeBlockMatch[1]) {
     text = codeBlockMatch[1].trim();
@@ -120,8 +126,93 @@ async function resolveActiveModel(modelChoice) {
       return status.models[0];
     }
   } catch (_) {}
-  return 'qwen3vl-instruct:latest';
+  return null;
 }
+
+// Shared heuristic constants — single source of truth for clickbait / slop patterns
+// used across the autonomous interceptor, the de-baiter, and the feed forensic roast.
+// Kept in one place so the interceptor, the de-baiter, and the roast can't drift apart.
+
+const CLICKBAIT_PATTERNS = [
+  /you won'?t believe/i,
+  /in 24 hours/i,
+  /shocking/i,
+  /exposed/i,
+  /skibidi/i,
+  /100x/i,
+  /!!!+/i,
+  /!!+/i,
+  /\b(?:OMG|LOL|WOW|INSANE|EPIC|CRAZY|HUGE|MASSIVE|LMAO|ROFL|WTF)\b/i,
+  /\b(?:prank|reaction|challenge|vs)\b/i,
+  /\?\?\?+/i,
+  /\b(?:drama|cancelled|canceled|apology)\b/i,
+  /\b(?:crypto|moon|pump|dump|rich|hustle)\b/i,
+  /\b(?:hot|sexy|leaked|banned|gone|died|destroyed|owned|roasted)\b/i,
+  /\b(?:nobody|everyone|anyone|somebody) (?:knows?|talks?|says?)\b/i,
+  /(?:\d+\s+)?(?:things?|ways?|reasons?|secrets?|hacks?|tricks?) (?:you|to|that)/i
+];
+
+const SENSATIONAL_ADJECTIVES = [
+  'shocking', 'exposed', 'insane', 'epic', 'crazy', 'massive', 'huge', 'wild',
+  'incredible', 'unbelievable', 'mind-blowing', 'jaw-dropping', 'absolutely'
+];
+
+const OUTRAGE_WORDS = ['drama', 'cancel', 'exposed', 'owned', 'roasted', 'destroyed',
+  'react', 'sues', 'beef', 'fight', 'controversy', 'leak'];
+
+const PARASOCIAL_WORDS = ['my', 'our', 'we did it', 'community', 'thanks for watching',
+  "here's", 'challenge', 'responding to'];
+
+const DESPERATION_WORDS = ['24 hours', 'last chance', 'before it', 'gone', 'banned',
+  'deleted', 'be careful', 'beware', 'how to get rich', 'free'];
+
+const SPORTS_KEYWORDS = [
+  'nba', 'nfl', 'mlb', 'nhl', 'fifa', 'uefa', 'football', 'soccer', 'basketball',
+  'baseball', 'tennis', 'golf', 'volleyball', 'rugby', 'cricket', 'touchdown',
+  'slam dunk', 'home run', 'super bowl', 'world cup', 'highlights'
+];
+
+const CRYPTO_KEYWORDS = ['crypto', 'bitcoin', 'memecoin', '100x', 'passive income',
+  'dropshipping', 'forex', 'get rich quick', 'signals', 'guaranteed', 'airdrops',
+  'pump', 'reversal packed', 'to the moon', 'crypto wealth', 'forex guru'];
+
+const AI_SLOP_KEYWORDS = ['ai generated', 'faceless channel', 'text to speech',
+  'ai voice', 'ai art', 'midjourney', 'stable diffusion'];
+
+const BRAINROT_KEYWORDS = ['prank', 'skibidi', 'in 24 hours', "you won't believe",
+  'shocking', 'exposed', 'reaction', 'challenge', '3am', 'cringe'];
+
+const DRAMA_KEYWORDS = ['drama', 'canceled', 'apology video', 'responds to',
+  'clout', 'drama alert'];
+
+const SLOP_REGEX = '\\b(vlog|prank)\\s*#?\\d+';
+
+// Title de-baiter: patterns to strip from sensational titles (shared with heuristicDebaitTitle)
+const DEBait_CLEANERS = [
+  /\b(in 24 hours)\b/gi,
+  /\b(?:shocking|exposed|insane|epic|crazy|massive|huge|wild)(?![\?!.])\b/gi,
+  /\b(hot|leaked|banned|gone|died|destroyed|owned|roasted)\b/gi,
+];
+
+// Heuristic fallback keyword set used when nothing in the persona matched.
+// Deliberately overlaps with the persona-specific tables above so the fallback
+// is never completely empty.
+const FALLBACK_KEYWORDS = ['prank', 'reaction', 'shocking', 'exposed', 'crypto', 'drama', 'skibidi'];
+
+// Heuristic fallback regex rules — mirrors the persona-specific regex tables.
+const FALLBACK_REGEX = ['/\\b(vlog|prank)\\s*#?\\d+/i'];
+
+// Patterns used by the subscription synthesizer's heuristic noise filter.
+// Shared with roastHeuristic's sensationalPatterns where they overlap.
+const NOISE_PATTERNS = [
+  /\b(prank|reaction|challenge|vs|showdown|competition|vs\.)\b/i,
+  /\b(diss|beef|response|reply|reaction video|cancellation|apology)\b/i,
+  /\b(how to get rich|passive income|side hustle|make money|crypto|100x|signals|guaranteed)\b/i,
+  /uploaded \d{4}|\b(?:day|week|month|year|hours?|minutes?|seconds?|today|tonight|last chance)\b/i,
+  /\?\?\?+|!!+|click here|must see|don't miss|subscribe|notification|follow\b/i,
+];
+
+//
 
 // Unified query runner for local LLMs (Ollama with think:false + LM Studio / OpenAI-compatible)
 async function queryLocalLlm({ messages, format = 'json', model, customUrl, timeoutMs = 35000 }) {
@@ -129,6 +220,11 @@ async function queryLocalLlm({ messages, format = 'json', model, customUrl, time
   const targetUrl = customUrl || OLLAMA_DEFAULT_URL;
   const timeout = Math.max(5000, Number(timeoutMs) || 35000);
   const activeModel = await resolveActiveModel(model);
+
+  // No model available anywhere — signal callers to fall back to heuristic mode
+  if (!activeModel) {
+    return { ok: false, content: null, provider: 'none', modelUsed: null, reason: 'no_model' };
+  }
 
   // Try Ollama endpoint first
   try {
@@ -375,7 +471,7 @@ function heuristicSubscriptionSynthesize(channels) {
     (SUB_TOPIC_JUNK[topic] || []).forEach(k => seen.add(k));
   });
   if (!seen.size) {
-    ['reaction', 'prank', 'skibidi', "you won't believe", 'shocking', 'in 24 hours'].forEach(k => seen.add(k));
+    FALLBACK_KEYWORDS.forEach(k => seen.add(k));
   }
 
   const profile = ranked.length
@@ -384,7 +480,7 @@ function heuristicSubscriptionSynthesize(channels) {
 
   return {
     keywords: [...seen],
-    regex: ['/\\b(vlog|prank|reaction)\\s*#?\\d+/i'],
+    regex: FALLBACK_REGEX,
     rationale: `Heuristic synthesis from ${names.length} subscriptions (profile: ${profile}). Blacklists the junk-neighbor clusters that parasitically ride your subscribed topics.`,
     profile
   };
@@ -481,7 +577,7 @@ async function synthesizeSubscriptionRulesWithAi(channels, modelChoice, customUr
     const res = await queryLocalLlm({
       messages: [
         { role: 'system', content: systemPrompt },
-        { role: 'user', content: `Subscribed channels:\n${cleanChannels.join(', ').slice(0, 6000)}` }
+        { role: 'user', content: `Subscribed channels:\n${cleanChannels.join(', ')}` }
       ],
       format: 'json',
       model: modelChoice,
@@ -535,7 +631,7 @@ async function synthesizeSubscriptionRulesWithAi(channels, modelChoice, customUr
 }
 
 // Evaluate candidate videos in batch
-async function evaluateBatchWithAi(videos, persona, sensitivity, modelChoice, customUrl) {
+async function evaluateBatchWithAi(videos, persona, sensitivity, modelChoice, customUrl, userKeywords, userChannels) {
   if (!Array.isArray(videos) || !videos.length) return { evaluations: [] };
 
   const sens = sensitivity || 'balanced';
@@ -569,26 +665,89 @@ async function evaluateBatchWithAi(videos, persona, sensitivity, modelChoice, cu
     }
   } catch (_) {}
 
-  // Fast heuristic evaluation fallback respecting user persona
+  // Fast heuristic evaluation fallback respecting user persona AND the user's own
+  // blacklisted keywords + channels, so the interceptor stays useful when the local
+  // model is offline (instead of silently ignoring the user's custom rules).
   const personaLower = (persona || '').toLowerCase();
   const isAntiSports = personaLower.includes('sport') || personaLower.includes('ball');
   const isAntiCrypto = personaLower.includes('crypto') || personaLower.includes('money') || personaLower.includes('hustle');
   const isAntiSlop = personaLower.includes('slop') || personaLower.includes('brainrot') || personaLower.includes('clickbait') || !persona;
 
-  const sportsKeywords = [
-    'nba', 'nfl', 'mlb', 'nhl', 'fifa', 'uefa', 'football', 'soccer', 'basketball',
-    'baseball', 'tennis', 'golf', 'volleyball', 'rugby', 'cricket', 'touchdown',
-    'slam dunk', 'home run', 'super bowl', 'world cup', 'highlights'
-  ];
-  const cryptoKeywords = ['crypto', 'bitcoin', 'memecoin', '100x', 'passive income', 'dropshipping'];
-  const baitPats = [/you won'?t believe/i, /in 24 hours/i, /shocking/i, /exposed/i, /skibidi/i, /100x/i, /!!!/];
+  const sportsKeywords = SPORTS_KEYWORDS;
+  const cryptoKeywords = CRYPTO_KEYWORDS.slice(0, 6); // subset used by interceptor heuristic
+  const baitPats = CLICKBAIT_PATTERNS.slice(0, 7); // subset used by the interceptor heuristic
+
+  // Normalize the user's keyword + channel lists for the heuristic path.
+  const kwList = Array.isArray(userKeywords) ? userKeywords.map(String) : [];
+  const chList = Array.isArray(userChannels) ? userChannels.map(String) : [];
+
+  function matchUserKeyword(text) {
+    if (!text || !kwList.length) return null;
+    for (const kw of kwList) {
+      const k = (kw || '').trim();
+      if (!k) continue;
+      if (k.startsWith('/') && k.lastIndexOf('/') > 0) {
+        // User-supplied regex rule — test directly.
+        try {
+          const lastSlash = k.lastIndexOf('/');
+          const pattern = k.slice(1, lastSlash);
+          const flags = k.slice(lastSlash + 1) || 'i';
+          if (pattern.length <= 200 && !/(?:\([^()]*\[[*+{]|[\|])[^()]*\)\s*[*+{]/.test(pattern)) {
+            if (new RegExp(pattern, flags).test(text)) return k;
+          }
+        } catch (_) {}
+      } else {
+        // Word-boundary match, mirroring content.js hasWordBoundaryKeyword().
+        try {
+          const escaped = k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          if (new RegExp(`\\b${escaped}\\b`, 'i').test(text)) return k;
+        } catch (_) {
+          if (text.toLowerCase().includes(k.toLowerCase())) return k;
+        }
+      }
+    }
+    return null;
+  }
+
+  function matchUserChannel(channelName) {
+    if (!channelName || !chList.length) return null;
+    const norm = (channelName || '').toString().trim().toLowerCase().replace(/^@+/, '');
+    if (!norm) return null;
+    for (const c of chList) {
+      const raw = (c || '').toString().trim();
+      if (!raw) continue;
+      const cNorm = raw.toLowerCase().replace(/^@+/, '');
+      // Also support channel URLs/IDs the user may have pasted — only compare the
+      // non-empty, non-video-ID portion.
+      const entityKey = raw.includes('youtu.be/') ? null
+        : raw.includes('/channel/') ? raw.split('/channel/')[1].split('?')[0].split('/')[0].toLowerCase()
+        : raw.includes('/@') ? raw.split('/@')[1].split('?')[0].split('/')[0].toLowerCase()
+        : null;
+      if (cNorm === norm || (entityKey && entityKey === norm)) return raw;
+      // Fallback: substring match for handle-like entries.
+      if (cNorm.length > 2 && (cNorm === norm || norm.includes(cNorm))) return raw;
+    }
+    return null;
+  }
 
   const evaluations = videos.map(v => {
     const t = (v.title || '').toLowerCase();
     const ch = (v.channel || '').toLowerCase();
     const combined = `${t} ${ch}`;
 
-    // Check persona-specific topics
+    // 1. User's own keyword rules (highest-priority heuristic signal).
+    const matchedKw = matchUserKeyword(v.title || '');
+    if (matchedKw) {
+      return { id: v.id, block: true, rationale: `Matched your keyword rule: “${matchedKw}”` };
+    }
+
+    // 2. User's own channel blacklist.
+    const matchedCh = matchUserChannel(v.channel || '');
+    if (matchedCh) {
+      return { id: v.id, block: true, rationale: `Matched your channel block: “${matchedCh}”` };
+    }
+
+    // 3. Persona-specific topic heuristics.
     if (isAntiSports && sportsKeywords.some(k => new RegExp(`\\b${k}\\b`, 'i').test(combined))) {
       return { id: v.id, block: true, rationale: 'Matches blocked persona topic: Sports' };
     }
@@ -620,15 +779,7 @@ function looksSensationalist(title) {
   if (!t) return false;
   const capsCount = (t.match(/[A-Z]/g) || []).length;
   const isAllCaps = t.length > 10 && (capsCount / t.length) > 0.45;
-  const baitPats = [
-    /you won'?t believe/i, /in 24 hours/i, /shocking/i, /exposed/i,
-    /skibidi/i, /100x/i, /!!+/i, /\b(?:OMG|LOL|WOW|INSANE|CRAZY|EPIC|HUGE|MASSIVE)\b/i,
-    /\bprank\b/i, /\breaction\b/i, /\bchallenge\b/i, /\bvs\b/i, /\?\?\?+/i,
-    /\b(?:drama|cancelled|canceled|apology)\b/i, /\b(?:crypto|moon|pump|dump|rich|hustle)\b/i,
-    /\b(?:hot|sexy|leaked|banned|gone|died|destroyed|owned|roasted)\b/i,
-    /\b(?:nobody|everyone|anyone|somebody) (?:knows?|talks? |says? )\b/i,
-    /(?:\d+\s+)?(?:things?|ways?|reasons?|secrets?|hacks?|tricks?) (?:you|to|that)/i
-  ];
+  const baitPats = CLICKBAIT_PATTERNS;
   return isAllCaps || baitPats.some(p => p.test(t));
 }
 
@@ -649,9 +800,7 @@ function heuristicDebaitTitle(title) {
     /^(this is (?:the |what )?)(.*)$/i,
     /^(how (?:to|i)\b.+)[\?!.]+$/i
   ];
-  const cleaner = [
-    /\b(in 24 hours)\b/gi, /\b(?![\?!\.])(shocking|exposed|insane|epic|crazy|massive|huge|wild)(?![\?!\.])\b/gi
-  ];
+  const cleaner = DEBait_CLEANERS;
   for (const re of cleaner) t = t.replace(re, '');
   const m = t.match(prefixers[0]);
   if (m && m[2]) t = m[2];
@@ -703,10 +852,10 @@ function roastHeuristic(items) {
 
   const scoreParts = { outrage: 0, parasocial: 0, desperation: 0, baitCount: 0 };
 
-  const outrageWords = ['drama', 'cancel', 'exposed', 'owned', 'roasted', 'destroyed', 'react', 'sues', 'beef', 'fight', 'controversy', 'leak'];
-  const parasocialWords = ['my', 'our', 'we did it', 'community', 'thanks for watching', "here's", 'challenge', 'responding to'];
-  const desperationWords = ['24 hours', 'last chance', 'before it', 'gone', 'banned', 'deleted', 'be careful', 'beware', 'how to get rich', 'free'];
-  const clickbaitPats = [/you won'?t believe/i, /in 24 hours/i, /shocking/i, /exposed/i, /!!+/i, /\b(?:OMG|LOL|WOW|INSANE|EPIC|CRAZY)\b/i];
+  const outrageWords = OUTRAGE_WORDS;
+  const parasocialWords = PARASOCIAL_WORDS;
+  const desperationWords = DESPERATION_WORDS;
+  const clickbaitPats = CLICKBAIT_PATTERNS.slice(0, 6);
 
   for (const w of outrageWords) if (toks.includes(w)) scoreParts.outrage++;
   for (const w of parasocialWords) if (toks.includes(w)) scoreParts.parasocial++;
@@ -906,7 +1055,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 
   if (msg.type === 'AI_EVALUATE_BATCH') {
-    evaluateBatchWithAi(msg.videos, msg.persona, msg.sensitivity, msg.modelChoice, msg.customUrl).then(res => sendResponse(res));
+    evaluateBatchWithAi(msg.videos, msg.persona, msg.sensitivity, msg.modelChoice, msg.customUrl, msg.keywords, msg.channels).then(res => sendResponse(res));
     return true;
   }
 
