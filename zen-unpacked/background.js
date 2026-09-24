@@ -1,4 +1,4 @@
-// Background service worker for Always New To You - YouTube Blacklister v1.10.0
+// Background service worker for Always New To You - YouTube Blacklister v1.10.1
 // Manages badges, statistics, and the Autonomous AI Neural Slop Interceptor
 
 const OLLAMA_DEFAULT_URL = 'http://localhost:11434';

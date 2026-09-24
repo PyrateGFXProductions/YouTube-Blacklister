@@ -268,7 +268,7 @@ To package a release from the repository root:
 .\package-extension.ps1
 ```
 
-The script verifies required assets and creates `YouTube-Blacklister-v1.8.0.zip`.
+The script reads the version from `manifest.json` and creates `YouTube-Blacklister-v<version>.zip` (e.g. `YouTube-Blacklister-v1.10.1.zip`).
 
 Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request, and see [CHANGELOG.md](CHANGELOG.md) for release history.
 

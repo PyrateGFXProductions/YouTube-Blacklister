@@ -27,7 +27,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - `manifest.json` is now the single universal manifest (previous Chromium & Firefox manifests consolidated; Firefox background switched from unsupported `service_worker` to the `scripts` event page).
-- Bumped `manifest-firefox.json` version to 1.11.0
 - `ZEN-INSTALL.md` with instructions for temporary and persistent Zen Browser installs
 
 ---

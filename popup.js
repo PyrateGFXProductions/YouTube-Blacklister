@@ -1,4 +1,4 @@
-// Popup manager for YouTube Smart Blacklister v1.10.0
+// Popup manager for YouTube Smart Blacklister v1.10.1
 // Manages rules, settings, AI Guardian, search filtering, import/export, and stats.
 
 const RANKS = [
@@ -1034,7 +1034,10 @@ function runSubscriptionSynthesize() {
   const handleScrape = (res) => {
     if (!res || !res.ok || !Array.isArray(res.channels) || res.channels.length < 3) {
       // Deliberately keep the tab open on failure: the user may need to sign in there.
-      finishSubSynth(btn, 'No subscriptions were found on that page. If you just opened it: confirm you are signed in to YouTube on this browser profile, let the page finish loading, then press Scan again.');
+      const signedOut = res && res.ok && res.signedIn === false;
+      finishSubSynth(btn, signedOut
+        ? 'YouTube is asking you to sign in on that page before it reveals your subscriptions. Confirm you are signed in to YouTube in this browser profile, then press Scan again.'
+        : 'No subscriptions were found on that page. If you just opened it: confirm you are signed in to YouTube on this browser profile, let the page finish loading, then press Scan again.');
       return;
     }
     const count = res.channels.length;

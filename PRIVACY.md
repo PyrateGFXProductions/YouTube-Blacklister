@@ -1,6 +1,6 @@
 # Privacy Policy — Always New To You (YouTube Smart Blacklister)
 
-**Last updated:** 2026-09-10 · Version 1.10.0
+**Last updated:** 2026-09-23 · Version 1.10.1
 
 This extension is **local-first by design**: the point of it is control over your own YouTube feed without giving anyone — including us — a copy of what you watch, block, or scroll past.
 

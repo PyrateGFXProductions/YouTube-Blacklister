@@ -1,5 +1,5 @@
 /*
- * Always New To You - Smart Feed Blacklist (v1.10.0)
+ * Always New To You - Smart Feed Blacklist (v1.10.1)
  * ---------------------------------------------------------------
  * Core mechanisms:
  *
@@ -1421,6 +1421,22 @@ async function scrapeSubscriptions() {
     channels.push({ name: cleanName, handle: cleanHandle, url: cleanHref });
   };
 
+  const SIGN_IN_MARKERS = [
+    'Sign in to confirm you\u2019re not a bot',
+    'Sign in to confirm you are not a bot',
+    'ytd-consent-bump-renderer',
+    'aria-label="Sign in to confirm',
+    'Sign in to subscribe'
+  ];
+
+  const signedIn = () => {
+    const body = document.body ? document.body.innerText : '';
+    const hasSignInWall = SIGN_IN_MARKERS.some(m => m.startsWith('aria-label=')
+      ? !!document.querySelector(m.slice(12))
+      : body.includes(m));
+    return !hasSignInWall;
+  };
+
   // YouTube periodically reshapes this page; tiered selectors keep the scrape working
   const collectFromDom = () => {
     // Tier 1: standard ytd-channel-renderer anchors
@@ -1457,7 +1473,17 @@ async function scrapeSubscriptions() {
   }
   window.scrollTo(0, 0); // restore the user's scroll position
 
-  return { ok: true, channels, count: channels.length, url: location.href };
+  // Background (inactive) tabs get throttled, so a freshly-created subscriptions
+  // tab may not have hydrated its SPA yet. Give it a couple of extra passes and
+  // distinguish "signed out" from "really no channels" instead of guessing.
+  if (channels.length < 3) {
+    for (let attempt = 0; attempt < 2 && channels.length < 3; attempt++) {
+      await new Promise(r => setTimeout(r, 800));
+      collectFromDom();
+    }
+  }
+
+  return { ok: true, channels, count: channels.length, url: location.href, signedIn: signedIn() };
 }
 
 function checkFeedReplenishment(cards) {
