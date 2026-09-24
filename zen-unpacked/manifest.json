@@ -24,8 +24,9 @@
     "http://127.0.0.1:8080/*"
   ],
   "background": {
-    "scripts": ["background.js"],
-    "service_worker": "background.js"
+    "scripts": [
+      "background.js"
+    ]
   },
   "content_security_policy": {
     "extension_pages": "script-src 'self'; object-src 'self'; connect-src http://localhost:11434 http://127.0.0.1:11434 http://localhost:1234 http://127.0.0.1:1234 http://localhost:8080 http://127.0.0.1:8080"
@@ -49,7 +50,9 @@
       "matches": [
         "https://www.youtube.com/*"
       ],
-      "js": ["content.js"],
+      "js": [
+        "content.js"
+      ],
       "run_at": "document_idle"
     }
   ]

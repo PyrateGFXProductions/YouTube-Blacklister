@@ -58,11 +58,15 @@ Feature ideas and rule improvements are welcome! Open an issue using the **Featu
 
 ## Packaging a Release
 
-To generate a clean zip distribution ready for upload:
+To generate the release packages for every browser:
 ```powershell
 .\package-extension.ps1
 ```
-This produces a release zip archive in the root directory, excluding development, git, and system files.
+This derives per-browser manifests from the single universal `manifest.json` and produces:
+- `dist/chromium/` + `dist/chromium.zip` — Chromium family (Chrome, Edge, Brave, Opera, Vivaldi)
+- `dist/firefox/` + `dist/firefox.xpi` + `dist/firefox.zip` — Firefox family (Firefox, Zen, LibreWolf)
+- `zen-unpacked/` + `blacklist-firefox.jar`/`.xpi`/`.zip` — the Zen Browser install path from `ZEN-INSTALL.md`
+- a release zip in the root directory (or `-OutputDir`), excluding development, git, and system files.
 
 ---
 

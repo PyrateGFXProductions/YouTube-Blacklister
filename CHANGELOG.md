@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### Fixed
+- **Time strings leaking as channel blocks**: `isViewCountOrTimeText()` now recognizes YouTube's abbreviated time formats ("2h ago", "3d ago", "5m ago", "1w ago") and combined view-count+timestamp text ("1.5M views 8d ago") — previously only full unit names ("2 hours ago") were caught, letting "2h ago", "3w ago", "8d ago" etc. leak into channel keys and blocklist.
+- **"YouTube and 2 more" overlay text leaking as channel keys**: `extractChannelNamesFromByline()` no longer adds the full "X and N more" overlay text as a channel name — it only extracts the actual channel name (e.g. "YouTube"). Previously "YouTube and 2 more" was added as a card key and could become a channel block entry.
+- **`blacklistActiveChannel()` polluting channels list with garbage**: The quick-block-from-menu function no longer pushes ALL card keys into `settings.channels`. Previously, card keys including video IDs, timestamps, view counts, and name fragments from `extractChannelNamesFromByline` splitting were added as channel block entries. Now only the primary channel identity is added.
+- **`getCardChannelKeys()` fragment splitting**: `extractChannelNamesFromByline()` no longer splits multi-word channel names on `&` or `and` unless they match the "X and N more" overlay pattern. Channel names like "Sam & Nebula" are no longer decomposed into "Sam" and "Nebula" fragments that leak into card keys.
+- **`matchUserChannel()` substring false positives**: Removed the `norm.includes(cNorm)` substring fallback that caused short stored channel entries (e.g. "sam") to match full channel names (e.g. "Samsung"). Channel matching is now exact or via `/channel/` or `/@` entity key extraction only.
+- **`loadSettings()` garbage cleanup**: Existing stored channels list is now automatically filtered on load — time strings, view counts, fragments (≤2 chars), and digit+unit patterns are removed and persisted back to storage.
+- **Metadata row scoping**: `getChannelName()` and `getCardChannelKeys()` now use `:first-child` on `.ytContentMetadataViewModelMetadataRow` selectors to target only the channel name row, not view-count/timestamp rows.
+- **Popup tab queries scoped to YouTube**: `chrome.tabs.query({})` changed to `chrome.tabs.query({ url: 'https://www.youtube.com/*' })` in both `save()` and `getActiveYoutubeTab()` — no longer enumerates all tabs, works with host permission alone.
+
+### Added
+- **Zen Browser / Firefox support**: Added `manifest-firefox.json` with `browser_specific_settings.gecko` for Firefox-based browser support. All `chrome.*` APIs used are WebExtension-compatible; `chrome.action.setBadgeText` has a Firefox-compatible fallback (no `tabId`) in `background.js`.
+- **Full cross-browser support**: Consolidated to one universal `manifest.json` that loads in Chromium (Chrome/Edge/Brave/Opera/Vivaldi) and Firefox-family (Firefox/Zen/LibreWolf) browsers alike — the `background` key declares both `scripts` (Firefox event page) and `service_worker` (Chromium), and host access moved to `host_permissions`. `package-extension.ps1` now derives and packages every target: `dist/chromium/` + `dist/chromium.zip`, `dist/firefox/` + `dist/firefox.xpi` + `dist/firefox.zip`, refreshed `zen-unpacked/` + `blacklist-firefox.jar`/`.xpi`/`.zip`, and the release zip.
+- **Zen-INSTALL.md**: Installation instructions for Zen Browser.
+- **Debug helpers**: `window.__blkDebug = true` toggles console logging of every card evaluation; `window.__blkInspect()` dumps all visible cards' extraction results and stored settings.
+
+### Changed
+- `manifest.json` is now the single universal manifest (previous Chromium & Firefox manifests consolidated; Firefox background switched from unsupported `service_worker` to the `scripts` event page).
+- Bumped `manifest-firefox.json` version to 1.11.0
+- `ZEN-INSTALL.md` with instructions for temporary and persistent Zen Browser installs
+
+---
+
 ## [1.10.1] - 2026-09-17
 
 ### Fixed

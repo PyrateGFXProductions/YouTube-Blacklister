@@ -176,7 +176,7 @@ The rank, “time saved,” and purity indicators are playful motivation—not s
 
 ## Install
 
-Always New To You is an unpacked Manifest V3 extension for Chromium browsers: Chrome, Edge, Brave, Opera, and Vivaldi.
+Always New To You is an unpacked Manifest V3 extension that runs in Chromium browsers (Chrome, Edge, Brave, Opera, Vivaldi) and Firefox-based browsers (Firefox, Zen, LibreWolf). A single universal `manifest.json` loads in both; `package-extension.ps1` derives the per-browser packages.
 
 ### Option 1: Windows quick installer
 
@@ -200,6 +200,8 @@ Always New To You is an unpacked Manifest V3 extension for Chromium browsers: Ch
    | Chrome | `chrome://extensions` |
    | Edge | `edge://extensions` |
    | Brave | `brave://extensions` |
+   | Firefox | `about:debugging#/runtime/this-browser` → **Load Temporary Add-on** |
+   | Zen | `about:debugging#/runtime/this-browser` → **Load Temporary Add-on**, or **Install Add-on From File** (see [ZEN-INSTALL.md](ZEN-INSTALL.md)) |
 
 3. Enable **Developer mode**, choose **Load unpacked**, and select the repository folder.
 4. Pin **Always New To You** from your browser's extensions menu.
@@ -240,11 +242,24 @@ YouTube can change its markup at any time. If a menu item, card type, or page la
 
 ## Development and packaging
 
-There is no build step: this is vanilla JavaScript, HTML, and CSS.
+This is vanilla JavaScript, HTML, and CSS with a single universal `manifest.json` that loads in both Chromium and Firefox-based browsers.
 
-1. Load the repository as an unpacked extension.
+1. Load the repository as an unpacked extension (Chromium: **Load unpacked** on the extensions page; Firefox/Zen: `about:debugging` → **Load Temporary Add-on**).
 2. Make your change.
 3. Choose **Reload** on the browser's extensions page.
+
+To package releases for every browser, run:
+
+```powershell
+.\package-extension.ps1
+```
+
+It derives per-browser manifests from `manifest.json` and writes:
+
+- `dist/chromium/` + `dist/chromium.zip` — Chrome Web Store / Edge / Brave / Opera
+- `dist/firefox/` + `dist/firefox.xpi` + `dist/firefox.zip` — Firefox / Zen / LibreWolf (sign the `.xpi` at addons.mozilla.org, or use the unpacked folder under a signature bypass)
+- `zen-unpacked/` + `blacklist-firefox.jar` / `.xpi` / `.zip` — refreshes the Zen install path used by [ZEN-INSTALL.md](ZEN-INSTALL.md)
+- `YouTube-Blacklister-v<version>.zip` — full release zip for GitHub Releases
 4. Test on YouTube's home, search, subscription, and watch/recommendation surfaces where relevant.
 
 To package a release from the repository root:
