@@ -50,7 +50,7 @@ Some features (Mind Reader, Autonomous Slop Interceptor, Guardian roast, TL;DR s
 ## 5. Retention and deletion
 
 - Your rules, settings, and subscription snapshot live in `chrome.storage.local` only. Removing the extension from Chrome deletes **all** of it.
-- You can export and import a complete backup from the popup (**Export / Import**) and remove individual rules at any time.
+- You can export and import a complete backup from the dedicated **Backup & Restore** page (opened from the popup's **Export** / **Import** buttons) and remove individual rules at any time.
 - Transient data (visible feed cards, captions) is never stored between sessions.
 
 ## 6. Contact

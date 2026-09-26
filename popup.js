@@ -30,6 +30,10 @@ const ALGORITHM_WISDOM = [
 
 let currentWisdomIndex = Math.floor(Math.random() * ALGORITHM_WISDOM.length);
 
+// One subscription scan at a time. Stacking scans stacked hidden YouTube tabs
+// that never got closed — that's what wedged the browser.
+let subSynthBusy = false;
+
 let data = {
   channels: [],
   keywords: [],
@@ -38,6 +42,7 @@ let data = {
   blockShorts: false,
   shortsSubOnly: false,
   blockCommunity: false,
+  autoDubMode: 'off',
   enableQuickBlock: true,
   triggerServerFeedback: false,
   totalBlocked: 0,
@@ -50,7 +55,9 @@ let data = {
   aiDebaitTitles: false,
   aiDebaitModel: '',
   tldwEnabled: true,
-  huntMode: false
+  huntMode: false,
+  chipRescue: false,
+  newToYouAuto: false
 };
 
 let channelFilter = '';
@@ -66,6 +73,7 @@ function load() {
       'blockShorts',
       'shortsSubOnly',
       'blockCommunity',
+      'autoDubMode',
       'enableQuickBlock',
       'triggerServerFeedback',
       'nyt_totalBlocked',
@@ -78,7 +86,9 @@ function load() {
       'aiDebaitTitles',
       'aiDebaitModel',
       'tldwEnabled',
-      'huntMode'
+      'huntMode',
+      'chipRescue',
+      'newToYouAuto'
     ], (res) => {
       data.channels = Array.isArray(res.channels) ? res.channels : [];
       data.keywords = Array.isArray(res.keywords) ? res.keywords : [];
@@ -87,6 +97,7 @@ function load() {
       data.blockShorts = Boolean(res.blockShorts);
       data.shortsSubOnly = Boolean(res.shortsSubOnly);
       data.blockCommunity = Boolean(res.blockCommunity);
+      data.autoDubMode = ['off', 'smart', 'total'].includes(res.autoDubMode) ? res.autoDubMode : 'off';
       data.enableQuickBlock = res.enableQuickBlock !== false;
       data.triggerServerFeedback = Boolean(res.triggerServerFeedback);
       data.totalBlocked = Number(res.nyt_totalBlocked) || 0;
@@ -100,6 +111,8 @@ function load() {
       data.aiDebaitModel = res.aiDebaitModel || res.aiModel || '';
       data.tldwEnabled = res.tldwEnabled !== false;
       data.huntMode = Boolean(res.huntMode);
+      data.chipRescue = Boolean(res.chipRescue);
+      data.newToYouAuto = Boolean(res.newToYouAuto);
       resolve();
     });
   });
@@ -114,6 +127,7 @@ async function save() {
     blockShorts: data.blockShorts,
     shortsSubOnly: data.shortsSubOnly,
     blockCommunity: data.blockCommunity,
+    autoDubMode: data.autoDubMode,
     enableQuickBlock: data.enableQuickBlock,
     triggerServerFeedback: data.triggerServerFeedback,
     aiAutonomous: data.aiAutonomous,
@@ -125,7 +139,9 @@ async function save() {
     aiDebaitTitles: data.aiDebaitTitles,
     aiDebaitModel: data.aiDebaitModel,
     tldwEnabled: data.tldwEnabled,
-    huntMode: data.huntMode
+    huntMode: data.huntMode,
+    chipRescue: data.chipRescue,
+    newToYouAuto: data.newToYouAuto
   });
 
   // Notify active YouTube tabs to re-apply rules immediately.
@@ -190,8 +206,8 @@ function parseBulkInput(raw) {
     .filter(s => s && s.length > 0);
 }
 
-// Render item row
-function itemRow(text, onRemove) {
+// Render item row with an optional inline-edit (✏️) button next to the remove button.
+function itemRow(text, onRemove, onEdit) {
   const row = document.createElement('div');
   row.className = 'item-row';
 
@@ -199,18 +215,87 @@ function itemRow(text, onRemove) {
   name.className = 'item-name';
   name.textContent = text;
   name.title = text;
+  row.appendChild(name);
+
+  if (onEdit) {
+    const editBtn = document.createElement('button');
+    editBtn.className = 'item-btn item-btn-edit';
+    editBtn.textContent = '✏️';
+    editBtn.title = 'Edit this rule';
+    editBtn.addEventListener('click', () => startInlineEdit(row, text, onEdit));
+    row.appendChild(editBtn);
+  }
 
   const btn = document.createElement('button');
   btn.className = 'item-btn';
   btn.textContent = 'Unblock';
   btn.addEventListener('click', onRemove);
-
-  row.appendChild(name);
   row.appendChild(btn);
   return row;
 }
 
-function renderList(listEl, items, filterText, emptyMsg, onRemove) {
+// Turn a row into an inline editor. onCommit(oldValue, newValue) is the caller's
+// chance to swap the rule in storage; the list re-renders afterwards.
+function startInlineEdit(row, current, onCommit) {
+  row.innerHTML = '';
+  row.className = 'item-row';
+
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'item-edit-input';
+  input.value = current;
+  input.spellcheck = false;
+  row.appendChild(input);
+
+  let done = false;
+  const commit = () => {
+    if (done) return;
+    done = true;
+    const next = input.value.trim();
+    if (next && next !== current) onCommit(current, next);
+    renderAll();
+  };
+
+  const saveBtn = document.createElement('button');
+  saveBtn.className = 'item-btn';
+  saveBtn.textContent = 'Save';
+  saveBtn.addEventListener('click', commit);
+  row.appendChild(saveBtn);
+
+  const cancelBtn = document.createElement('button');
+  cancelBtn.className = 'item-btn';
+  cancelBtn.textContent = '✕';
+  cancelBtn.title = 'Cancel';
+  cancelBtn.addEventListener('click', () => { if (!done) { done = true; renderAll(); } });
+  row.appendChild(cancelBtn);
+
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') commit();
+    else if (e.key === 'Escape') { if (!done) { done = true; renderAll(); } }
+  });
+  input.addEventListener('blur', () => {
+    // The Save / ✕ buttons fire after blur — leave the outcome to them.
+    if (document.activeElement === saveBtn || document.activeElement === cancelBtn) return;
+    commit();
+  });
+
+  input.focus();
+  input.select();
+}
+
+// Swap oldVal for newVal inside arr (dedup-aware); returns 1 if a change happened.
+function replaceRule(arr, oldVal, newVal) {
+  const idx = arr.indexOf(oldVal);
+  if (idx === -1) return 0;
+  if (arr.includes(newVal)) {
+    arr.splice(idx, 1);
+  } else {
+    arr[idx] = newVal;
+  }
+  return 1;
+}
+
+function renderList(listEl, items, filterText, emptyMsg, onRemove, onEdit) {
   listEl.innerHTML = '';
   const filtered = filterText
     ? items.filter(it => it.toLowerCase().includes(filterText.toLowerCase()))
@@ -225,7 +310,7 @@ function renderList(listEl, items, filterText, emptyMsg, onRemove) {
   }
 
   filtered.forEach(it => {
-    listEl.appendChild(itemRow(it, () => onRemove(it)));
+    listEl.appendChild(itemRow(it, () => onRemove(it), onEdit ? (o, n) => onEdit(o, n) : undefined));
   });
 }
 
@@ -238,6 +323,10 @@ function renderAll() {
     (item) => {
       data.channels = data.channels.filter(c => c !== item);
       save(); renderAll(); setStatus('Channel unblocked.');
+    },
+    (oldV, newV) => {
+      replaceRule(data.channels, oldV, newV);
+      save(); renderAll(); setStatus('Channel rule updated.');
     }
   );
 
@@ -249,6 +338,10 @@ function renderAll() {
     (item) => {
       data.keywords = data.keywords.filter(k => k !== item);
       save(); renderAll(); setStatus('Keyword removed.');
+    },
+    (oldV, newV) => {
+      replaceRule(data.keywords, oldV, newV.trim().toLowerCase());
+      save(); renderAll(); setStatus('Keyword rule updated.');
     }
   );
 
@@ -260,6 +353,10 @@ function renderAll() {
     (item) => {
       data.whitelistChannels = data.whitelistChannels.filter(c => c !== item);
       save(); renderAll(); setStatus('Whitelist entry removed.');
+    },
+    (oldV, newV) => {
+      replaceRule(data.whitelistChannels, oldV, newV);
+      save(); renderAll(); setStatus('Whitelist entry updated.');
     }
   );
 
@@ -419,148 +516,20 @@ function wireAdd(inputId, btnId, handler) {
   });
 }
 
-// Export backup
-function exportBackup() {
-  const payload = {
-    snapshotVersion: 1,
-    version: chrome.runtime.getManifest().version,
-    exportedAt: new Date().toISOString(),
-    channels: data.channels,
-    keywords: data.keywords,
-    whitelistChannels: data.whitelistChannels,
-    settings: {
-      blockShorts: data.blockShorts,
-      shortsSubOnly: data.shortsSubOnly,
-      blockCommunity: data.blockCommunity,
-      enableQuickBlock: data.enableQuickBlock,
-      triggerServerFeedback: data.triggerServerFeedback,
-      aiAutonomous: data.aiAutonomous,
-      aiSensitivity: data.aiSensitivity,
-      aiModel: data.aiModel,
-      aiTastePrompt: data.aiTastePrompt,
-      aiDebaitTitles: data.aiDebaitTitles,
-      aiDebaitModel: data.aiDebaitModel,
-      tldwEnabled: data.tldwEnabled,
-      huntMode: data.huntMode
-    }
-  };
-
-  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `youtube_blacklist_backup_${new Date().toISOString().slice(0, 10)}.json`;
-  a.click();
-  URL.revokeObjectURL(url);
-  setStatus('Backup exported.');
+// Export/import moved to the dedicated Backup & Restore page (backup.html).
+// The old popup-scoped export (detached <a download> + immediate
+// URL.revokeObjectURL()) silently produced no file in Firefox/Zen, and a popup-scoped
+// file picker can close the popup before the chosen file is ever read. A real page
+// has no popup lifecycle, so both operations are reliable there.
+function openBackupPage(mode) {
+  try {
+    chrome.tabs.create({ url: chrome.runtime.getURL('backup.html' + (mode === 'import' ? '#import' : '#export')) });
+  } catch (_) {}
 }
 
-// Catastrophic-backtracking signatures: a group containing a nested quantifier OR an
-// alternation, itself quantified from outside — e.g. (a+)+, (a|aa)+$, (ab|a)*. Rejected
-// at import time.
-function isReDoSSuspect(pattern) {
-  return /\([^()]*(?:[*+{]|\|)[^()]*\)\s*[*+{]/.test(pattern);
-}
-
-// Import-time guard for keyword entries.
-// Regex-form keywords keep their case and flags (lowercasing them silently corrupts
-// the pattern source); every keyword is length-capped; slash-form regex rules must
-// actually compile — and must not be ReDoS-suspect — or they're dropped.
-function sanitizeImportedKeyword(raw) {
-  const s = String(raw == null ? '' : raw).trim();
-  if (!s || s.length > 200) return '';
-  if (s.startsWith('/') && s.lastIndexOf('/') > 0) {
-    try {
-      const lastSlash = s.lastIndexOf('/');
-      const pattern = s.slice(1, lastSlash);
-      const flags = s.slice(lastSlash + 1);
-      new RegExp(pattern, flags);
-      if (isReDoSSuspect(pattern)) return '';
-      return s;
-    } catch (_) {
-      return '';
-    }
-  }
-  return s.toLowerCase();
-}
-
-// Import backup
-function importBackup(file, replaceExisting) {
-  if (!file) return;
-  const reader = new FileReader();
-  reader.onload = (e) => {
-    try {
-      const json = JSON.parse(e.target.result);
-      if (!json || typeof json !== 'object') throw new Error('Invalid JSON');
-
-      if (json.snapshotVersion && Number(json.snapshotVersion) > 1) {
-        alert('This backup was created by a newer version of the extension and cannot be imported. Update the extension and try again.');
-        return;
-      }
-
-      if (replaceExisting) {
-        data.channels = [];
-        data.keywords = [];
-        data.whitelistChannels = [];
-      }
-
-      let addedChannels = 0;
-      if (Array.isArray(json.channels)) {
-        json.channels.forEach(c => {
-          const clean = extractEntityFromInput(c);
-          if (clean && !data.channels.includes(clean)) {
-            data.channels.push(clean);
-            addedChannels++;
-          }
-        });
-      }
-
-      let addedKeywords = 0;
-      if (Array.isArray(json.keywords)) {
-        json.keywords.forEach(k => {
-          const clean = sanitizeImportedKeyword(k);
-          if (clean && !data.keywords.includes(clean)) {
-            data.keywords.push(clean);
-            addedKeywords++;
-          }
-        });
-      }
-
-      if (Array.isArray(json.whitelistChannels)) {
-        json.whitelistChannels.forEach(w => {
-          const clean = extractEntityFromInput(w);
-          if (clean && !data.whitelistChannels.includes(clean)) {
-            data.whitelistChannels.push(clean);
-          }
-        });
-      }
-
-      if (json.settings) {
-        if ('blockShorts' in json.settings) data.blockShorts = Boolean(json.settings.blockShorts);
-        if ('shortsSubOnly' in json.settings) data.shortsSubOnly = Boolean(json.settings.shortsSubOnly);
-        if ('blockCommunity' in json.settings) data.blockCommunity = Boolean(json.settings.blockCommunity);
-        if ('enableQuickBlock' in json.settings) data.enableQuickBlock = Boolean(json.settings.enableQuickBlock);
-        if ('triggerServerFeedback' in json.settings) data.triggerServerFeedback = Boolean(json.settings.triggerServerFeedback);
-        if ('aiAutonomous' in json.settings) data.aiAutonomous = Boolean(json.settings.aiAutonomous);
-        if ('aiSensitivity' in json.settings) data.aiSensitivity = String(json.settings.aiSensitivity || 'balanced');
-        if ('aiModel' in json.settings) data.aiModel = String(json.settings.aiModel || '');
-        if ('aiTastePrompt' in json.settings) data.aiTastePrompt = String(json.settings.aiTastePrompt || '');
-        if ('aiDebaitTitles' in json.settings) data.aiDebaitTitles = Boolean(json.settings.aiDebaitTitles);
-        if ('aiDebaitModel' in json.settings) data.aiDebaitModel = String(json.settings.aiDebaitModel || '');
-        if ('tldwEnabled' in json.settings) data.tldwEnabled = Boolean(json.settings.tldwEnabled);
-        if ('huntMode' in json.settings) data.huntMode = Boolean(json.settings.huntMode);
-      }
-
-      save();
-      initToggles();
-      renderAll();
-      setStatus(`Imported ${addedChannels} channels & ${addedKeywords} keywords.`);
-    } catch (err) {
-      alert('Failed to import: Invalid backup file.');
-    }
-  };
-  reader.readAsText(file);
-}
+// The import-time sanitizers (isReDoSSuspect / sanitizeImportedKeyword) and the old
+// popup-scoped importer lived here. They now live in backup.js, where the file picker
+// cannot close the page and "replace" actually runs. The popup buttons open that page.
 
 function initToggles() {
   const qb = document.getElementById('toggleQuickBlock');
@@ -593,6 +562,30 @@ function initToggles() {
     bc.onchange = () => { data.blockCommunity = bc.checked; save(); };
   }
 
+  const ad = document.getElementById('radioAutoDubOff');
+  if (ad) {
+    const setAutoDubMode = (mode) => {
+      data.autoDubMode = mode;
+      const offR = document.getElementById('radioAutoDubOff');
+      const smartR = document.getElementById('radioAutoDubSmart');
+      const totalR = document.getElementById('radioAutoDubTotal');
+      if (offR) offR.checked = mode === 'off';
+      if (smartR) smartR.checked = mode === 'smart';
+      if (totalR) totalR.checked = mode === 'total';
+      save();
+    };
+    const wireRadio = (id, mode) => {
+      const el = document.getElementById(id);
+      if (el) {
+        el.checked = data.autoDubMode === mode;
+        el.onchange = () => { if (el.checked) setAutoDubMode(mode); };
+      }
+    };
+    wireRadio('radioAutoDubOff', 'off');
+    wireRadio('radioAutoDubSmart', 'smart');
+    wireRadio('radioAutoDubTotal', 'total');
+  }
+
   const dbGuard = document.getElementById('toggleAiDebait');
   const dbSettings = document.getElementById('toggleAiDebaitSettings');
   const setAiDebaitTitles = (enabled) => {
@@ -622,6 +615,18 @@ function initToggles() {
   if (huntToggle) {
     huntToggle.checked = Boolean(data.huntMode);
     huntToggle.onchange = () => { data.huntMode = huntToggle.checked; save(); };
+  }
+
+  const chipRescueToggle = document.getElementById('toggleChipRescue');
+  if (chipRescueToggle) {
+    chipRescueToggle.checked = Boolean(data.chipRescue);
+    chipRescueToggle.onchange = () => { data.chipRescue = chipRescueToggle.checked; save(); };
+  }
+
+  const newToYouToggle = document.getElementById('toggleNewToYou');
+  if (newToYouToggle) {
+    newToYouToggle.checked = Boolean(data.newToYouAuto);
+    newToYouToggle.onchange = () => { data.newToYouAuto = newToYouToggle.checked; save(); };
   }
 }
 
@@ -940,6 +945,32 @@ function wireProtectAction(container, channels) {
   });
 }
 
+// Render the EXACT synthesized rules (keywords + regex) as chips inside a scrollable
+// box — the user SEES what the AI created instead of only a count.
+function renderRuleChips(keywords, regex) {
+  const kwChips = (Array.isArray(keywords) ? keywords : [])
+    .filter(Boolean)
+    .map(k => `<span style="display:inline-block;font-size:10px;padding:2px 6px;margin:2px 3px 0 0;background:#1e293b;border:1px solid #334155;color:#e2e8f0;border-radius:10px;">${escapeHtml(String(k))}</span>`)
+    .join('');
+  const rxChips = (Array.isArray(regex) ? regex : [])
+    .filter(Boolean)
+    .map(r => `<span style="display:inline-block;font-size:10px;padding:2px 6px;margin:2px 3px 0 0;background:#2e1065;border:1px solid #6b21a8;color:#d8b4fe;border-radius:10px;">${escapeHtml(String(r))}</span>`)
+    .join('');
+  const body = `${kwChips} ${rxChips}`.trim();
+  if (!body) return '';
+  return `<div style="max-height:120px;overflow-y:auto;margin-top:6px;padding:6px 8px;background:rgba(255,255,255,0.03);border:1px solid rgba(148,163,184,0.18);border-radius:8px;line-height:1.6;">${body}</div>`;
+}
+
+// Jump from a synthesis success box to the Keywords tab, where every keyword rule lives.
+function gotoKeywordsTab() {
+  const btn = document.querySelector('.tab-btn[data-tab="keywordsTab"]');
+  if (btn) btn.click();
+  const search = document.getElementById('keywordSearch');
+  if (search) search.value = '';
+  keywordFilter = '';
+  renderAll();
+}
+
 // ------------------------------------------------------------------
 // FEED DIVERSITY METER
 // ------------------------------------------------------------------
@@ -1021,36 +1052,65 @@ function runSubscriptionSynthesize() {
     btn.innerHTML = '<span>🔭 Scanning your subscriptions...</span>';
   }
   if (card) card.style.display = 'none';
+  if (subSynthBusy) return; // single-scan guard: one scan at a time, no tab stacking
+  subSynthBusy = true;
 
   let createdTabId = null;
+  let prevActiveTabId = null;
 
-  const releaseCreatedTab = () => {
+  const releaseCreatedTab = (keepOpen) => {
     if (createdTabId != null) {
-      try { chrome.tabs.remove(createdTabId); } catch (_) {}
+      if (keepOpen) {
+        // Kept open for the user to act on (sign-in wall): give it focus so they
+        // see it — otherwise they'd stack a fresh tab on top on the next click.
+        try { chrome.tabs.update(createdTabId, { active: true }); } catch (_) {}
+      } else {
+        try { chrome.tabs.remove(createdTabId); } catch (_) {}
+      }
       createdTabId = null;
     }
+    if (!keepOpen && prevActiveTabId != null) {
+      try { chrome.tabs.update(prevActiveTabId, { active: true }); } catch (_) {}
+    }
+    prevActiveTabId = null;
+    subSynthBusy = false;
   };
 
   const handleScrape = (res) => {
     if (!res || !res.ok || !Array.isArray(res.channels) || res.channels.length < 3) {
-      // Deliberately keep the tab open on failure: the user may need to sign in there.
       const signedOut = res && res.ok && res.signedIn === false;
       finishSubSynth(btn, signedOut
         ? 'YouTube is asking you to sign in on that page before it reveals your subscriptions. Confirm you are signed in to YouTube in this browser profile, then press Scan again.'
-        : 'No subscriptions were found on that page. If you just opened it: confirm you are signed in to YouTube on this browser profile, let the page finish loading, then press Scan again.');
+        : 'No subscriptions were found on that page. If you just opened it: confirm you are signed in to YouTube in this browser profile, let the page finish loading, then press Scan again.');
+      // Close the temp tab unless YouTube demands sign-in there (then the user needs to act on it).
+      // This is what previously stacked hidden tabs and wedged the browser.
+      releaseCreatedTab(signedOut);
       return;
     }
     const count = res.channels.length;
 
-    chrome.runtime.sendMessage({
-      type: 'AI_SYNTHESIZE_SUBSCRIPTION_RULES',
-      channels: res.channels,
-      modelChoice: data.aiModel
-    }, (aiRes) => {
-      if (!aiRes || !aiRes.ok || !Array.isArray(aiRes.keywords)) {
-        finishSubSynth(btn, 'Could not synthesize rules. Your local AI may be busy — wait a second and try again.');
-        return;
-      }
+let synthAttempts = 0;
+    const requestSynthesis = () => {
+      synthAttempts++;
+      chrome.runtime.sendMessage({
+        type: 'AI_SYNTHESIZE_SUBSCRIPTION_RULES',
+        channels: res.channels,
+        modelChoice: data.aiModel
+      }, (aiRes) => {
+        if (!aiRes || !aiRes.ok || !Array.isArray(aiRes.keywords)) {
+          // MV3 service-worker message channels can drop a response once —
+          // that delivers `undefined`, which used to print a fake "AI is busy".
+          if (aiRes === undefined && synthAttempts < 2) {
+            setTimeout(requestSynthesis, 800);
+            return;
+          }
+          const detail = (aiRes && (aiRes.error || aiRes.reason))
+            ? ` (${aiRes.error || aiRes.reason})`
+            : ' — wait a second and try again. If you picked an AI model, make sure your local server allows this browser; or pick "Built-in Heuristic".';
+          finishSubSynth(btn, 'Could not synthesize rules. ' + detail);
+          releaseCreatedTab(false);
+          return;
+        }
 
       const added = injectRulesIntoBlacklist({ keywords: aiRes.keywords, regex: aiRes.regex });
       // Seed the Autonomous Guardian's persona with the inferred taste profile.
@@ -1068,20 +1128,26 @@ function runSubscriptionSynthesize() {
         out.innerHTML =
           `<div style="font-size:12px;font-weight:700;color:#4db6ff;margin-bottom:4px;">🔭 Taste Profile: ${escapeHtml(aiRes.profile || 'Subscription Insights')} — ${count} subscriptions analyzed</div>` +
           `<div style="font-size:11.5px;color:#e5e7eb;line-height:1.45;">${escapeHtml(aiRes.rationale || '')}</div>` +
-          `<div style="font-size:11.5px;color:#4ade80;margin-top:6px;">${aiRes.isFallback ? '⚡ Heuristic' : '🧠 AI'} synthesis — ${added} new precision rules injected!</div>` +
+          `<div style="font-size:11.5px;color:#4ade80;margin-top:6px;">${aiRes.isFallback ? '⚡ Heuristic' : '🧠 AI'} synthesis — ${added} new precision rules injected:</div>` +
+          renderRuleChips(aiRes.keywords, aiRes.regex) +
+          `<div style="margin-top:8px;"><button class="ai-action-btn" id="gotoKeywordsBtn" style="font-size:11px;padding:5px 10px;">📋 Show rules in Keywords tab</button></div>` +
           renderConflictRows(aiRes.conflicts) +
           renderProtectAction(res.channels);
         wireConflictRows(out, aiRes.conflicts);
         wireProtectAction(out, res.channels);
+        const gkBtn = out.querySelector('#gotoKeywordsBtn');
+        if (gkBtn) gkBtn.addEventListener('click', gotoKeywordsTab);
       }
       setStatus(`Synthesized ${added} rules from ${count} subscriptions!`);
 
       // Only close a tab we spawned ourselves; never touch the user's own tab.
-      if (createdTabId != null) releaseCreatedTab();
+      releaseCreatedTab(false);
 
       // Give the RULES_UPDATED broadcast time to land, then auto-measure feed diversity.
       setTimeout(() => { measureFeedDiversity(); }, 600);
-    });
+      });
+    };
+    requestSynthesis();
   };
 
   const tryScrape = (tabId, attemptsLeft, onFailure) => {
@@ -1095,6 +1161,12 @@ function runSubscriptionSynthesize() {
           }
           return;
         }
+        // A response with <3 channels usually means the SPA is still hydrating —
+        // retry a couple of times before declaring the page empty.
+        if (Array.isArray(res.channels) && res.channels.length < 3 && attemptsLeft > 0) {
+          setTimeout(() => tryScrape(tabId, attemptsLeft - 1, onFailure), 800);
+          return;
+        }
         handleScrape(res);
       });
     } catch (_) {
@@ -1106,28 +1178,65 @@ function runSubscriptionSynthesize() {
     }
   };
 
-  const createSubscriptionsTab = () => {
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  const waitForTabLoad = (tabId, timeoutMs) => new Promise((resolve) => {
+    const started = Date.now();
+    const tick = () => {
+      try {
+        chrome.tabs.get(tabId, (tab) => {
+          if (chrome.runtime?.lastError || !tab) return resolve(false);
+          if (tab && tab.status === 'complete') return resolve(true);
+          if (Date.now() - started > timeoutMs) return resolve(false);
+          setTimeout(tick, 400);
+        });
+      } catch (_) { resolve(false); }
+    };
+    tick();
+  });
+
+  const createSubscriptionsTab = async () => {
     try {
-      chrome.tabs.create({ url: SUBSCRIPTIONS_URL, active: false }, (tab) => {
+      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        if (tabs && tabs[0] && tabs[0].id != null) prevActiveTabId = tabs[0].id;
+      });
+    } catch (_) {}
+    try {
+      chrome.tabs.create({ url: SUBSCRIPTIONS_URL, active: true }, async (tab) => {
         if (chrome.runtime?.lastError || !tab || tab.id == null) {
           finishSubSynth(btn, 'Could not open a YouTube tab. Check your browser permissions and try again.');
+          releaseCreatedTab(false);
           return;
         }
         createdTabId = tab.id;
-        tryScrape(createdTabId, 10, () => {
-          finishSubSynth(btn, 'The subscriptions page is still loading. Give it a moment, then press Scan again — the tab stays open for you.');
+        const loaded = await waitForTabLoad(createdTabId, 25000);
+        if (!loaded) {
+          finishSubSynth(btn, 'The subscriptions page took too long to load. Close the extra tab and press Scan again.');
+          releaseCreatedTab(false);
+          return;
+        }
+        // Let the SPA hydrate its channel grid before scraping. Background tabs
+        // get throttled and never build the grid — that's why the scan used to
+        // report "no subscriptions" even while signed in.
+        await sleep(1500);
+        tryScrape(createdTabId, 8, () => {
+          finishSubSynth(btn, 'Could not read the subscriptions list after the page loaded. Close the extra tab and press Scan again.');
+          releaseCreatedTab(false);
         });
       });
     } catch (_) {
       finishSubSynth(btn, 'Could not open a YouTube tab. Try again in a moment.');
+      releaseCreatedTab(false);
     }
   };
 
   getActiveYoutubeTab().then((tab) => {
     if (tab && isSubscriptionsUrl(tab.url)) {
       // Already viewing the subscriptions page — scrape in place, never navigate their tab.
-      tryScrape(tab.id, 3, () => {
+      prevActiveTabId = tab.id;
+      tryScrape(tab.id, 5, () => {
         finishSubSynth(btn, 'Could not reach the YouTube page. Reload the subscriptions tab and press Scan again.');
+        releaseCreatedTab(false); // no temp tab to close — just clears the single-scan guard
       });
     } else {
       createSubscriptionsTab();
@@ -1188,21 +1297,12 @@ async function init() {
     });
   });
 
-  // Export / Import
+  // Export / Import — open the dedicated Backup & Restore page (backup.html).
   const exportBtn = document.getElementById('exportBtn');
-  if (exportBtn) exportBtn.addEventListener('click', exportBackup);
+  if (exportBtn) exportBtn.addEventListener('click', () => openBackupPage('export'));
 
   const importBtn = document.getElementById('importBtn');
-  const fileInput = document.getElementById('importFileInput');
-  if (importBtn && fileInput) {
-    importBtn.addEventListener('click', () => fileInput.click());
-    fileInput.addEventListener('change', () => {
-      if (fileInput.files && fileInput.files[0]) {
-        importBackup(fileInput.files[0]);
-        fileInput.value = '';
-      }
-    });
-  }
+  if (importBtn) importBtn.addEventListener('click', () => openBackupPage('import'));
 
   // Open YouTube link
   const openYt = document.getElementById('openYoutube');
@@ -1299,6 +1399,7 @@ const PERSONA_PRESETS = {
 function initAiGuardian() {
   const statusPill = document.getElementById('aiStatusPill');
   const modelSelect = document.getElementById('aiModelSelect');
+  const detailEl = document.getElementById('aiStatusDetail');
   const tasteInput = document.getElementById('aiTastePrompt');
   const synthBtn = document.getElementById('aiSynthesizeBtn');
   const resultBox = document.getElementById('aiResultBox');
@@ -1357,6 +1458,7 @@ function initAiGuardian() {
         cmdEl.textContent = [setup.installCommand, setup.downloadCommand].filter(Boolean).join('  ⏎  ') || 'pip install onnxruntime-genai huggingface-hub';
       }
       if (offeringBox) offeringBox.style.display = 'block';
+      if (detailEl) detailEl.textContent = 'Local Phi (ONNX) engine detected but not ready to serve — install the runtime to enable this fully offline engine.';
       return;
     }
 
@@ -1364,6 +1466,10 @@ function initAiGuardian() {
       if (statusPill) {
         statusPill.className = 'ai-status-pill';
         statusPill.textContent = `🟢 ${providerName} Online`;
+      }
+      if (detailEl) {
+        const active = (data.aiModel || '').trim();
+        detailEl.textContent = `${providerName} connected — ${res.models.length} model${res.models.length === 1 ? '' : 's'} ready${active ? ` · active: ${active}` : ''}. 100% offline, zero telemetry.`;
       }
       if (offeringBox) offeringBox.style.display = 'none';
       if (modelSelect) {
@@ -1394,13 +1500,17 @@ function initAiGuardian() {
         statusPill.textContent = '🟡 Offline Heuristic Mode';
         statusPill.title = 'Local LLM not detected. Running built-in heuristic neural fallback.';
       }
+      if (detailEl) detailEl.textContent = 'No local LLM detected — running the built-in heuristic engine. Fully offline, nothing leaves this machine.';
       if (offeringBox) offeringBox.style.display = 'none';
       if (modelSelect) {
         modelSelect.innerHTML = '<option value="heuristic">Built-in Heuristic</option>';
       }
     }
   })
-    .catch(() => {});
+    .catch(() => {
+      if (statusPill) { statusPill.className = 'ai-status-pill offline'; statusPill.textContent = '⚠️ AI engine unreachable'; }
+      if (detailEl) detailEl.textContent = 'Could not reach the background worker. Click the icon again to retry — if it persists, reload the extension.';
+    });
 
   // Preset chips
   document.querySelectorAll('.ai-chip').forEach(chip => {
@@ -1458,14 +1568,15 @@ function initAiGuardian() {
 
           if (resultBox) {
             resultBox.style.display = 'block';
-            const sampleKws = (res.keywords || []).slice(0, 10).map(k => `<span class="ai-chip" style="font-size:10px;padding:2px 6px;margin:2px 3px 2px 0;display:inline-block;background:#1e293b;border:1px solid #334155;color:#e2e8f0;">${escapeHtml(k)}</span>`).join('');
-            const sampleRegex = (res.regex || []).map(r => `<span class="ai-chip" style="font-size:10px;padding:2px 6px;margin:2px 3px 2px 0;display:inline-block;background:#2e1065;border:1px solid #6b21a8;color:#d8b4fe;">${escapeHtml(r)}</span>`).join('');
             const modelLabel = res.isFallback ? '⚡ Heuristic' : `🧠 AI (${escapeHtml(res.modelUsed || chosenModel)})`;
             resultBox.innerHTML =
               `<div style="font-size:12px;font-weight:700;color:#c084fc;margin-bottom:4px;">${modelLabel} Rationale:</div>` +
               `<div style="font-size:11.5px;color:#e2e8f0;line-height:1.45;margin-bottom:6px;">${escapeHtml(res.rationale || '')}</div>` +
               `<div style="font-size:11.5px;color:#4ade80;font-weight:600;margin-bottom:4px;">✅ Synthesized & injected ${added} new precision rules:</div>` +
-              `<div style="margin-top:4px;line-height:1.5;">${sampleKws} ${sampleRegex}</div>`;
+              renderRuleChips(res.keywords, res.regex) +
+              `<div style="margin-top:8px;"><button class="ai-action-btn" id="gotoKeywordsBtn" style="font-size:11px;padding:5px 10px;">📋 Show rules in Keywords tab</button></div>`;
+            const gkBtn = resultBox.querySelector('#gotoKeywordsBtn');
+            if (gkBtn) gkBtn.addEventListener('click', gotoKeywordsTab);
           }
           setStatus(`Injected ${added} rules from AI!`);
         } else {

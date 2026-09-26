@@ -101,6 +101,7 @@ let settings = {
   shortsSubOnly: false,
   subsSnapshot: [],
   blockCommunity: false,
+  autoDubMode: 'off',
   enableQuickBlock: true,
   triggerServerFeedback: false,
   aiAutonomous: false,
@@ -111,7 +112,9 @@ let settings = {
   aiDebaitTitles: false,
   aiDebaitModel: '',
   tldwEnabled: true,
-  huntMode: false
+  huntMode: false,
+  chipRescue: false,
+  newToYouAuto: false
 };
 
 let activeMenuVideoCard = null;
@@ -132,6 +135,7 @@ function loadSettings() {
         'shortsSubOnly',
         'subsSnapshot',
         'blockCommunity',
+        'autoDubMode',
         'enableQuickBlock',
         'triggerServerFeedback',
         'aiAutonomous',
@@ -142,7 +146,9 @@ function loadSettings() {
         'aiDebaitTitles',
         'aiDebaitModel',
         'tldwEnabled',
-        'huntMode'
+        'huntMode',
+        'chipRescue',
+        'newToYouAuto'
       ], (res) => {
         if (chrome.runtime?.lastError) { resolve(); return; }
         settings.channels = (Array.isArray(res.channels) ? res.channels : settings.channels)
@@ -170,6 +176,7 @@ function loadSettings() {
         settings.shortsSubOnly = Boolean(res.shortsSubOnly);
         settings.subsSnapshot = Array.isArray(res.subsSnapshot) ? res.subsSnapshot : settings.subsSnapshot;
         settings.blockCommunity = Boolean(res.blockCommunity);
+        settings.autoDubMode = ['off', 'smart', 'total'].includes(res.autoDubMode) ? res.autoDubMode : 'off';
         settings.enableQuickBlock = res.enableQuickBlock !== false;
         settings.triggerServerFeedback = Boolean(res.triggerServerFeedback);
         settings.aiAutonomous = Boolean(res.aiAutonomous);
@@ -181,6 +188,8 @@ function loadSettings() {
         settings.aiDebaitModel = res.aiDebaitModel || settings.aiModel || '';
         settings.tldwEnabled = res.tldwEnabled !== false;
         settings.huntMode = Boolean(res.huntMode);
+        settings.chipRescue = Boolean(res.chipRescue);
+        settings.newToYouAuto = Boolean(res.newToYouAuto);
 
         injectBlacklistStyles();
         refreshSubscriptionKeySet();
@@ -202,6 +211,9 @@ function saveSettings() {
       whitelistChannels: settings.whitelistChannels,
       blockShorts: settings.blockShorts,
       blockCommunity: settings.blockCommunity,
+      autoDubMode: settings.autoDubMode,
+      chipRescue: settings.chipRescue,
+      newToYouAuto: settings.newToYouAuto,
       enableQuickBlock: settings.enableQuickBlock,
       triggerServerFeedback: settings.triggerServerFeedback
     });
@@ -249,6 +261,24 @@ function injectBlacklistStyles() {
         }
       `;
     }
+
+    extraRules += `
+      #nyt-chip-rescue {
+        position: fixed;
+        right: 16px;
+        bottom: 16px;
+        z-index: 2147483647;
+        border: none;
+        border-radius: 18px;
+        padding: 10px 16px;
+        background: var(--yt-spec-call-to-action, #065fd4);
+        color: #fff;
+        font: 500 13px/1 Roboto, Arial, sans-serif;
+        cursor: pointer;
+        box-shadow: 0 2px 8px rgba(0,0,0,.35);
+      }
+      #nyt-chip-rescue:hover { filter: brightness(1.1); }
+    `;
 
     style.textContent = `
       [data-hidden-by-local-blacklist="true"],
@@ -1049,6 +1079,85 @@ function unhideCardElement(card) {
   }
 }
 
+// ------------------------------------------------------------------
+// AUTO-DUBBED DETECTION
+// ------------------------------------------------------------------
+// "Auto-dubbed" is a BADGE, not part of the title. It can render on the
+// thumbnail overlay, under the title (metadata row), and on sidebar cards —
+// so detection must scan the whole card for badge-shaped elements and
+// aria-labels instead of relying on keyword scans of title text.
+const AUTO_DUB_BADGE_TEXT_RE = /dub(?:bed?)?\b/i; // "Auto-dubbed", "Dubbed", "Auto-dub", "Dub"
+
+function isAutoDubBadgeText(text) {
+  return AUTO_DUB_BADGE_TEXT_RE.test(String(text || '').trim());
+}
+
+const AUTO_DUB_BADGE_SELECTORS = [
+  'ytd-thumbnail-overlay-badge-view-model',
+  'ytd-badge-supported-renderer',
+  'yt-badge',
+  'badge-shape',
+  '.yt-badge-shape__text',
+  '.badge-shape-wiz__text',
+  '.ytBadgeShapeText',
+  '.yt-content-metadata-view-model__badge'
+];
+
+// Returns any auto-dub badge text found on the card ('' if none).
+function cardAutoDubBadgeText(card) {
+  if (!card) return '';
+  const found = [];
+  try {
+    // 1) aria-label carriers (badges expose their text via aria-label too)
+    card.querySelectorAll('[aria-label]').forEach((el) => {
+      const label = (el.getAttribute('aria-label') || '').trim();
+      if (label && isAutoDubBadgeText(label)) found.push(label);
+    });
+    // 2) badge-shaped elements (thumbnail overlay, metadata-row badges, sidebar)
+    card.querySelectorAll(AUTO_DUB_BADGE_SELECTORS.join(','))
+      .forEach((el) => {
+        const t = (el.textContent || '').trim();
+        if (t && isAutoDubBadgeText(t) && !found.includes(t)) found.push(t);
+      });
+  } catch (_) {}
+  return found.join(' \u23e9 ');
+}
+
+// Pure, testable. autoDubMode:
+//   'off'   - no auto-dub filtering (keyword/regex rules still match badges)
+//   'smart' - hide auto-dubbed recommendations, KEEP videos from channels the
+//             user is subscribed to (their own content)
+//   'total' - hide auto-dubbed everywhere — EVEN from channels the user has
+//             watched or subscribed to. Only the whitelist overrides (caller
+//             checks whitelist before this). This is the "not even from
+//             watched channels" posture.
+function autoDubHideDecision(mode, subscribed, badgeText) {
+  if (!mode || mode === 'off') return { hidden: false, reason: null };
+  if (!badgeText) return { hidden: false, reason: null };
+  if (mode === 'total' || (mode === 'smart' && !subscribed)) {
+    return { hidden: true, reason: `auto-dubbed:${badgeText}` };
+  }
+  return { hidden: false, reason: null };
+}
+
+// Pure, testable: should KEYWORD rules hide a card? Subscribed or whitelisted
+// channels are exempt — the user chose those channels and subscribed feeds are
+// exactly where breaking out of the algorithm's echo chamber lives. Explicit
+// channel/video blacklists are handled separately by the caller.
+// `extraText` carries badge text (e.g. "Auto-dubbed") so plain keyword/regex
+// rules like `/auto.?dubbed/i` match the badge the same way they match titles.
+function keywordRulesHidden({ title, channel, keywords, subscribed, whitelisted, extraText }) {
+  if (subscribed || whitelisted) return { hidden: false, reason: null };
+  const kw = Array.isArray(keywords) ? keywords : [];
+  const haystacks = [title, extraText, channel].filter(v => typeof v === 'string' && v);
+  for (let i = 0; i < haystacks.length; i++) {
+    if (kw.some(k => hasWordBoundaryKeyword(haystacks[i], k))) {
+      return { hidden: true, reason: `keyword in ${haystacks[i]}` };
+    }
+  }
+  return { hidden: false, reason: null };
+}
+
 function evaluateCard(card) {
   const title = getVideoTitle(card);
   const cardKeys = getCardChannelKeys(card);
@@ -1088,10 +1197,32 @@ function evaluateCard(card) {
     return { hidden: true, reason: `video:${vid}`, resolved: true };
   }
 
-  // Word-boundary title keywords or regex
-  if (title && settings.keywords.some(kw => hasWordBoundaryKeyword(title, kw))) {
-    if (window.__blkDebug) console.log('[blkDebug] KEYWORD HIT in:', title);
-    return { hidden: true, reason: `keyword in ${title}`, resolved: true };
+  // Auto-dubbed videos: the badge is the signal (title keyword rules can't see it).
+  // Mode decides: 'total' hides even subscribed/watched channels ("not even from
+  // channels I've watched"); 'smart' keeps subscribed channels; whitelist always
+  // won earlier, so it overrides both.
+  const subscribedForAutoDub = cardIsSubscribed(card);
+  const badgeText = cardAutoDubBadgeText(card);
+  const autoDubCall = autoDubHideDecision(settings.autoDubMode, subscribedForAutoDub, badgeText);
+  if (autoDubCall.hidden) {
+    if (window.__blkDebug) console.log('[blkDebug] AUTO-DUBBED HIT:', autoDubCall.reason);
+    return { hidden: true, reason: autoDubCall.reason, resolved: true };
+  }
+
+  // Word-boundary title keywords or regex (channel-name rules included below).
+  // Subscribed channels are never keyword-censored on any feed. Badge text is
+  // included so keyword rules like /auto.?dubbed/i match the badge too.
+  const kwDecision = keywordRulesHidden({
+    title,
+    channel,
+    keywords: settings.keywords,
+    extraText: badgeText,
+    subscribed: subscribedForAutoDub,
+    whitelisted: false // whitelist already returned above
+  });
+  if (kwDecision.hidden) {
+    if (window.__blkDebug) console.log('[blkDebug] KEYWORD HIT:', kwDecision.reason);
+    return { hidden: true, reason: kwDecision.reason, resolved: true };
   }
 
   if (window.__blkDebug) console.log('[blkDebug] NO MATCH:', title);
@@ -1130,6 +1261,48 @@ if (typeof window !== 'undefined') {
 // ------------------------------------------------------------------
 // WATCH PAGE INTEGRITY GUARD
 // ------------------------------------------------------------------
+
+// Pure decision logic for the watch page guard — no DOM, node-testable.
+//
+// User-visible invariant: opening a watch page is a DELIBERATE act.
+// Keyword/regex rules are FEED-filtering tools; they must never navigate
+// a user away from a page they opened. Only explicit blacklists (a blocked
+// video ID or a blocked channel) may interrupt playback. Whitelisted or
+// genuinely subscribed (subsSnapshot) channels are NEVER interrupted —
+// subscriptions are the user's own content. A subscribed channel that also
+// sits in the blacklist still gets hidden from feeds (see evaluateCard),
+// but the watch page is not kidnapped.
+function watchPageBlockDecision({ vid, channel, title, channels, whitelistChannels, keywords, subscribed }) {
+  const wl = Array.isArray(whitelistChannels) ? whitelistChannels : [];
+  const ch = Array.isArray(channels) ? channels : [];
+  const kw = Array.isArray(keywords) ? keywords : [];
+  const subs = subscribed instanceof Set ? subscribed : new Set();
+
+  // Whitelist always wins.
+  if (channel && wl.some(w => normalizeChannel(w) === channel)) {
+    return { block: false, reason: 'whitelisted' };
+  }
+
+  // Genuinely subscribed channels are the user's own content — never interrupt,
+  // even if the channel also appears explicitly in the blacklist.
+  if (channel && subs.has(channel)) {
+    return { block: false, reason: 'subscribed' };
+  }
+
+  if (vid && ch.some(c => extractEntityKey(c) === vid)) {
+    return { block: true, reason: 'video-id' };
+  }
+
+  if (channel && ch.some(c => normalizeChannel(c) === channel || extractEntityKey(c) === channel)) {
+    return { block: true, reason: 'channel' };
+  }
+
+  // Keywords (title or channel-name) NEVER hard-block the watch page.
+  // They remain active as feed hiders (see keywordRulesHidden), where hiding
+  // is cheap, reversible, and does not hijack navigation.
+  return { block: false, reason: null };
+}
+
 function checkCurrentWatchPageVideo() {
   if (!window.location.pathname.startsWith('/watch')) return;
 
@@ -1148,15 +1321,19 @@ function checkCurrentWatchPageVideo() {
     const channel = channelEl ? cleanChannelText(channelEl.textContent) : '';
     const normChannel = normalizeChannel(channel);
 
-    // Whitelist check
-    if (settings.whitelistChannels.some(w => normalizeChannel(w) === normChannel)) {
-      return;
-    }
+    // Pure, testable decision: explicit blacklists may interrupt; keywords,
+    // whitelisted channels and subscribed channels may not.
+    const decision = watchPageBlockDecision({
+      vid: vidLower,
+      channel: normChannel,
+      title,
+      channels: settings.channels,
+      whitelistChannels: settings.whitelistChannels,
+      keywords: settings.keywords,
+      subscribed: getSubscriptionKeySet()
+    });
 
-    const isChannelBlacklisted = normChannel && settings.channels.some(c => normalizeChannel(c) === normChannel || extractEntityKey(c) === normChannel);
-    const isKeywordMatched = title && settings.keywords.some(kw => hasWordBoundaryKeyword(title, kw));
-
-    if (isVidBlacklisted || isChannelBlacklisted || isKeywordMatched) {
+    if (decision.block) {
       try {
         const video = document.querySelector('video');
         if (video) video.pause();
@@ -1178,6 +1355,8 @@ function checkCurrentWatchPageVideo() {
 // FEED PROCESSING ENGINE
 // ------------------------------------------------------------------
 function processFeed(force = false) {
+  // Hidden tabs (incl. leftovers from the old scan bug) cost ~nothing now.
+  if (document.visibilityState === 'hidden') return 0;
   const cards = document.querySelectorAll(VIDEO_CARD_SELECTORS);
   let hiddenCount = 0;
 
@@ -1751,6 +1930,7 @@ function startMenuObserver() {
   if (menuObserver) return;
   const popupContainer = document.querySelector('ytd-popup-container') || document.body;
   menuObserver = new MutationObserver(() => {
+    if (document.visibilityState === 'hidden') return;
     injectCustomMenuItem();
   });
   menuObserver.observe(popupContainer, { childList: true, subtree: true });
@@ -2501,42 +2681,49 @@ document.addEventListener('click', (e) => {
 function start() {
   loadSettings().then(() => {
     injectBlacklistStyles();
+    initChipRescue();
+    initNewToYouAuto();
 
     setTimeout(() => {
       processFeed(true);
     }, 400);
 
-    // Filtered MutationObserver: ignores our own UI mutations to prevent loops
+    // Filtered MutationObserver: ignores our own UI mutations to prevent loops.
+    // Only actual video-card DOM is worth a re-scan — a live-chat message or a
+    // page-chrome widget must NOT trigger a full feed evaluation (that's what
+    // made the whole browser grind on watch pages).
     const observer = new MutationObserver((mutations) => {
+      if (document.visibilityState === 'hidden') return;
       let shouldProcess = false;
-      for (let i = 0; i < mutations.length; i++) {
-        const m = mutations[i];
-        if (m.addedNodes && m.addedNodes.length > 0) {
-          for (let j = 0; j < m.addedNodes.length; j++) {
-            const node = m.addedNodes[j];
-            if (node.nodeType === 1) {
-              if (node.id === 'nyt-ext-toast' || node.id === 'nyt-tldw-host' || (node.classList?.contains && (
-                node.classList.contains('custom-blacklist-option') ||
-                node.classList.contains('nyt-quick-block-btn') ||
-                node.classList.contains('nyt-debait-badge') ||
-                node.classList.contains('nyt-tldw-btn') ||
-                node.classList.contains('nyt-tldw-overlay') ||
-                node.classList.contains('nyt-tldw-modal') ||
-                node.classList.contains('nyt-hunt-prey') ||
-                node.classList.contains('nyt-hunt-hud') ||
-                node.classList.contains('nyt-hunt-ring')
-              ))) {
-                continue;
-              }
-              shouldProcess = true;
-              break;
-            }
+      for (let i = 0; i < mutations.length && !shouldProcess; i++) {
+        const added = mutations[i].addedNodes;
+        if (!added || added.length === 0) continue;
+        for (let j = 0; j < added.length; j++) {
+          const node = added[j];
+          if (node.nodeType !== 1) continue;
+          if (node.id === 'nyt-ext-toast' || node.id === 'nyt-tldw-host' || (node.classList?.contains && (
+            node.classList.contains('custom-blacklist-option') ||
+            node.classList.contains('nyt-quick-block-btn') ||
+            node.classList.contains('nyt-debait-badge') ||
+            node.classList.contains('nyt-tldw-btn') ||
+            node.classList.contains('nyt-tldw-overlay') ||
+            node.classList.contains('nyt-tldw-modal') ||
+            node.classList.contains('nyt-hunt-prey') ||
+            node.classList.contains('nyt-hunt-hud') ||
+            node.classList.contains('nyt-hunt-ring')
+          ))) {
+            continue;
+          }
+          if (node.matches?.(VIDEO_CARD_SELECTORS) ||
+              node.closest?.(VIDEO_CARD_SELECTORS) ||
+              node.querySelector?.(VIDEO_CARD_SELECTORS)) {
+            shouldProcess = true;
+            break;
           }
         }
-        if (shouldProcess) break;
       }
       if (shouldProcess) {
-        scheduleFeedProcessing(100);
+        scheduleFeedProcessing(180);
       }
     });
 
@@ -2839,11 +3026,18 @@ function syncHuntMode() {
   } catch (_) {}
 }
 
+// These are the only storage keys that change WHICH videos get hidden. Counter /
+// log / UI writes (nyt_totalBlocked bumps on every block, hunt score, aiLog, ...)
+// must NOT force a full feed re-evaluation on every open YouTube tab.
+const RULE_KEYS = ['channels', 'keywords', 'whitelistChannels', 'subsSnapshot', 'blockShorts', 'shortsSubOnly', 'blockCommunity', 'autoDubMode', 'chipRescue', 'newToYouAuto'];
+
 // Storage sync across tabs & popup
 if (isExtensionValid() && chrome?.storage?.onChanged) {
   try {
     chrome.storage.onChanged.addListener((changes, areaName) => {
       if (areaName !== 'local') return;
+      if (!Object.keys(changes).some((k) => RULE_KEYS.includes(k))) return;
+      if (document.visibilityState === 'hidden') return;
       loadSettings().then(() => {
         document.querySelectorAll(VIDEO_CARD_SELECTORS).forEach(card => {
           delete card.dataset.lastSignature;
@@ -2861,6 +3055,10 @@ if (isExtensionValid() && chrome?.runtime?.onMessage) {
     chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       if (!sender || sender.id !== EXT_ID) return;
       if (msg && typeof msg === 'object' && msg.type === 'RULES_UPDATED') {
+        if (document.visibilityState === 'hidden') {
+          try { sendResponse({ ok: true }); } catch (_) {}
+          return;
+        }
         loadSettings().then(() => {
           document.querySelectorAll(VIDEO_CARD_SELECTORS).forEach(card => {
             delete card.dataset.lastSignature;
@@ -2900,6 +3098,153 @@ if (isExtensionValid() && chrome?.runtime?.onMessage) {
   } catch (_) {}
 }
 
+// ------------------------------------------------------------------
+// CHIP RESCUE — YouTube's home topic chips (Comedy, Tourism, Gaming, …)
+// live in ytd-feed-filter-chip-bar-renderer / #chips-wrapper. Vanishing
+// chips are a known YouTube server-side/A-B bug (not ours — this extension
+// never touches the chip bar). Opt-in via Settings > Chip Rescue. NEVER
+// auto-reloads: present-but-hidden chips are just shown again (cheap),
+// and a completely-missing bar gets a small floating "Restore chips"
+// button the user can click — the page reload is the verified fix.
+// ------------------------------------------------------------------
+let chipRescueTimer = null;
+let chipRescueButton = null;
+
+// Pure, testable triage of the chip bar state.
+function chipRescueState(hasChips, visible) {
+  if (!hasChips) return { action: 'missing' };
+  return visible ? { action: 'none' } : { action: 'unhide' };
+}
+
+function removeChipRescueButton() {
+  if (chipRescueButton && chipRescueButton.parentNode) {
+    chipRescueButton.parentNode.removeChild(chipRescueButton);
+  }
+  chipRescueButton = null;
+}
+
+function initChipRescue() {
+  removeChipRescueButton();
+  if (chipRescueTimer) { clearTimeout(chipRescueTimer); chipRescueTimer = null; }
+  if (!settings.chipRescue || !isHomePath()) return;
+
+  const check = () => {
+    if (!settings.chipRescue || !isHomePath()) return;
+    // Only judge once the home feed rendered — YouTube can attach chips a beat late.
+    const feedCards = document.querySelectorAll(VIDEO_CARD_SELECTORS).length;
+    if (!feedCards) {
+      chipRescueTimer = setTimeout(check, 4000);
+      return;
+    }
+
+    const chipsBar = document.querySelector('ytd-feed-filter-chip-bar-renderer, #chips-wrapper');
+    const hasChips = !!chipsBar;
+    let visible = false;
+    if (hasChips) {
+      try {
+        visible = chipsBar.offsetParent !== null &&
+          chipsBar.getAttribute('hidden') === null &&
+          getComputedStyle(chipsBar).display !== 'none' &&
+          getComputedStyle(chipsBar).visibility !== 'hidden';
+      } catch (_) { visible = true; }
+    }
+
+    const state = chipRescueState(hasChips, visible);
+
+    if (state.action === 'none') {
+      removeChipRescueButton();
+      return;
+    }
+
+    if (state.action === 'unhide') {
+      try {
+        chipsBar.removeAttribute('hidden');
+        chipsBar.style.setProperty('display', 'flex', 'important');
+        chipsBar.style.setProperty('visibility', 'visible', 'important');
+        showToast('YouTube hid the topic chips — restored.');
+      } catch (_) {}
+      return;
+    }
+
+    // action === 'missing': offer the verified fix (page reload), never auto-reload.
+    if (!chipRescueButton) {
+      const btn = document.createElement('button');
+      btn.textContent = '↻ Restore chips';
+      btn.id = 'nyt-chip-rescue';
+      btn.title = 'YouTube failed to render the topic chips (known bug). Click to reload the page — the verified fix.';
+      btn.onclick = () => {
+        showToast('Restoring topic chips …');
+        try { window.location.reload(); } catch (_) {}
+      };
+      document.body.appendChild(btn);
+      chipRescueButton = btn;
+      showToast('YouTube didn\'t render the topic chips — use the Restore chips button.');
+    }
+  };
+
+  chipRescueTimer = setTimeout(check, 6000);
+}
+
+// ------------------------------------------------------------------
+// NEW TO YOU — auto-start Home in YouTube's own discovery feed.
+// "New to you" is the only surface YouTube built to show channels you
+// have NOT encountered before ("beyond the recommended videos you
+// usually see"). Opt-in toggle `newToYouAuto` (default off): once the
+// Home chip bar renders, the extension clicks that chip — no reloads,
+// no repeat clicks. When the chip is absent for the account (YouTube
+// makes it personalized/unavailable), the feature is a silent no-op.
+// Clicking a chip only swaps the Home grid (SPA); the active-chip
+// check makes each subsequent navigation self-terminate.
+// ------------------------------------------------------------------
+let newToYouTimer = null;
+
+// Pure, testable decision: should we click the "New to you" chip?
+function shouldAutoEnterNewToYou(chipTexts, activeChipText, alreadyClicked) {
+  if (alreadyClicked) return false;
+  const hasChip = Array.isArray(chipTexts) &&
+    chipTexts.some((t) => /new to you/i.test(String(t || '').trim()));
+  if (!hasChip) return false;
+  if (activeChipText && /new to you/i.test(String(activeChipText).trim())) return false; // already on it
+  return true;
+}
+
+function initNewToYouAuto() {
+  if (newToYouTimer) { clearTimeout(newToYouTimer); newToYouTimer = null; }
+  if (!settings.newToYouAuto || !isHomePath()) return;
+
+  const check = (attempt) => {
+    if (!settings.newToYouAuto || !isHomePath()) return;
+    const chipsBar = document.querySelector('ytd-feed-filter-chip-bar-renderer, #chips-wrapper');
+    if (!chipsBar) {
+      // Chips can attach a beat late; give a few rounds, then shut up.
+      const feedCards = document.querySelectorAll(VIDEO_CARD_SELECTORS).length;
+      if (feedCards && attempt < 3) {
+        newToYouTimer = setTimeout(() => check(attempt + 1), 4000);
+      }
+      return;
+    }
+
+    const chips = Array.from(chipsBar.querySelectorAll('yt-chip-cloud-chip-renderer'));
+    const textOf = (c) => (c.querySelector('yt-formatted-string, #text')?.textContent || '').trim();
+    const chipTexts = chips.map(textOf);
+    const activeChip = chips.find((c) => c.getAttribute('aria-selected') === 'true');
+
+    if (!shouldAutoEnterNewToYou(chipTexts, activeChip ? textOf(activeChip) : '', false)) return;
+
+    const target = chips.find((c) => /new to you/i.test(textOf(c)));
+    if (!target) return;
+
+    try {
+      const clickable = target.shadowRoot?.querySelector('button, a') ||
+        target.querySelector('button, a') || target;
+      clickable.click();
+      showToast('Home switched to \'New to you\' — YouTube\'s less-seen discovery feed.');
+    } catch (_) {}
+  };
+
+  newToYouTimer = setTimeout(() => check(0), 6000);
+}
+
 // YouTube SPA navigation events
 window.addEventListener('yt-navigate-finish', () => {
   activeMenuVideoCard = null;
@@ -2909,16 +3254,36 @@ window.addEventListener('yt-navigate-finish', () => {
   });
   scheduleFeedProcessing(200);
   checkCurrentWatchPageVideo();
+  initChipRescue();
+  initNewToYouAuto();
 });
 
 window.addEventListener('popstate', () => {
   stopMenuObserver();
   scheduleFeedProcessing(200);
   checkCurrentWatchPageVideo();
+  initChipRescue();
+  initNewToYouAuto();
 });
 
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', start);
 } else {
   start();
+}
+
+// Node test seam — ignored by the browser/extension runtime.
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = {
+    watchPageBlockDecision,
+    keywordRulesHidden,
+    normalizeChannel,
+    cleanChannelText,
+    hasWordBoundaryKeyword,
+    extractEntityKey,
+    isAutoDubBadgeText,
+    autoDubHideDecision,
+    chipRescueState,
+    shouldAutoEnterNewToYou
+  };
 }

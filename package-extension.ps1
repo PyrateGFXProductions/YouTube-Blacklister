@@ -36,6 +36,8 @@ $essentialFiles = @(
     "content.js",
     "popup.html",
     "popup.js",
+    "backup.html",
+    "backup.js",
     "icon16.png",
     "icon48.png",
     "icon128.png",
@@ -60,6 +62,8 @@ $extensionFiles = @(
     "content.js",
     "popup.html",
     "popup.js",
+    "backup.html",
+    "backup.js",
     "icon16.png",
     "icon48.png",
     "icon128.png"
@@ -70,6 +74,9 @@ $chromiumManifest.PSObject.Properties.Remove("browser_specific_settings")
 $chromiumManifest.background = [pscustomobject]@{ service_worker = "background.js" }
 
 $firefoxManifest = $manifest | ConvertTo-Json -Depth 10 | ConvertFrom-Json
+# `key` is Chromium-only (pins the extension ID in Chrome-based browsers).
+# Keep it OUT of Firefox-family manifests: web-ext/AMO lint flags it as an unexpected property.
+$firefoxManifest.PSObject.Properties.Remove("key")
 $firefoxManifest.background = [pscustomobject]@{ scripts = @("background.js") }
 
 function Write-ManifestJson {

@@ -2,6 +2,7 @@
   "manifest_version": 3,
   "name": "Always New To You - Smart Feed Blacklist",
   "version": "1.10.1",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAiM1XJXmQNeyvyALSPkaxbyAQuuI7PqsoG/Dvrsgk7RpuZX03qjTcWm50svmT4Y8sFhr6BWEbfbZ695dlKEu8EK9QbavH8eqorMj1XwNh5nXDjest68pp1MvhHkdd5V5BVe6VhnVXc/3sp8dGfOCJktrzB2gDljz58tnubY0P+tZFOE5mWBYpUGDRgQmJMvoaDNfP3SkxQNoYWb/gQ/J7/mVQIQH26xUM5SiIZTvt1eulLbHNWdZL6FrRNbzaYxf2WmuWrJDPekOB2li8VWcLJUgAwJMm5ed7EZwHZXtycTIf3IbW+fPV095uYSvekoJf7PMwLzHQYSxxBPF0Dm3uiQIDAQAB",
   "author": "PyrateGFX Productions",
   "homepage_url": "https://github.com/PyrateGFXProductions/YouTube-Blacklister",
   "description": "Permanently pins YouTube's 'New to You' feed and adds a smart, local, server-invisible blacklist so the feed never runs dry or enters YouTube's cooldown lockout.",
@@ -12,7 +13,8 @@
     }
   },
   "permissions": [
-    "storage"
+    "storage",
+    "downloads"
   ],
   "host_permissions": [
     "https://www.youtube.com/*",

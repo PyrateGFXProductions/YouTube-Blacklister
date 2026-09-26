@@ -12,7 +12,8 @@
     }
   },
   "permissions": [
-    "storage"
+    "storage",
+    "downloads"
   ],
   "host_permissions": [
     "https://www.youtube.com/*",

@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Backup &amp; Restore — Always New To You</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #101014; --card: #1c1c22; --line: #2c2c34; --txt: #e8e8ec;
+    --dim: #9a9aa4; --acc: #7c5cff; --ok: #3ecf8e; --bad: #ff5566;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 24px; min-height: 100vh;
+    background: var(--bg); color: var(--txt);
+    font: 14px/1.5 system-ui, "Segoe UI", sans-serif;
+  }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  .sub { color: var(--dim); margin: 0 0 20px; }
+  .card {
+    background: var(--card); border: 1px solid var(--line);
+    border-radius: 10px; padding: 16px; max-width: 640px; margin-bottom: 14px;
+  }
+  .card h2 { font-size: 14px; margin: 0 0 8px; }
+  .card p { color: var(--dim); margin: 0 0 12px; }
+  button {
+    background: var(--acc); color: #fff; border: 0; border-radius: 8px;
+    padding: 10px 16px; font-size: 13px; cursor: pointer;
+  }
+  button.secondary { background: #33333d; }
+  button:hover { filter: brightness(1.1); }
+  .inline { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
+  label.check { display: flex; align-items: center; gap: 8px; color: var(--txt); cursor: pointer; }
+  #status {
+    margin-top: 14px; padding: 10px 12px; border-radius: 8px;
+    border: 1px solid var(--line); background: #14141a; color: var(--txt);
+    min-height: 42px; white-space: pre-wrap;
+  }
+  #status.ok { border-color: var(--ok); }
+  #status.err { border-color: var(--bad); color: #ff9aa4; }
+  .drop {
+    border: 2px dashed var(--line); border-radius: 10px; padding: 22px;
+    text-align: center; color: var(--dim); margin-top: 10px; cursor: pointer;
+  }
+  .drop.over { border-color: var(--acc); color: var(--txt); }
+</style>
+</head>
+<body>
+  <h1>Backup &amp; Restore</h1>
+  <p class="sub">Always New To You — Smart Feed Blacklist · version <span id="ver"></span></p>
+
+  <div class="card">
+    <h2>📥 Export backup</h2>
+    <p>Saves your channels, keywords, whitelist and settings to a <b>.json</b> file in a location you choose.</p>
+    <button id="exportBtn">Export Backup (JSON)</button>
+    <div class="inline"><label class="check"><input type="checkbox" id="exportAuto" checked> open the save dialog every time</label></div>
+  </div>
+
+  <div class="card">
+    <h2>📤 Restore / import backup</h2>
+    <p>Pick a previously exported <b>.json</b> file. Replaces your current rules with the file's contents
+       (or merges on top of them if you untick the box). Nothing is overwritten until the file parses successfully.</p>
+    <div class="drop" id="drop">
+      <div id="dropInner">Click here or drop a <b>.json</b> backup file</div>
+      <input type="file" id="fileInput" accept=".json,application/json" style="display:none;">
+    </div>
+    <div class="inline">
+      <label class="check"><input type="checkbox" id="replaceRules" checked> Replace existing rules (recommended)</label>
+      <button class="secondary" id="importBtn">Import file…</button>
+    </div>
+  </div>
+
+  <div id="status">Ready.</div>
+
+<script src="backup.js"></script>
+</body>
+</html>

@@ -21,7 +21,7 @@
 
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
-      width: 420px;
+      width: 460px;
       min-height: 560px;
       max-height: 640px;
       background: var(--bg);
@@ -183,6 +183,28 @@
       font-weight: 500;
     }
     .item-btn:hover { background: var(--green-bg); }
+    .item-btn-edit {
+      background: transparent;
+      border: none;
+      color: #7aa7ff;
+      font-size: 12px;
+      padding: 3px 6px;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    .item-btn-edit:hover { background: rgba(122, 167, 255, 0.12); color: #b3caff; }
+    .item-edit-input {
+      flex: 1;
+      min-width: 0;
+      background: var(--bg);
+      border: 1px solid #334155;
+      color: var(--text);
+      border-radius: 6px;
+      padding: 4px 8px;
+      font-size: 12px;
+      outline: none;
+    }
+    .item-edit-input:focus { border-color: #7c5cff; }
     .empty-state {
       padding: 24px;
       text-align: center;
@@ -577,6 +599,7 @@
     }
     .ai-status-row {
       display: flex;
+      flex-wrap: wrap;
       align-items: center;
       justify-content: space-between;
       gap: 8px;
@@ -589,6 +612,7 @@
       border-radius: 12px;
       font-size: 11px;
       font-weight: 600;
+      max-width: 100%;
       background: rgba(0, 255, 128, 0.12);
       color: #00ff80;
       border: 1px solid rgba(0, 255, 128, 0.3);
@@ -606,7 +630,10 @@
       padding: 4px 8px;
       font-size: 11px;
       outline: none;
-      max-width: 180px;
+      max-width: 100%;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
     .ai-preset-chips {
       display: flex;
@@ -913,9 +940,7 @@
             <option value="">Auto-detecting...</option>
           </select>
         </div>
-        <div style="font-size: 11px; color: var(--muted); line-height: 1.4;">
-          Posh local intelligence powered by your local Ollama / LM Studio daemon — or the bundled offline Phi (ONNX) worker. Zero telemetry, 100% offline.
-        </div>
+        <div id="aiStatusDetail" style="font-size: 11px; color: var(--muted); line-height: 1.4;">Detecting local AI engine…</div>
         <div id="aiOnnxOffering" style="display: none; margin-top: 8px; padding: 8px 10px; background: rgba(255, 165, 0, 0.08); border: 1px solid rgba(255, 165, 0, 0.35); border-radius: 8px; font-size: 11px; color: var(--muted); line-height: 1.5;">
           <strong style="color: #e8a33d;">Local Phi (ONNX) — no server needed</strong><br>
           The offline engine works without Ollama or LM Studio — just install the runtime and model on this machine. Command shown below (or hover the status pill):
@@ -1100,6 +1125,21 @@
 
         <div class="setting-item">
           <div class="setting-label">
+            <span class="setting-title">🚫 Auto-Dubbed Videos</span>
+            <span class="setting-desc">The Auto-dubbed badge hides on thumbnails/metadata, but keyword rules never see it — these modes scan the badge directly.</span>
+          </div>
+          <div class="auto-dub-modes">
+            <label class="mode-pill"><input type="radio" name="autoDubMode" id="radioAutoDubOff" /><span>Off</span></label>
+            <label class="mode-pill"><input type="radio" name="autoDubMode" id="radioAutoDubSmart" /><span>Smart</span></label>
+            <label class="mode-pill"><input type="radio" name="autoDubMode" id="radioAutoDubTotal" /><span>Total</span></label>
+          </div>
+          <div class="setting-desc small">
+            <b>Off:</b> keyword rules only &nbsp;·&nbsp; <b>Smart:</b> hide in recommendations, keep channels you subscribe to &nbsp;·&nbsp; <b>Total:</b> hide everywhere, even from channels you've watched or subscribed to (only Whitelist overrides)
+          </div>
+        </div>
+
+        <div class="setting-item">
+          <div class="setting-label">
             <span class="setting-title">✨ AI Title De-Baiter</span>
             <span class="setting-desc">Replace sensational titles with calm AI summaries. ✨ badge toggles original.</span>
           </div>
@@ -1130,13 +1170,34 @@
             <span class="slider"></span>
           </label>
         </div>
+
+        <div class="setting-item">
+          <div class="setting-label">
+            <span class="setting-title">🩹 Chip Rescue</span>
+            <span class="setting-desc">YouTube's known bug where the Comedy/Tourism/… topic-chip bar vanishes and needs endless refreshes. When on, present-but-hidden chips are shown again automatically, and a completely missing bar gets a small "Restore chips" button (one click reloads the page — never automatic).</span>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="toggleChipRescue" />
+            <span class="slider"></span>
+          </label>
+        </div>
+
+        <div class="setting-item">
+          <div class="setting-label">
+            <span class="setting-title">🔍 Start Home on "New to you"</span>
+            <span class="setting-desc">Sip past the promoted tier. YouTube's Home only recommends channels that are safe to advertise — everything else is buried. "New to you" is the ONLY surface YouTube built to show channels you haven't encountered before. When on, the extension clicks that chip automatically each time you open Home (no reloads). If the chip is unavailable for your account, nothing happens. It's still algorithm-served, so pair it with your blacklist for the best result.</span>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="toggleNewToYou" />
+            <span class="slider"></span>
+          </label>
+        </div>
       </div>
 
       <div class="tools-grid">
         <button class="tool-btn" id="exportBtn">📥 Export Backup (JSON)</button>
         <button class="tool-btn" id="importBtn">📤 Import Backup (JSON)</button>
       </div>
-      <input type="file" id="importFileInput" accept=".json" style="display:none;" />
 
       <div class="kofi-card">
         <div class="kofi-card-text">

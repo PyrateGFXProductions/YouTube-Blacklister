@@ -24,9 +24,14 @@ function incrementBlockedTotal(inc) {
   return blockedCounterQueue;
 }
 
-// Check local AI server status
+// Check local AI server status.
+// Errors are COLLECTED per provider instead of swallowed: the popup shows the
+// real reason in the pill title, so "offline" means something — ECONNREFUSED =
+// server actually down, while 'Failed to fetch' / 'NetworkError' = the browser
+// (extension context) blocked the request despite the manifest.
 async function checkAiStatus(customUrl) {
   const ollamaUrl = customUrl || OLLAMA_DEFAULT_URL;
+  const errors = [];
   try {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 2500);
@@ -35,9 +40,16 @@ async function checkAiStatus(customUrl) {
     if (res.ok) {
       const data = await res.json();
       const models = Array.isArray(data.models) ? data.models.map(m => m.name || m.model) : [];
-      return { ok: true, provider: 'ollama', url: ollamaUrl, models };
+      return { ok: true, provider: 'ollama', url: ollamaUrl, models, errors };
     }
-  } catch (_) {}
+    errors.push({ provider: 'ollama', url: ollamaUrl, error: `HTTP ${res.status}` });
+  } catch (e) {
+    errors.push({
+      provider: 'ollama',
+      url: ollamaUrl,
+      error: e && e.name === 'AbortError' ? 'timeout 2500ms' : (e && e.message) || String(e)
+    });
+  }
 
   // Fallback check LM Studio / OpenAI-compatible
   try {
@@ -48,9 +60,16 @@ async function checkAiStatus(customUrl) {
     if (res.ok) {
       const data = await res.json();
       const models = Array.isArray(data.data) ? data.data.map(m => m.id) : [];
-      return { ok: true, provider: 'lmstudio', url: LMSTUDIO_DEFAULT_URL, models };
+      return { ok: true, provider: 'lmstudio', url: LMSTUDIO_DEFAULT_URL, models, errors };
     }
-  } catch (_) {}
+    errors.push({ provider: 'lmstudio', url: LMSTUDIO_DEFAULT_URL, error: `HTTP ${res.status}` });
+  } catch (e) {
+    errors.push({
+      provider: 'lmstudio',
+      url: LMSTUDIO_DEFAULT_URL,
+      error: e && e.name === 'AbortError' ? 'timeout 2000ms' : (e && e.message) || String(e)
+    });
+  }
 
   // Third engine: bundled local Phi (ONNX) offered by the asus_argb_framework
   // local server (/api/ai/status -> providers.onnx). Mirrors the framework's
@@ -87,13 +106,23 @@ async function checkAiStatus(customUrl) {
           models: Array.isArray(onnx.models) ? onnx.models : [],
           label: onnx.label || 'Local ONNX (Phi-3.5 mini)',
           ready,
-          setup
+          setup,
+          errors
         };
       }
+      errors.push({ provider: 'onnx-framework', url: FRAMEWORK_DEFAULT_URL, error: 'no providers.onnx in /api/ai/status' });
+    } else {
+      errors.push({ provider: 'onnx-framework', url: FRAMEWORK_DEFAULT_URL, error: `HTTP ${res.status}` });
     }
-  } catch (_) {}
+  } catch (e) {
+    errors.push({
+      provider: 'onnx-framework',
+      url: FRAMEWORK_DEFAULT_URL,
+      error: e && e.name === 'AbortError' ? 'timeout 9000ms' : (e && e.message) || String(e)
+    });
+  }
 
-  return { ok: false, provider: 'none', models: [] };
+  return { ok: false, provider: 'none', models: [], errors };
 }
 
 // Helper to safely extract and parse JSON from local LLM outputs (handles thinking tags and codeblocks)
@@ -624,7 +653,12 @@ async function synthesizeSubscriptionRulesWithAi(channels, modelChoice, customUr
       format: 'json',
       model: modelChoice,
       customUrl,
-      timeoutMs: 35000
+      // Must finish inside Chrome's ~30s service-worker lifetime. A cold model
+      // load + generation beyond this gets the worker reaped and the popup
+      // receives nothing (which used to print "AI may be busy"). The heuristic
+      // fallback below is always ready, so a timeout degrades to ⚡ Heuristic
+      // instead of a dead end.
+      timeoutMs: 22000
     });
 
     if (res.ok && res.content) {
@@ -1090,38 +1124,40 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
 
-  if (msg.type === 'CHECK_AI_STATUS') {
-    checkAiStatus(msg.customUrl).then(res => sendResponse(res));
+if (msg.type === 'CHECK_AI_STATUS') {
+    checkAiStatus(msg.customUrl)
+      .then(res => sendResponse(res))
+      .catch((err) => { try { sendResponse({ ok: false, error: String((err && err.message) || err) }); } catch (_) {} });
     return true;
   }
 
   if (msg.type === 'AI_SYNTHESIZE_RULES') {
-    synthesizeRulesWithAi(msg.prompt, msg.modelChoice, msg.customUrl).then(res => sendResponse(res));
+    synthesizeRulesWithAi(msg.prompt, msg.modelChoice, msg.customUrl).then(res => sendResponse(res)).catch((err) => { try { sendResponse({ ok: false, error: String((err && err.message) || err) }); } catch (_) {} });
     return true;
   }
 
   if (msg.type === 'AI_SYNTHESIZE_SUBSCRIPTION_RULES') {
-    synthesizeSubscriptionRulesWithAi(msg.channels, msg.modelChoice, msg.customUrl).then(res => sendResponse(res));
+    synthesizeSubscriptionRulesWithAi(msg.channels, msg.modelChoice, msg.customUrl).then(res => sendResponse(res)).catch((err) => { try { sendResponse({ ok: false, error: String((err && err.message) || err) }); } catch (_) {} });
     return true;
   }
 
   if (msg.type === 'AI_EVALUATE_BATCH') {
-    evaluateBatchWithAi(msg.videos, msg.persona, msg.sensitivity, msg.modelChoice, msg.customUrl, msg.keywords, msg.channels).then(res => sendResponse(res));
+    evaluateBatchWithAi(msg.videos, msg.persona, msg.sensitivity, msg.modelChoice, msg.customUrl, msg.keywords, msg.channels).then(res => sendResponse(res)).catch((err) => { try { sendResponse({ ok: false, error: String((err && err.message) || err) }); } catch (_) {} });
     return true;
   }
 
   if (msg.type === 'AI_DEBAIT_TITLES') {
-    deBaitWithAi(msg.titles, msg.modelChoice, msg.customUrl).then(res => sendResponse(res));
+    deBaitWithAi(msg.titles, msg.modelChoice, msg.customUrl).then(res => sendResponse(res)).catch((err) => { try { sendResponse({ ok: false, error: String((err && err.message) || err) }); } catch (_) {} });
     return true;
   }
 
   if (msg.type === 'AI_ROAST_FEED') {
-    roastFeedWithAi(msg.items, msg.modelChoice, msg.customUrl).then(res => sendResponse(res));
+    roastFeedWithAi(msg.items, msg.modelChoice, msg.customUrl).then(res => sendResponse(res)).catch((err) => { try { sendResponse({ ok: false, error: String((err && err.message) || err) }); } catch (_) {} });
     return true;
   }
 
   if (msg.type === 'AI_SUMMARIZE_TRANSCRIPT') {
-    summarizeTranscriptWithAi(msg.transcript, msg.title, msg.modelChoice, msg.customUrl, msg.opts).then(res => sendResponse(res));
+    summarizeTranscriptWithAi(msg.transcript, msg.title, msg.modelChoice, msg.customUrl, msg.opts).then(res => sendResponse(res)).catch((err) => { try { sendResponse({ ok: false, error: String((err && err.message) || err) }); } catch (_) {} });
     return true;
   }
 });
