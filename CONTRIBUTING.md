@@ -34,6 +34,24 @@ Feature ideas and rule improvements are welcome! Open an issue using the **Featu
 3. **Test thoroughly**:
    - Load the unpacked extension in Chrome / Edge / Brave.
    - Verify that adding, unblocking, and filtering work smoothly across YouTube pages.
+   - Run the automated checks below before opening a PR.
+
+### Automated checks (fast — no browser needed)
+
+All harnesses are pure-Node; they stub the extension APIs, load the real `content.js` / `backup.js`, and must stay green:
+
+```powershell
+# Syntax gate
+node --check content.js background.js popup.js backup.js
+
+# Regression suites
+node tests\watch-block-harness.js   # 54 cases: watch-page guard, keyword/regex boundaries,
+                                    # channel extraction, auto-dub, chip rescue, New-to-You
+node tests\backup-harness.js        # 15 cases: export/restore round-trip, sanitization, locks
+node tests\test_ai_guardian.js      # AI-guardian evaluation + keyword mirroring
+```
+
+Keep the harness counts in sync when you change pure logic: add a case for every new decision function (`watchPageBlockDecision`, `keywordRulesHidden`, `autoDubHideDecision`, …).
 4. **Commit & Push**:
    ```bash
    git commit -m "feat: describe your change"

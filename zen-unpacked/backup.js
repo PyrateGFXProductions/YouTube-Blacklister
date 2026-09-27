@@ -56,23 +56,55 @@ function load() {
   });
 }
 
-function saveToStorage() {
+// Keys an import does not own: the backup file either never carries them (nyt_totalBlocked,
+// aiLog) or only sometimes does (aiSubscriptionProfile, subsSnapshot). This page loads its
+// in-memory copy ONCE at open time, so writing that copy back would clobber a value the
+// popup / a content script / the background worker changed while this page sat idle.
+// They are therefore re-read from storage inside the write path; a key listed in
+// `pinned` (because this import explicitly decided its value) wins over the stored one.
+// Each entry is [data field, normalizer applied to the freshly-read stored value].
+const PRESERVED_KEYS = {
+  nyt_totalBlocked: ['totalBlocked', (v) => Number(v) || 0],
+  aiLog: ['aiLog', (v) => (Array.isArray(v) ? v : [])],
+  aiSubscriptionProfile: ['aiSubscriptionProfile', (v) => (typeof v === 'string' ? v : '')],
+  subsSnapshot: ['subsSnapshot', (v) => (Array.isArray(v) ? v : [])]
+};
+
+function saveToStorage(pinned) {
   return new Promise((resolve) => {
-    chrome.storage.local.set({
-      channels: data.channels, keywords: data.keywords,
-      whitelistChannels: data.whitelistChannels, subsSnapshot: data.subsSnapshot,
-      blockShorts: data.blockShorts, shortsSubOnly: data.shortsSubOnly,
-      blockCommunity: data.blockCommunity, autoDubMode: data.autoDubMode,
-      enableQuickBlock: data.enableQuickBlock,
-      triggerServerFeedback: data.triggerServerFeedback,
-      nyt_totalBlocked: data.totalBlocked, aiAutonomous: data.aiAutonomous,
-      aiSensitivity: data.aiSensitivity, aiModel: data.aiModel,
-      aiTastePrompt: data.aiTastePrompt, aiSubscriptionProfile: data.aiSubscriptionProfile,
-      aiLog: data.aiLog, aiDebaitTitles: data.aiDebaitTitles,
-      aiDebaitModel: data.aiDebaitModel, tldwEnabled: data.tldwEnabled,
-      huntMode: data.huntMode, chipRescue: data.chipRescue,
-      newToYouAuto: data.newToYouAuto
-    }, () => resolve(chrome.runtime.lastError ? String(chrome.runtime.lastError.message) : null));
+    const explicit = pinned || {};
+    const reRead = Object.keys(PRESERVED_KEYS).filter((k) => !(k in explicit));
+    const write = (stored) => {
+      const fresh = (stored && typeof stored === 'object') ? stored : {};
+      const payload = {
+        channels: data.channels, keywords: data.keywords,
+        whitelistChannels: data.whitelistChannels,
+        blockShorts: data.blockShorts, shortsSubOnly: data.shortsSubOnly,
+        blockCommunity: data.blockCommunity, autoDubMode: data.autoDubMode,
+        enableQuickBlock: data.enableQuickBlock,
+        triggerServerFeedback: data.triggerServerFeedback,
+        aiAutonomous: data.aiAutonomous,
+        aiSensitivity: data.aiSensitivity, aiModel: data.aiModel,
+        aiTastePrompt: data.aiTastePrompt, aiDebaitTitles: data.aiDebaitTitles,
+        aiDebaitModel: data.aiDebaitModel, tldwEnabled: data.tldwEnabled,
+        huntMode: data.huntMode, chipRescue: data.chipRescue,
+        newToYouAuto: data.newToYouAuto
+      };
+      Object.keys(PRESERVED_KEYS).forEach((k) => {
+        if (k in explicit) {
+          payload[k] = explicit[k];
+        } else if (k in fresh) {
+          const [field, normalize] = PRESERVED_KEYS[k];
+          payload[k] = normalize(fresh[k]);
+          data[field] = payload[k]; // keep the in-memory model from going stale too
+        } else {
+          payload[k] = data[PRESERVED_KEYS[k][0]]; // never stored before: keep the default
+        }
+      });
+      chrome.storage.local.set(payload, () => resolve(chrome.runtime.lastError ? String(chrome.runtime.lastError.message) : null));
+    };
+    if (reRead.length) chrome.storage.local.get(reRead, write);
+    else write({});
   });
 }
 
@@ -119,7 +151,12 @@ function isReDoSSuspect(pattern) {
 // the pattern source); every keyword is length-capped; slash-form regex rules must
 // actually compile — and must not be ReDoS-suspect — or they're dropped.
 function sanitizeImportedKeyword(raw) {
-  const s = String(raw == null ? '' : raw).trim();
+  // Only string/number entries are usable: coercing an object/array yields "[object Object]"
+  // or "1,2" garbage keywords, and null/undefined would stringify to literal "null".
+  let s;
+  if (typeof raw === 'string') s = raw.trim();
+  else if (typeof raw === 'number' && Number.isFinite(raw)) s = String(raw).trim();
+  else return '';
   if (!s || s.length > 200) return '';
   if (s.startsWith('/') && s.lastIndexOf('/') > 0) {
     try {
@@ -146,15 +183,16 @@ function buildPayload() {
     channels: data.channels,
     keywords: data.keywords,
     whitelistChannels: data.whitelistChannels,
+    subsSnapshot: data.subsSnapshot,
     settings: {
       blockShorts: data.blockShorts, shortsSubOnly: data.shortsSubOnly,
       blockCommunity: data.blockCommunity, autoDubMode: data.autoDubMode,
       enableQuickBlock: data.enableQuickBlock,
       triggerServerFeedback: data.triggerServerFeedback, aiAutonomous: data.aiAutonomous,
       aiSensitivity: data.aiSensitivity, aiModel: data.aiModel,
-      aiTastePrompt: data.aiTastePrompt, aiDebaitTitles: data.aiDebaitTitles,
-      aiDebaitModel: data.aiDebaitModel, tldwEnabled: data.tldwEnabled,
-      huntMode: data.huntMode, chipRescue: data.chipRescue,
+      aiTastePrompt: data.aiTastePrompt, aiSubscriptionProfile: data.aiSubscriptionProfile,
+      aiDebaitTitles: data.aiDebaitTitles, aiDebaitModel: data.aiDebaitModel,
+      tldwEnabled: data.tldwEnabled, huntMode: data.huntMode, chipRescue: data.chipRescue,
       newToYouAuto: data.newToYouAuto
     }
   };
@@ -202,14 +240,17 @@ async function doExport() {
 // --- import ----------------------------------------------------------------------
 
 function applyImport(json) {
-  // Returns { ok, channels, keywords, whitelist, settings }
+  // Returns { ok, channels, keywords, whitelist, hasSubsSnapshot, subsSnapshot, settings }
   if (!json || typeof json !== 'object') return { ok: false };
   if (json.snapshotVersion && Number(json.snapshotVersion) > 1) return { ok: false, newer: true };
 
   const hasAny = Array.isArray(json.channels) || Array.isArray(json.keywords) || Array.isArray(json.whitelistChannels);
   if (!hasAny) return { ok: false };
 
-  const result = { ok: true, channels: [], keywords: [], whitelist: [], settings: null };
+  const result = {
+    ok: true, channels: [], keywords: [], whitelist: [],
+    hasSubsSnapshot: false, subsSnapshot: [], settings: null
+  };
 
   if (Array.isArray(json.channels)) {
     json.channels.forEach(c => {
@@ -229,11 +270,42 @@ function applyImport(json) {
       if (clean) result.whitelist.push(clean);
     });
   }
-  result.settings = json.settings ? json.settings : null;
+  // The subscription snapshot is replaced wholesale (not merged) when the backup carries it.
+  if (Array.isArray(json.subsSnapshot)) {
+    result.hasSubsSnapshot = true;
+    json.subsSnapshot.forEach(s => {
+      const clean = extractEntityFromInput(s);
+      if (clean) result.subsSnapshot.push(clean);
+    });
+  }
+  // `settings` must be a plain object map of setting keys. A string / number / array here
+  // makes the `'key' in s` lookups below throw (or silently apply nothing).
+  result.settings = (json.settings && typeof json.settings === 'object' && !Array.isArray(json.settings))
+    ? json.settings
+    : null;
   return result;
 }
 
+// A second import started while one is in flight would race the read-modify-write of
+// `data` and double-apply; the lock covers the whole handler and is always released.
+let importing = false;
+
 async function doImportFile(file) {
+  if (importing) {
+    setStatus('An import is already running — wait for it to finish.', 'err');
+    return false;
+  }
+  importing = true;
+  setImportBusy(true);
+  try {
+    return await runImportFile(file);
+  } finally {
+    importing = false;
+    setImportBusy(false);
+  }
+}
+
+async function runImportFile(file) {
   const text = await file.text().catch(() => null);
   if (text == null) { setStatus('Could not read that file.', 'err'); return false; }
   let json;
@@ -258,6 +330,19 @@ async function doImportFile(file) {
   r.keywords.forEach(k => { if (!data.keywords.includes(k)) data.keywords.push(k); });
   r.whitelist.forEach(w => { if (!data.whitelistChannels.includes(w)) data.whitelistChannels.push(w); });
 
+  // Keys this import decided itself; everything else is re-read at write time so a
+  // concurrent update (aiLog, nyt_totalBlocked, …) is not clobbered by our stale copy.
+  const pinned = {
+    channels: data.channels,
+    keywords: data.keywords,
+    whitelistChannels: data.whitelistChannels
+  };
+
+  if (r.hasSubsSnapshot) {
+    data.subsSnapshot = r.subsSnapshot.slice();
+    pinned.subsSnapshot = data.subsSnapshot;
+  }
+
   if (r.settings) {
     const s = r.settings;
     if ('blockShorts' in s) data.blockShorts = Boolean(s.blockShorts);
@@ -270,22 +355,43 @@ async function doImportFile(file) {
     if ('aiSensitivity' in s) data.aiSensitivity = String(s.aiSensitivity || 'balanced');
     if ('aiModel' in s) data.aiModel = String(s.aiModel || '');
     if ('aiTastePrompt' in s) data.aiTastePrompt = String(s.aiTastePrompt || '');
+    if ('aiSubscriptionProfile' in s) data.aiSubscriptionProfile = String(s.aiSubscriptionProfile || '');
     if ('aiDebaitTitles' in s) data.aiDebaitTitles = Boolean(s.aiDebaitTitles);
     if ('aiDebaitModel' in s) data.aiDebaitModel = String(s.aiDebaitModel || '');
     if ('tldwEnabled' in s) data.tldwEnabled = Boolean(s.tldwEnabled);
     if ('huntMode' in s) data.huntMode = Boolean(s.huntMode);
     if ('chipRescue' in s) data.chipRescue = Boolean(s.chipRescue);
     if ('newToYouAuto' in s) data.newToYouAuto = Boolean(s.newToYouAuto);
+    if ('aiSubscriptionProfile' in s) pinned.aiSubscriptionProfile = data.aiSubscriptionProfile;
   }
 
-  const saveErr = await saveToStorage();
+  const saveErr = await saveToStorage(pinned);
   if (saveErr) {
     setStatus('Import applied, but storage reported an error: ' + saveErr, 'err');
     return false;
   }
   const mode = replace ? 'replaced' : 'merged';
+  // The write is committed, so tabs that re-read storage on RULES_UPDATED (content.js
+  // onMessage) now see the restored rules. Same broadcast the popup uses after a save.
+  await notifyTabsRulesUpdated();
   setStatus(`Imported & ${mode}: ${r.channels.length} channels, ${r.keywords.length} keywords, ${r.whitelist.length} whitelisted.`, 'ok');
   return true;
+}
+
+// Open YouTube tabs keep their in-memory settings until told to re-read, so an import
+// that only touched storage left them blacklisting with the previous rules. Mirrors
+// popup.js: query the YouTube tabs, then RULES_UPDATED each one; failures are ignored
+// (no content script, tab closed mid-flight, service worker asleep).
+async function notifyTabsRulesUpdated() {
+  try {
+    if (typeof chrome === 'undefined' || !chrome.tabs || !chrome.tabs.query || !chrome.tabs.sendMessage) return;
+    const tabs = (await chrome.tabs.query({ url: 'https://www.youtube.com/*' })) || [];
+    await Promise.allSettled(
+      tabs
+        .filter((tab) => tab && tab.id != null && tab.url && tab.url.startsWith('https://www.youtube.com'))
+        .map((tab) => chrome.tabs.sendMessage(tab.id, { type: 'RULES_UPDATED' }).catch(() => {}))
+    );
+  } catch (_) {}
 }
 
 // --- UI --------------------------------------------------------------------------
@@ -295,6 +401,13 @@ function setStatus(msg, kind) {
   if (!el) return;
   el.textContent = msg;
   el.className = kind || '';
+}
+
+function setImportBusy(busy) {
+  ['importBtn', 'fileInput'].forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) el.disabled = Boolean(busy);
+  });
 }
 
 function init() {
@@ -307,6 +420,8 @@ function init() {
 
   const fileInput = document.getElementById('fileInput');
   const drop = document.getElementById('drop');
+  // input.click() is only ever reached from a real user gesture here: the button or the
+  // dropzone being clicked. Firefox/Zen refuse to open a file picker without one.
   const pick = () => fileInput.click();
   drop.addEventListener('click', pick);
   document.getElementById('importBtn').addEventListener('click', pick);
@@ -327,9 +442,10 @@ function init() {
     if (f) doImportFile(f);
   });
 
-  // #export auto-runs the download; #import focuses the picker.
+  // #export auto-runs the download (chrome.downloads needs no user gesture).
+  // #import deliberately does NOT auto-open the picker: a file.click() from page load is
+  // not user-activated, so Firefox/Zen silently drop it and the user lands on a dead page.
   if (location.hash === '#export') doExport();
-  else if (location.hash === '#import') pick();
 }
 
 if (typeof document !== 'undefined') {

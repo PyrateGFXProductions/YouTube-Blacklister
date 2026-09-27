@@ -1,6 +1,6 @@
 # Privacy Policy — Always New To You (YouTube Smart Blacklister)
 
-**Last updated:** 2026-09-23 · Version 1.10.1
+**Last updated:** 2026-09-26 · Version 1.10.1
 
 This extension is **local-first by design**: the point of it is control over your own YouTube feed without giving anyone — including us — a copy of what you watch, block, or scroll past.
 
@@ -25,14 +25,15 @@ The extension hosts **no** server, sends **no** analytics, and contains **no** t
 - **`storage`** — persists your rules and settings in `chrome.storage.local`. This is where your entire configuration lives, and nothing in this data is transmitted.
 - **`https://www.youtube.com/*`** (host permission) — lets the content script run on YouTube pages so it can hide cards you chose to block and read the feed elements described in §1. This is the only website the extension can read or modify. It does **not** have permission for any other site, and it does **not** request the `tabs` permission, so it cannot inspect your browsing history.
 - **`http://localhost:11434/*`, `http://127.0.0.1:11434/*`, `http://localhost:1234/*`** (host permissions) — optional local-AI servers (Ollama port 11434, LM Studio port 1234). These loopback permissions exist so the extension *can* talk to software you run yourself; they are used **only** when you enable a local-AI feature **and** a compatible server is actually detected on one of these ports. No request is made at install time, and none is made to any non-localhost address.
+- **`downloads`** — saves the JSON backup file when you click Export on the **Backup & Restore** page. It is never used in the background, never uploads anything, and is the only permission involved in creating the export file on your disk.
 
 The user-visible permission description for the store listing:
 
-> Reads and changes your data on www.youtube.com. Also connects to localhost (ports 11434, 1234) only if you choose to use an optional local AI server. Stores your blacklist and settings locally. No browsing history is read; no data is sent to the developer or any third party.
+> Reads and changes your data on www.youtube.com. Also connects to localhost (ports 11434, 1234) only if you choose to use an optional local AI server. Stores your blacklist and settings locally, and can save a JSON backup file when you export. No browsing history is read; no data is sent to the developer or any third party.
 
 ## 3. Local AI — the only connection that leaves the extension itself
 
-Some features (Mind Reader, Autonomous Slop Interceptor, Guardian roast, TL;DR summary, Subscription Rule Synthesizer) can use a large-language model. By design:
+Some features (Mind Reader Taste Profiler, Autonomous Feed Guardian, AI Title De-Baiter, Feed Forensic Diagnostic Roast, TL;DW inspector, Subscription Rule Synthesizer) can use a large-language model. By design:
 
 1. The model must be **your own** process listening on `localhost:11434` (Ollama) or `localhost:1234` (LM Studio). The extension will not contact a remote AI or any online service for these features.
 2. Connectivity is checked each time you use a feature. If no local server is detected, the feature **falls back to built-in heuristics** and sends nothing.
@@ -46,6 +47,7 @@ Some features (Mind Reader, Autonomous Slop Interceptor, Guardian roast, TL;DR s
 - **No cloud AI** — see §3; there is no key, no account, no remote inference.
 - **No telemetry, analytics, crash reporting, or remote configuration** — there is no code path that transmits telemetry, a beacon, or an update check.
 - **No disguised feedback to YouTube** — ordinary blocking hides cards in the page DOM only. The one deliberate exception is the **Server Recommendation Feedback** toggle, which you must explicitly enable; it attempts YouTube's own native "Don't recommend channel" menu action when that UI is available. Disabled by default.
+- **No hidden page rewriting** — the **"Start on 'New to you'"** feature simply clicks YouTube's own chip in the page you are viewing; auto-dubbed triage, feed decluttering, and the de-baiter only hide or rewrite elements locally. None of these send feedback or leave anything on the page YouTube did not already render.
 
 ## 5. Retention and deletion
 

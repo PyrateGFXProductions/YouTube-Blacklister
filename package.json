@@ -1,0 +1,24 @@
+{
+  "name": "youtube-blacklister",
+  "version": "1.0.0",
+  "description": "<p align=\"center\">   <img src=\"icon128.png\" width=\"112\" height=\"112\" alt=\"Always New To You icon\"> </p>",
+  "main": "background.js",
+  "directories": {
+    "test": "tests"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/PyrateGFXProductions/YouTube-Blacklister.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/PyrateGFXProductions/YouTube-Blacklister/issues"
+  },
+  "homepage": "https://github.com/PyrateGFXProductions/YouTube-Blacklister#readme"
+}

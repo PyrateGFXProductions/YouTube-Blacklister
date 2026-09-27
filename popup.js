@@ -119,6 +119,9 @@ function load() {
 }
 
 async function save() {
+  // This promise rejects with "Extension context invalidated" when the popup is
+  // torn down mid-write (tab activation, click-away). Uncaught, that becomes an
+  // unhandled rejection in the console on every such close.
   await chrome.storage.local.set({
     channels: data.channels,
     keywords: data.keywords,
@@ -142,7 +145,7 @@ async function save() {
     huntMode: data.huntMode,
     chipRescue: data.chipRescue,
     newToYouAuto: data.newToYouAuto
-  });
+  }).catch(() => {});
 
   // Notify active YouTube tabs to re-apply rules immediately.
   // At this point the storage write has completed, so content scripts that
@@ -255,6 +258,11 @@ function startInlineEdit(row, current, onCommit) {
     if (next && next !== current) onCommit(current, next);
     renderAll();
   };
+  const cancel = () => {
+    if (done) return;
+    done = true;
+    renderAll();
+  };
 
   const saveBtn = document.createElement('button');
   saveBtn.className = 'item-btn';
@@ -266,27 +274,43 @@ function startInlineEdit(row, current, onCommit) {
   cancelBtn.className = 'item-btn';
   cancelBtn.textContent = '✕';
   cancelBtn.title = 'Cancel';
-  cancelBtn.addEventListener('click', () => { if (!done) { done = true; renderAll(); } });
+  cancelBtn.addEventListener('click', cancel);
   row.appendChild(cancelBtn);
 
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') commit();
-    else if (e.key === 'Escape') { if (!done) { done = true; renderAll(); } }
+    else if (e.key === 'Escape') cancel();
   });
   input.addEventListener('blur', () => {
-    // The Save / ✕ buttons fire after blur — leave the outcome to them.
-    if (document.activeElement === saveBtn || document.activeElement === cancelBtn) return;
+    // blur runs before the button's click, so waiting for the click destroyed
+    // the row out from under the press and ✕ committed instead of cancelling.
+    // Deciding on mousedown settles it first; `done` then makes both the late
+    // blur and the never-delivered click no-ops.
+    if (done) return;
     commit();
   });
+  saveBtn.addEventListener('mousedown', commit);
+  cancelBtn.addEventListener('mousedown', cancel);
 
   input.focus();
   input.select();
+}
+
+// Canonical storage form of a keyword rule. Every path that writes or matches a
+// keyword (add, AI injection, conflict rows) must go through this, or a rule
+// added as "Crypto" can't be found again by a later lookup of "crypto".
+function canonicalKeyword(kw) {
+  return String(kw == null ? '' : kw).trim().toLowerCase();
 }
 
 // Swap oldVal for newVal inside arr (dedup-aware); returns 1 if a change happened.
 function replaceRule(arr, oldVal, newVal) {
   const idx = arr.indexOf(oldVal);
   if (idx === -1) return 0;
+  // Both sides of the swap are the same stored value (a case-only edit, or an
+  // edit that normalizes back to the original). The includes() check below
+  // matches the entry against ITSELF and would splice the rule out of the list.
+  if (arr[idx] === newVal) return 0;
   if (arr.includes(newVal)) {
     arr.splice(idx, 1);
   } else {
@@ -325,7 +349,10 @@ function renderAll() {
       save(); renderAll(); setStatus('Channel unblocked.');
     },
     (oldV, newV) => {
-      replaceRule(data.channels, oldV, newV);
+      // Same canonicalization the add path applies (lowercased, URL/handle
+      // normalized) — otherwise an edited rule is stored in a different string
+      // form than a typed one and never matches the matcher or the dedupe.
+      replaceRule(data.channels, oldV, extractEntityFromInput(newV));
       save(); renderAll(); setStatus('Channel rule updated.');
     }
   );
@@ -340,7 +367,7 @@ function renderAll() {
       save(); renderAll(); setStatus('Keyword removed.');
     },
     (oldV, newV) => {
-      replaceRule(data.keywords, oldV, newV.trim().toLowerCase());
+      replaceRule(data.keywords, oldV, canonicalKeyword(newV));
       save(); renderAll(); setStatus('Keyword rule updated.');
     }
   );
@@ -355,7 +382,7 @@ function renderAll() {
       save(); renderAll(); setStatus('Whitelist entry removed.');
     },
     (oldV, newV) => {
-      replaceRule(data.whitelistChannels, oldV, newV);
+      replaceRule(data.whitelistChannels, oldV, extractEntityFromInput(newV));
       save(); renderAll(); setStatus('Whitelist entry updated.');
     }
   );
@@ -674,6 +701,14 @@ function finishRoast(btn, msg) {
   }
 }
 
+// The <select> is filled asynchronously from CHECK_AI_STATUS, so data.aiModel can
+// be stale (or empty while the dropdown shows a detected model). Read the control
+// at call time — that is what the user is actually looking at.
+function currentAiModelChoice() {
+  const sel = document.getElementById('aiModelSelect');
+  return (sel && sel.value) ? sel.value : (data.aiModel || '');
+}
+
 function runFeedRoast() {
   const roastBtn = document.getElementById('aiRoastBtn');
   const roastCard = document.getElementById('aiRoastResult');
@@ -702,7 +737,7 @@ function runFeedRoast() {
         chrome.runtime.sendMessage({
           type: 'AI_ROAST_FEED',
           items,
-          modelChoice: data.aiModel
+          modelChoice: currentAiModelChoice()
         }, (roastRes) => {
           renderRoastResult(roastRes);
           if (roastBtn) {
@@ -803,7 +838,7 @@ function injectRulesIntoBlacklist(rules) {
   let added = 0;
   if (rules && Array.isArray(rules.keywords)) {
     rules.keywords.forEach(k => {
-      const clean = String(k).trim().toLowerCase();
+      const clean = canonicalKeyword(k);
       if (clean && !data.keywords.includes(clean)) {
         data.keywords.push(clean);
         added++;
@@ -864,7 +899,10 @@ function renderConflictRows(conflicts) {
     const names = (Array.isArray(c.channels) ? c.channels : [])
       .map(escapeHtml)
       .join(', ') + (c.more ? ` <span style="color:#9aa3b2;">+${c.more} more</span>` : '');
-    return `<div class="sub-conflict-row" data-kw="${escapeHtml(c.keyword)}" style="font-size:10.5px;line-height:1.5;margin-top:5px;">
+    // data-kw holds the SAME canonical key injectRulesIntoBlacklist() stored, so
+    // the ✕ remove below finds the rule the row was rendered for.
+    const kw = canonicalKeyword(c.keyword);
+    return `<div class="sub-conflict-row" data-kw="${escapeHtml(kw)}" style="font-size:10.5px;line-height:1.5;margin-top:5px;">
       <span style="color:#ffb400;">⚠️ “${escapeHtml(c.keyword)}” would hide your subscription:</span>
       <span style="color:#e5e7eb;"> ${names}</span>
       <button class="sub-conflict-remove" style="margin-left:6px;background:transparent;border:1px solid #ffb400;color:#ffb400;border-radius:10px;font-size:10px;padding:1px 8px;cursor:pointer;">✕ remove</button>
@@ -878,14 +916,16 @@ function wireConflictRows(container, conflicts) {
   container.querySelectorAll('.sub-conflict-remove').forEach(btn => {
     btn.addEventListener('click', () => {
       const row = btn.closest('.sub-conflict-row');
-      const kw = row && row.dataset.kw;
+      const kw = canonicalKeyword(row && row.dataset.kw);
       if (kw) {
-        const idx = data.keywords.indexOf(kw);
+        const idx = data.keywords.findIndex(k => canonicalKeyword(k) === kw);
         if (idx !== -1) {
           data.keywords.splice(idx, 1);
           save();
           renderAll();
           setStatus(`Removed “${kw}” from the blacklist.`);
+        } else {
+          setStatus(`“${kw}” is no longer in the blacklist.`);
         }
       }
       if (row) {
@@ -1045,6 +1085,12 @@ function measureFeedDiversity() {
 }
 
 function runSubscriptionSynthesize() {
+  // Single-scan guard MUST come first: activating a new tab tears the popup down,
+  // so any UI mutation before this check would leave the button disabled forever
+  // with no handler left to finish the scan.
+  if (subSynthBusy) return;
+  subSynthBusy = true;
+
   const btn = document.getElementById('aiSubSynthBtn');
   const card = document.getElementById('aiSubResultBox');
   if (btn) {
@@ -1052,13 +1098,18 @@ function runSubscriptionSynthesize() {
     btn.innerHTML = '<span>🔭 Scanning your subscriptions...</span>';
   }
   if (card) card.style.display = 'none';
-  if (subSynthBusy) return; // single-scan guard: one scan at a time, no tab stacking
-  subSynthBusy = true;
 
   let createdTabId = null;
   let prevActiveTabId = null;
 
   const releaseCreatedTab = (keepOpen) => {
+    // Every terminal path (success, scrape failure, synthesis failure, tab
+    // create/load failure) funnels through here, so this is the one place that
+    // must re-arm the button — the success path never calls finishSubSynth().
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = '<span>🔭 Synthesize Rules from My Subscriptions</span>';
+    }
     if (createdTabId != null) {
       if (keepOpen) {
         // Kept open for the user to act on (sign-in wall): give it focus so they
@@ -1095,7 +1146,7 @@ let synthAttempts = 0;
       chrome.runtime.sendMessage({
         type: 'AI_SYNTHESIZE_SUBSCRIPTION_RULES',
         channels: res.channels,
-        modelChoice: data.aiModel
+        modelChoice: currentAiModelChoice()
       }, (aiRes) => {
         if (!aiRes || !aiRes.ok || !Array.isArray(aiRes.keywords)) {
           // MV3 service-worker message channels can drop a response once —
@@ -1202,7 +1253,12 @@ let synthAttempts = 0;
       });
     } catch (_) {}
     try {
-      chrome.tabs.create({ url: SUBSCRIPTIONS_URL, active: true }, async (tab) => {
+      // active: false is required, not cosmetic — activating the tab closes the
+      // MV3 popup instantly, so the user never sees the progress or the result
+      // and every tab-activation would leave the scan orphaned. The scrape runs
+      // in the content script of the background tab (it reads the hydrated DOM
+      // and retries while the SPA fills in), so it completes unobserved.
+      chrome.tabs.create({ url: SUBSCRIPTIONS_URL, active: false }, async (tab) => {
         if (chrome.runtime?.lastError || !tab || tab.id == null) {
           finishSubSynth(btn, 'Could not open a YouTube tab. Check your browser permissions and try again.');
           releaseCreatedTab(false);
@@ -1215,9 +1271,11 @@ let synthAttempts = 0;
           releaseCreatedTab(false);
           return;
         }
-        // Let the SPA hydrate its channel grid before scraping. Background tabs
-        // get throttled and never build the grid — that's why the scan used to
-        // report "no subscriptions" even while signed in.
+        // Let the SPA hydrate its channel grid before scraping. The content
+        // script re-collects from the DOM on every pass, and both the in-page
+        // scraper and tryScrape below retry while the grid is still filling, so
+        // a background tab that hydrates late is picked up rather than reported
+        // as "no subscriptions".
         await sleep(1500);
         tryScrape(createdTabId, 8, () => {
           finishSubSynth(btn, 'Could not read the subscriptions list after the page loaded. Close the extra tab and press Scan again.');
@@ -1478,17 +1536,17 @@ function initAiGuardian() {
           const opt = document.createElement('option');
           opt.value = m;
           opt.textContent = m;
-          const current = (data.aiModel || '').trim().toLowerCase();
-          const candidate = m.trim().toLowerCase();
+          const current = canonicalKeyword(data.aiModel);
+          const candidate = canonicalKeyword(m);
           if (current && (candidate === current || candidate.startsWith(current + ':') || current.startsWith(candidate + ':'))) {
             opt.selected = true;
           }
           modelSelect.appendChild(opt);
         });
-        if (modelSelect.value) {
-          data.aiModel = modelSelect.value;
-          save();
-        }
+        // Load populates the UI from storage; it must not write back. Saving here
+        // clobbered a stored model (e.g. "heuristic") with whatever the browser
+        // happened to auto-select, and re-broadcast RULES_UPDATED on every popup
+        // open for a dropdown the user never touched.
         modelSelect.addEventListener('change', () => {
           data.aiModel = modelSelect.value;
           save();
@@ -1545,7 +1603,7 @@ function initAiGuardian() {
       synthBtn.innerHTML = '<span>⚡ Reading mind & synthesizing...</span>';
       if (resultBox) resultBox.style.display = 'none';
 
-      const chosenModel = (modelSelect && modelSelect.value) ? modelSelect.value : (data.aiModel || '');
+      const chosenModel = currentAiModelChoice();
       if (chosenModel) {
         data.aiModel = chosenModel;
         save();
@@ -1558,6 +1616,13 @@ function initAiGuardian() {
       }, (res) => {
         synthBtn.disabled = false;
         synthBtn.innerHTML = '<span>🔮 Synthesize Rules from My Mind</span>';
+
+        // Unread lastError: the "no response" case used to reach the generic
+        // prompt error below, telling the user to fix a prompt that was fine.
+        if (chrome.runtime?.lastError) {
+          alert('The background AI worker did not respond. Reload the extension, then try again.');
+          return;
+        }
 
         if (res && res.ok && Array.isArray(res.keywords)) {
           const added = injectRulesIntoBlacklist({ keywords: res.keywords, regex: res.regex });
@@ -1599,6 +1664,17 @@ function initAiGuardian() {
   }
 
   renderAiLog();
+
+  // The Autonomous Guardian appends to aiLog from the content script / worker
+  // while the popup is open, so the log rendered once above was frozen for the
+  // life of the popup. Re-render on the storage event that other contexts write.
+  try {
+    chrome.storage.onChanged.addListener((changes, area) => {
+      if (area !== 'local' || !changes || !changes.aiLog) return;
+      data.aiLog = Array.isArray(changes.aiLog.newValue) ? changes.aiLog.newValue : [];
+      renderAiLog();
+    });
+  } catch (_) {}
 }
 
 function renderAiLog() {

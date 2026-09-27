@@ -6,7 +6,9 @@
 # Generates a clean .zip distribution package suitable for GitHub Releases or Chrome Web Store.
 
 param (
-    [string]$OutputDir = "."
+    # Default to the script's own folder instead of the caller's CWD, so artifacts
+    # always land next to the extension no matter where the script is invoked from.
+    [string]$OutputDir = $PSScriptRoot
 )
 
 $ErrorActionPreference = "Stop"
@@ -43,7 +45,11 @@ $essentialFiles = @(
     "icon128.png",
     "install.bat",
     "LICENSE",
-    "README.md"
+    "README.md",
+    "PRIVACY.md",
+    "CHANGELOG.md",
+    "CONTRIBUTING.md",
+    "ZEN-INSTALL.md"
 )
 
 Write-Host "`n[i] Verifying essential package files..." -ForegroundColor Yellow
@@ -85,6 +91,31 @@ function Write-ManifestJson {
     [System.IO.File]::WriteAllText($Path, $json, (New-Object System.Text.UTF8Encoding($false)))
 }
 
+function Copy-FileAtomic {
+    param([string]$SourcePath, [string]$DestinationPath)
+    # Stage the copy in a temp file inside the destination folder, then swap it in
+    # with a single rename. A copy interrupted midway (crash, Ctrl-C, killed shell)
+    # can then only ever damage the temp file - a plain Copy-Item -Force over an
+    # existing artifact would leave a truncated/corrupt xpi in its place.
+    # .NET resolves relative paths against the process CWD, not the PowerShell
+    # location, so root the destination up front or the swap lands in the wrong place.
+    $DestinationPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($DestinationPath)
+    $destinationDir = Split-Path -Parent $DestinationPath
+    if (-not $destinationDir) {
+        $destinationDir = (Get-Location).ProviderPath
+    }
+    $tempPath = Join-Path $destinationDir ".$([System.IO.Path]::GetFileName($DestinationPath)).$PID.tmp"
+    try {
+        Copy-Item -Path $SourcePath -Destination $tempPath -Force
+        [System.IO.File]::Move($tempPath, $DestinationPath, $true)
+    }
+    finally {
+        if (Test-Path $tempPath) {
+            Remove-Item -Force $tempPath -ErrorAction SilentlyContinue
+        }
+    }
+}
+
 # 4. Build dist/chromium (unpacked) + dist/chromium.zip
 $distDir = Join-Path $PSScriptRoot "dist"
 if (Test-Path $distDir) {
@@ -110,7 +141,7 @@ foreach ($file in $extensionFiles) {
 $foxZip = Join-Path $distDir "firefox.zip"
 $foxXpi = Join-Path $distDir "firefox.xpi"
 Compress-Archive -Path "$foxDir\*" -DestinationPath $foxZip -CompressionLevel Optimal
-Copy-Item -Force $foxZip $foxXpi
+Copy-FileAtomic -SourcePath $foxZip -DestinationPath $foxXpi
 Write-Host "[OK] Firefox build -> dist/firefox/ + dist/firefox.zip + dist/firefox.xpi" -ForegroundColor Green
 
 # 6. Refresh the ZEN-INSTALL.md convenience files so the doc stays accurate:
@@ -125,18 +156,25 @@ foreach ($file in $extensionFiles) {
     Copy-Item -Path (Join-Path $PSScriptRoot $file) -Destination $zenDir -Force
 }
 Write-ManifestJson -ManifestObj $firefoxManifest -Path (Join-Path $PSScriptRoot "manifest-firefox.json")
-Copy-Item -Force $foxZip (Join-Path $PSScriptRoot "blacklist-firefox.zip")
-Copy-Item -Force $foxZip (Join-Path $PSScriptRoot "blacklist-firefox.xpi")
-Copy-Item -Force $foxZip (Join-Path $PSScriptRoot "blacklist-firefox.jar")
+Copy-FileAtomic -SourcePath $foxZip -DestinationPath (Join-Path $PSScriptRoot "blacklist-firefox.zip")
+Copy-FileAtomic -SourcePath $foxZip -DestinationPath (Join-Path $PSScriptRoot "blacklist-firefox.xpi")
+Copy-FileAtomic -SourcePath $foxZip -DestinationPath (Join-Path $PSScriptRoot "blacklist-firefox.jar")
 Write-Host "[OK] Zen helpers refreshed -> zen-unpacked/ + blacklist-firefox.* + manifest-firefox.json" -ForegroundColor Green
 
 # 7. Build the classic release zip (docs + install.bat) for GitHub Releases / Chrome Web Store
+# Root the output path first: the default is $PSScriptRoot, but an explicit -OutputDir
+# may be relative and the atomic file swap below resolves paths against the process CWD.
+if (-not [System.IO.Path]::IsPathRooted($OutputDir)) {
+    $OutputDir = [System.IO.Path]::GetFullPath((Join-Path (Get-Location).ProviderPath $OutputDir))
+}
+if (-not (Test-Path $OutputDir)) {
+    New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
+}
 $zipName = "YouTube-Blacklister-v$extVersion.zip"
 $zipPath = Join-Path $OutputDir $zipName
 
 if (Test-Path $zipPath) {
-    Write-Host "`n[!] Existing package found. Overwriting $zipName..." -ForegroundColor DarkYellow
-    Remove-Item -Force $zipPath
+    Write-Host "`n[!] Existing package found. Replacing $zipName atomically..." -ForegroundColor DarkYellow
 }
 
 $stagingDir = Join-Path ([System.IO.Path]::GetTempPath()) "yt_blacklister_build_$extVersion"
@@ -150,8 +188,25 @@ try {
         Copy-Item -Path (Join-Path $PSScriptRoot $file) -Destination (Join-Path $stagingDir $file)
     }
 
+    # The staging copy above pulls in the *universal* root manifest.json (key +
+    # browser_specific_settings + Firefox "background.scripts"). Overwrite it with the
+    # same stripped Chromium manifest that dist/chromium ships, so the release zip
+    # contains exactly what dist/chromium contains.
+    Write-ManifestJson -ManifestObj $chromiumManifest -Path (Join-Path $stagingDir "manifest.json")
+
     Write-Host "`n[i] Compressing package into $zipName..." -ForegroundColor Cyan
-    Compress-Archive -Path "$stagingDir\*" -DestinationPath $zipPath -CompressionLevel Optimal
+    # Compress into a temp .zip beside the target, then swap it in with one rename:
+    # an interrupted compression must never leave a truncated release zip behind.
+    $zipTempPath = Join-Path $OutputDir ".$zipName.partial.zip"
+    try {
+        Compress-Archive -Path "$stagingDir\*" -DestinationPath $zipTempPath -CompressionLevel Optimal
+        [System.IO.File]::Move($zipTempPath, $zipPath, $true)
+    }
+    finally {
+        if (Test-Path $zipTempPath) {
+            Remove-Item -Force $zipTempPath -ErrorAction SilentlyContinue
+        }
+    }
 
     $zipInfo = Get-Item $zipPath
     $sizeKb = [math]::Round($zipInfo.Length / 1KB, 2)

@@ -159,10 +159,8 @@ function loadSettings() {
             if (isViewCountOrTimeText(raw)) return false;
             // Reject entries that are just digits + letters (like "3w ago" that slipped through as "3w")
             if (/^\d+[smhdwy]$/i.test(raw)) return false;
-            // Reject 1-2 char entries (too short to be a real channel name)
-            if (raw.length <= 2) return false;
-            // Reject single-letter entries and standalone numbers
-            if (/^\d+$/.test(raw)) return false;
+            // Channel names can legitimately be short ("DJ", "AI") or numeric ("1900"), so
+            // do NOT reject by length or bare digits — those rules dropped real channels.
             return true;
           });
         // Persist the cleaned channels list back to storage if we removed anything
@@ -210,12 +208,22 @@ function saveSettings() {
       keywords: settings.keywords,
       whitelistChannels: settings.whitelistChannels,
       blockShorts: settings.blockShorts,
+      shortsSubOnly: settings.shortsSubOnly,
       blockCommunity: settings.blockCommunity,
       autoDubMode: settings.autoDubMode,
       chipRescue: settings.chipRescue,
       newToYouAuto: settings.newToYouAuto,
       enableQuickBlock: settings.enableQuickBlock,
-      triggerServerFeedback: settings.triggerServerFeedback
+      triggerServerFeedback: settings.triggerServerFeedback,
+      aiAutonomous: settings.aiAutonomous,
+      aiSensitivity: settings.aiSensitivity,
+      aiModel: settings.aiModel,
+      aiTastePrompt: settings.aiTastePrompt,
+      aiSubscriptionProfile: settings.aiSubscriptionProfile,
+      aiDebaitTitles: settings.aiDebaitTitles,
+      aiDebaitModel: settings.aiDebaitModel,
+      tldwEnabled: settings.tldwEnabled,
+      huntMode: settings.huntMode
     });
   } catch (_) {}
 }
@@ -366,6 +374,14 @@ function getAiFeatureCss() {
       .nyt-debait-badge:hover {
         opacity: 1;
         transform: scale(1.18);
+      }
+      .nyt-debait-title {
+        /* De-baiting strips YouTube's inner title <a>, which is the element
+           that actually carries color: var(--yt-spec-text-primary). A bare
+           text node then inherits the browser default (black) and vanishes
+           on dark themes. Pin the text back to the theme variable with an
+           inherit fallback for any layout that lacks it. */
+        color: var(--yt-spec-text-primary, inherit);
       }
       .nyt-tldw-btn {
         position: absolute;
@@ -647,7 +663,15 @@ function hasWordBoundaryKeyword(text, keyword) {
     const cleanKw = cleanChannelText(keyword);
     const cleanT = cleanChannelText(text);
     if (cleanKw.length > 200) return cleanT.includes(cleanKw.toLowerCase());
-    return new RegExp(`\\b${escapeRegExp(cleanKw)}\\b`, 'i').test(cleanT);
+    // \b is ASCII-word only: it can NEVER match keywords that start or end
+    // with a non-word character, and it is a no-op after those characters.
+    // Guard the boundary chars first so "#music" / "C++" stay matchable.
+    const first = cleanKw[0], last = cleanKw[cleanKw.length - 1];
+    const fB = /[a-zA-Z0-9_]/.test(first);
+    const lB = /[a-zA-Z0-9_]/.test(last);
+    const start = fB ? '\\b' : '';
+    const end = lB ? '\\b' : '';
+    return new RegExp(`${start}${escapeRegExp(cleanKw)}${end}`, 'i').test(cleanT);
   } catch (_) {
     return text.toLowerCase().includes(keyword.toLowerCase());
   }
@@ -687,16 +711,16 @@ function extractChannelNamesFromByline(text) {
   // Detect YouTube's multi-collaborator overlay: "YouTube and 2 more"
   const andMoreMatch = clean.match(/^(.+?)(?:,\s*|\s+)\s*(?:and|&)\s+\d+\s+more$/i);
   if (andMoreMatch) {
-    // YouTube's "X and N more" overlay — extract the real channel name (X),
-    // NOT the full overlay text. Do NOT add "YouTube and 2 more" as a name.
-    const main = cleanChannelText(andMoreMatch[1]);
-    if (main) names.add(main);
-    // Also extract individual collaborators from "A & B and N more" -> "A", "B"
+    // Split on separators ONLY (commas and "and"/"&") — never on raw whitespace,
+    // or "Mark Rober" would split into "Mark" + "Rober". The FIRST part is the
+    // primary display name (X in "X, Y and N more"); extras are collaborators —
+    // do NOT add the raw regex group (it can be the whole joined string).
     const beforeMore = clean.replace(/(?:,\s*|\s+)\s*(?:and|&)\s+\d+\s+more$/i, '');
-    const parts = beforeMore.split(/,\s*(?:and|&)\s*|\s+(?:and|&)\s*|,|\s+/i)
+    const parts = beforeMore.split(/\s*,\s*|\s+(?:and|&)\s+/i)
       .map(p => cleanChannelText(p))
       .filter(p => p.length > 2 && !isViewCountOrTimeText(p));
-    for (const p of parts) { if (p) names.add(p); }
+    if (parts[0]) names.add(parts[0]);
+    for (const p of parts) { if (p && !names.has(p)) names.add(p); }
   } else {
     // Not an "X and N more" overlay — the clean text is the channel name itself.
     // But still skip it if it looks like view-count/time text.
@@ -764,9 +788,8 @@ function getChannelName(card) {
     const t = cleanChannelText(el.textContent);
     if (t && !isViewCountOrTimeText(t)) {
       const decomp = extractChannelNamesFromByline(t);
-      if (decomp.length > 1) return decomp[1];
-      // Single-collaborator overlay "X and N more": decomp[0] is the REAL name (X),
-      // never return the raw overlay text.
+      // decomp[0] is the MAIN channel ("X" in "X and N more"); it is the
+      // primary display name. Never return decomp[1] — that's a collaborator.
       return decomp[0] || t;
     }
     const title = el.getAttribute('title') || el.getAttribute('aria-label') || '';
@@ -998,6 +1021,24 @@ function filterShortsToSubscriptions() {
   }
 }
 
+// When shortsSubOnly is turned OFF (or subscriptions change), restore every
+// shorts reel and shelf that filterShortsToSubscriptions hid.
+function unhideShorts() {
+  const reels = document.querySelectorAll(
+    'ytd-reel-item-renderer, yt-shorts-lockup-view-model, ' +
+    'ytd-rich-item-renderer, ytd-reel-shelf-renderer, ' +
+    'ytd-rich-shelf-renderer[is-shorts]'
+  );
+  for (let i = 0; i < reels.length; i++) {
+    const el = reels[i];
+    if (!el) continue;
+    // Only unhide what the shorts filter hid — never a channel/video blacklist.
+    if (el.dataset.hiddenByLocalBlacklist === 'true') {
+      unhideCardElement(el);
+    }
+  }
+}
+
 // ------------------------------------------------------------------
 // FEED DIVERSITY METER
 // ------------------------------------------------------------------
@@ -1082,11 +1123,10 @@ function unhideCardElement(card) {
 // ------------------------------------------------------------------
 // AUTO-DUBBED DETECTION
 // ------------------------------------------------------------------
-// "Auto-dubbed" is a BADGE, not part of the title. It can render on the
-// thumbnail overlay, under the title (metadata row), and on sidebar cards —
-// so detection must scan the whole card for badge-shaped elements and
-// aria-labels instead of relying on keyword scans of title text.
-const AUTO_DUB_BADGE_TEXT_RE = /dub(?:bed?)?\b/i; // "Auto-dubbed", "Dubbed", "Auto-dub", "Dub"
+// "Auto-dubbed" is a BADGE, not part of the title. YouTube's real badges are
+// "Auto-dubbed", "Auto-dub", "Dubbed", "Dubbed (English)". The bare word "Dub"
+// must NEVER match — "Go to channel Dub FM" is a channel name, not a badge.
+const AUTO_DUB_BADGE_TEXT_RE = /auto-?dub(?:bed)?\b|dubb?ed\b/i;
 
 function isAutoDubBadgeText(text) {
   return AUTO_DUB_BADGE_TEXT_RE.test(String(text || '').trim());
@@ -1106,21 +1146,21 @@ const AUTO_DUB_BADGE_SELECTORS = [
 // Returns any auto-dub badge text found on the card ('' if none).
 function cardAutoDubBadgeText(card) {
   if (!card) return '';
-  const found = [];
+  const found = new Set();
   try {
     // 1) aria-label carriers (badges expose their text via aria-label too)
     card.querySelectorAll('[aria-label]').forEach((el) => {
       const label = (el.getAttribute('aria-label') || '').trim();
-      if (label && isAutoDubBadgeText(label)) found.push(label);
+      if (label && isAutoDubBadgeText(label)) found.add(label);
     });
     // 2) badge-shaped elements (thumbnail overlay, metadata-row badges, sidebar)
     card.querySelectorAll(AUTO_DUB_BADGE_SELECTORS.join(','))
       .forEach((el) => {
         const t = (el.textContent || '').trim();
-        if (t && isAutoDubBadgeText(t) && !found.includes(t)) found.push(t);
+        if (t && isAutoDubBadgeText(t)) found.add(t);
       });
   } catch (_) {}
-  return found.join(' \u23e9 ');
+  return Array.from(found).join(' \u23e9 ');
 }
 
 // Pure, testable. autoDubMode:
@@ -1303,6 +1343,25 @@ function watchPageBlockDecision({ vid, channel, title, channels, whitelistChanne
   return { block: false, reason: null };
 }
 
+// Latch: only ONE watch-page escape may be scheduled. The watch-page guard
+// runs on every SPA navigation/finish AND the blacklist action can fire the
+// same escape — without the latch, stacked history.back() calls would eject
+// the user two pages deep instead of one.
+let watchRedirectPending = false;
+
+function redirectAwayFromWatchPage(ms) {
+  if (watchRedirectPending) return;
+  watchRedirectPending = true;
+  setTimeout(() => {
+    watchRedirectPending = false;
+    if (window.history.length > 1) {
+      window.history.back();
+    } else {
+      window.location.href = 'https://www.youtube.com/';
+    }
+  }, ms);
+}
+
 function checkCurrentWatchPageVideo() {
   if (!window.location.pathname.startsWith('/watch')) return;
 
@@ -1340,13 +1399,7 @@ function checkCurrentWatchPageVideo() {
       } catch (_) {}
 
       showToast(`Blacklisted video detected: ${channel || title || currentVid}`);
-      setTimeout(() => {
-        if (window.history.length > 1) {
-          window.history.back();
-        } else {
-          window.location.href = 'https://www.youtube.com/';
-        }
-      }, 700);
+      redirectAwayFromWatchPage(700);
     }
   } catch (_) {}
 }
@@ -1394,6 +1447,10 @@ function processFeed(force = false) {
   // (Global blockShorts mode is handled entirely by CSS and takes precedence.)
   if (settings.shortsSubOnly && !settings.blockShorts) {
     try { filterShortsToSubscriptions(); } catch (_) {}
+  } else if (!settings.blockShorts) {
+    // shortsSubOnly just turned OFF (or subscriptions changed): stop leaving
+    // earlier-hid shorts shelves permanently hidden.
+    try { unhideShorts(); } catch (_) {}
   }
 
   // End-screen cards on watch page
@@ -1500,14 +1557,15 @@ function runAiEvaluationBatch() {
           // Record in aiLog in storage
           try {
             chrome.storage.local.get(['aiLog'], (store) => {
-              const logs = Array.isArray(store.aiLog) ? store.aiLog : [];
+              if (chrome.runtime?.lastError) return;
+              const logs = Array.isArray(store && store.aiLog) ? store.aiLog : [];
               logs.unshift({
                 title: match.title,
                 channel: match.channel,
                 rationale: ev.rationale || 'Flagged by AI Guardian',
                 date: new Date().toISOString()
               });
-              chrome.storage.local.set({ aiLog: logs.slice(0, 30) });
+              chrome.storage.local.set({ aiLog: logs.slice(0, 30) }, () => { if (chrome.runtime?.lastError) return; });
             });
           } catch (_) {}
 
@@ -1604,16 +1662,19 @@ async function scrapeSubscriptions() {
     'Sign in to confirm you\u2019re not a bot',
     'Sign in to confirm you are not a bot',
     'ytd-consent-bump-renderer',
-    'aria-label="Sign in to confirm',
     'Sign in to subscribe'
   ];
 
   const signedIn = () => {
     const body = document.body ? document.body.innerText : '';
-    const hasSignInWall = SIGN_IN_MARKERS.some(m => m.startsWith('aria-label=')
-      ? !!document.querySelector(m.slice(12))
+    // aria-label markers are matched with a REAL selector (the old string was
+    // truncated at the quote and `document.querySelector` threw on it).
+    if (document.querySelector(
+      '[aria-label^="Sign in to confirm"], [aria-label*="Sign in to confirm"], #button[aria-label*="Sign in"]'
+    )) return false;
+    return !SIGN_IN_MARKERS.some(m => m === 'ytd-consent-bump-renderer'
+      ? !!document.querySelector('ytd-consent-bump-renderer')
       : body.includes(m));
-    return !hasSignInWall;
   };
 
   // YouTube periodically reshapes this page; tiered selectors keep the scrape working
@@ -1700,12 +1761,17 @@ document.addEventListener('mouseover', (e) => {
   );
   if (!thumb) return;
 
-  try {
-    const pos = window.getComputedStyle(thumb).position;
-    if (pos === 'static') {
-      thumb.style.position = 'relative';
-    }
-  } catch (_) {}
+  // Mouseover fires on every element transition — do the expensive layout
+  // probe ONCE per thumbnail node, not on every move across its children.
+  if (thumb.dataset.nytPosFixed !== '1') {
+    try {
+      const pos = window.getComputedStyle(thumb).position;
+      if (pos === 'static') {
+        thumb.style.position = 'relative';
+      }
+      thumb.dataset.nytPosFixed = '1';
+    } catch (_) {}
+  }
 
   if (settings.enableQuickBlock !== false && !card.querySelector('.nyt-quick-block-btn')) {
     const btn = document.createElement('div');
@@ -1734,7 +1800,7 @@ document.addEventListener('mouseover', (e) => {
     thumb.appendChild(btn);
   }
 
-  if (settings.huntMode && !card.querySelector('.nyt-hunt-prey')) {
+  if (settings.huntMode && (!card._nytHuntPrey || !card._nytHuntPrey.isConnected)) {
     huntAddPrey(card, thumb);
   }
 
@@ -1754,6 +1820,20 @@ document.addEventListener('mouseover', (e) => {
       ev.stopPropagation();
     }, true);
     thumb.appendChild(tldwBtn);
+  }
+}, { passive: true });
+
+// Clear hoveredVideoCard when the pointer leaves the card subtree entirely —
+// otherwise the keyboard 'B' shortcut can blacklist a card the user is no
+// longer hovering (and hunt prey stays attached to a stale hover target).
+document.addEventListener('mouseout', (e) => {
+  if (!hoveredVideoCard) return;
+  const t = e.target;
+  if (!t || !t.closest) return;
+  if (t.closest(VIDEO_CARD_SELECTORS)) return; // still inside some card
+  const rel = e.relatedTarget;
+  if (!rel || !rel.closest || !hoveredVideoCard.contains(rel)) {
+    hoveredVideoCard = null;
   }
 }, { passive: true });
 
@@ -1956,11 +2036,29 @@ function closeOpenMenu() {
   } catch (_) {}
 }
 
+// Sticky quick-block: cards that kept re-appearing after being un-hidden must
+// snap to hidden as soon as they get the chance.
+function snapUnhiddenBlockedCards() {
+  if (!settings || !Array.isArray(settings.channels)) return;
+  const cards = document.querySelectorAll(VIDEO_CARD_SELECTORS);
+  for (let i = 0; i < cards.length; i++) {
+    const card = cards[i];
+    if (!card || card.dataset.hiddenByLocalBlacklist === 'true') continue;
+    delete card.dataset.lastSignature;
+    if (channelMatches(card, settings.channels)) {
+      hideCardElement(card);
+    }
+  }
+}
+
 function requestNativeServerFeedback() {
   if (!settings.triggerServerFeedback) return false;
   try {
-    const scope = document.querySelector('ytd-popup-container') || document.body;
-    const items = scope.querySelectorAll(
+    // Scope to the OPEN menu only — a visibility-blind scan of the whole
+    // popup container can click hidden menu items from a previously closed menu.
+    const container = findOpenMenuContainer() || findOpenSheetContainer();
+    if (!container) return false;
+    const items = container.querySelectorAll(
       '[role="menuitem"], ytd-menu-service-item-renderer, yt-list-item-view-model'
     );
     for (const item of items) {
@@ -2001,7 +2099,6 @@ function blacklistActiveChannel(targetCard) {
   const primaryName = channel || (cardKeys.find(k => !k.startsWith('youtu') && k.length > 2 && !isViewCountOrTimeText(k))) || vid || 'Unknown Channel';
   let addedAny = false;
   const newlyAddedKeys = [];
-  const normalizedVideoId = vid.toLowerCase();
 
   // Only add the primary channel identity to the blocklist — NOT every cardKey.
   // Card keys include view-counts, timestamps, split tokens, and other noise
@@ -2012,13 +2109,9 @@ function blacklistActiveChannel(targetCard) {
     newlyAddedKeys.push(norm);
     addedAny = true;
   }
-  // If YouTube did not expose a channel identity, preserve a useful fallback
-  // by blocking only this video instead of adding opaque IDs beside channels.
-  if (!channel && !primaryName && vid && !settings.channels.includes(normalizedVideoId)) {
-    settings.channels.push(normalizedVideoId);
-    newlyAddedKeys.push(normalizedVideoId);
-    addedAny = true;
-  }
+  // (The previous "block only this video when the channel is unknown" fallback
+  // was dead code: primaryName already falls back to vid, so the first branch
+  // above handles it. Removed.)
 
   if (addedAny) {
     saveSettings();
@@ -2055,35 +2148,35 @@ function blacklistActiveChannel(targetCard) {
           const video = document.querySelector('video');
           if (video) video.pause();
         } catch (_) {}
-        setTimeout(() => {
-          if (window.history.length > 1) {
-            window.history.back();
-          } else {
-            window.location.href = 'https://www.youtube.com/';
-          }
-        }, 500);
+        redirectAwayFromWatchPage(500);
       }
     } catch (_) {}
   }
 
   const serverFeedbackSent = requestNativeServerFeedback();
   closeOpenMenu();
+  // Snap any previously un-hidden blocked cards back to hidden after the
+  // sticker (SPA re-render) wiped their inline styles.
+  snapUnhiddenBlockedCards();
 
+  // Undo is only honest when THIS action added a new channel and hid cards.
+  // If the channel was already on the list, undoing "unblocks" nothing — and
+  // decrementing the counter would corrupt the all-time stats.
   const handleUndo = () => {
     if (newlyAddedKeys.length) {
       settings.channels = settings.channels.filter(k => !newlyAddedKeys.includes(k));
       saveSettings();
+      safeSendRuntimeMessage({ type: 'INCREMENT_BLOCKED', inc: -hidCount });
     }
     unhideCardElement(card);
     delete card.dataset.lastSignature;
     processFeed(true);
-    safeSendRuntimeMessage({ type: 'INCREMENT_BLOCKED', inc: -hidCount });
     showToast(`Unblocked: ${primaryName}`);
   };
 
   showToast(
     `Blacklisted: ${primaryName}${serverFeedbackSent ? ' (YouTube feedback sent)' : ''}`,
-    handleUndo
+    addedAny ? handleUndo : null
   );
 }
 
@@ -2286,6 +2379,7 @@ function showDebaitState(card, state, neutral) {
     if (!card.dataset.originalTitle) {
       card.dataset.originalTitle = el.textContent.trim();
     }
+    card.dataset.neutralTitle = neutral;
     card.dataset.debaitState = 'ai';
     el.textContent = '';
 
@@ -2303,12 +2397,37 @@ function showDebaitState(card, state, neutral) {
     }, true);
 
     el.appendChild(badge);
-    el.appendChild(document.createTextNode(' ' + neutral));
+    const titleSpan = document.createElement('span');
+    titleSpan.className = 'nyt-debait-title';
+    titleSpan.textContent = ' ' + neutral;
+    el.appendChild(titleSpan);
   } else {
     const orig = card.dataset.originalTitle || el.textContent.trim();
     card.dataset.originalTitle = orig;
+    const neutral = card.dataset.neutralTitle || '';
     card.dataset.debaitState = 'original';
-    el.textContent = orig;
+    const restoreSpan = document.createElement('span');
+    restoreSpan.className = 'nyt-debait-title';
+    restoreSpan.textContent = orig;
+    el.textContent = '';
+    el.appendChild(restoreSpan);
+    // Two-way toggle: show a ✨ badge so "reveal original" isn't a one-way
+    // trap — click it again to re-apply the neutral title.
+    if (neutral) {
+      const badge = document.createElement('span');
+      badge.className = 'nyt-debait-badge';
+      badge.textContent = '✨';
+      badge.setAttribute('role', 'button');
+      badge.setAttribute('title', 'Re-apply the de-baited neutral title');
+      badge.setAttribute('aria-label', 'Re-apply neutral title');
+      badge.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        showDebaitState(card, 'ai', card.dataset.neutralTitle || neutral);
+      }, true);
+      el.appendChild(badge);
+    }
   }
 }
 
@@ -2334,6 +2453,9 @@ function openTldw(card) {
   closeTldwModal();
   const host = document.createElement('div');
   host.className = 'nyt-tldw-overlay';
+  // Concurrency guard: the modal must only render the video it was opened for.
+  // A slow AI response from a previous video must never overwrite a newer modal.
+  host.dataset.tldwFor = String(vid || title || '');
   host.addEventListener('mousedown', (e) => {
     if (e.target === host) closeTldwModal();
   });
@@ -2400,6 +2522,11 @@ async function analyzeTldw(ctx) {
     }, (res) => {
       if (chrome.runtime?.lastError) res = null;
       try {
+        // Stale response? The user already opened TL;DW for another video (or
+        // the modal was closed) — never let the old transcript overwrite it.
+        if (!ctx.host || !ctx.host.isConnected) return;
+        if (ctx.host !== tldwModalHost) return;
+        if (ctx.host.dataset.tldwFor !== String(ctx.vid || ctx.title || '')) return;
         renderTldwResult(ctx, res, { transcript, captionsFound });
       } catch (_) {}
     });
@@ -2408,7 +2535,10 @@ async function analyzeTldw(ctx) {
 
   if (!sent) {
     try {
-      renderTldwResult(ctx, null, { transcript, captionsFound });
+      if (ctx.host && ctx.host.isConnected && ctx.host === tldwModalHost &&
+          ctx.host.dataset.tldwFor === String(ctx.vid || ctx.title || '')) {
+        renderTldwResult(ctx, null, { transcript, captionsFound });
+      }
     } catch (_) {}
   }
 }
@@ -2728,6 +2858,21 @@ function start() {
     });
 
     observer.observe(document.body, { childList: true, subtree: true });
+
+    // SEV-4 stale settings: popup changes made while this tab was backgrounded
+    // (blacklist via another tab, toggle changes) were never re-read. Re-load on
+    // every return to visibility and re-apply the CSS/hunt state/card pass.
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState !== 'visible') return;
+      loadSettings().then(() => {
+        try {
+          injectBlacklistStyles();
+          refreshSubscriptionKeySet();
+          syncHuntMode();
+          processFeed(true);
+        } catch (_) {}
+      });
+    }, { passive: true });
   });
 }
 
@@ -2747,6 +2892,9 @@ let huntScore = 0;
 let huntBest = 0;
 let huntHits = 0;
 let huntShots = 0;
+// Becomes true on the first hit or miss of a session. huntPersist is gated on
+// it so a start→stop cycle with zero shots can never zero the stored score.
+let huntTouched = false;
 
 function ensureHuntStyles() {
   try {
@@ -2821,6 +2969,7 @@ function huntUpdateHud(note) {
 function huntPersist() {
   try {
     if (!isExtensionValid()) return;
+    if (!huntTouched) return; // never write a zeroed/unchanged score over real progress
     if (huntScore > huntBest) huntBest = huntScore;
     chrome.storage.local.set({ nyt_huntScore: huntScore, nyt_huntBest: huntBest });
   } catch (_) {}
@@ -2829,7 +2978,10 @@ function huntPersist() {
 function huntAddPrey(card, thumb) {
   try {
     if (!huntActive || !card || !thumb) return;
-    if (card.querySelector('.nyt-hunt-prey')) return;
+    // Prey elements live on document.body (NOT inside the card), so
+    // card.querySelector('.nyt-hunt-prey') can never find them. Track the
+    // per-card reference directly or every 550ms roam tick spawns a new prey.
+    if (card._nytHuntPrey && card._nytHuntPrey.isConnected) return;
     const el = document.createElement('div');
     el.className = 'nyt-hunt-prey';
     el.textContent = '⛔';
@@ -2842,6 +2994,7 @@ function huntAddPrey(card, thumb) {
     el.addEventListener('click', stopNav, true);
     el._nytHuntCard = card;
     el._nytHuntThumb = thumb;
+    card._nytHuntPrey = el;
     document.body.appendChild(el);
     huntMovePreyEl(el, thumb);
   } catch (_) {}
@@ -2882,6 +3035,7 @@ function huntRoamAll() {
       try {
         const card = el._nytHuntCard;
         if (!el.isConnected || !card || card.dataset.hiddenByLocalBlacklist === 'true') {
+          if (card) card._nytHuntPrey = null;
           if (el.parentNode) el.parentNode.removeChild(el);
           return;
         }
@@ -2889,6 +3043,7 @@ function huntRoamAll() {
           'ytd-thumbnail, #thumbnail, a#thumbnail, .yt-lockup-view-model-wiz__thumbnail, yt-thumbnail-view-model'
         );
         if (!thumb) {
+          card._nytHuntPrey = null;
           if (el.parentNode) el.parentNode.removeChild(el);
           return;
         }
@@ -2905,7 +3060,7 @@ function huntRoamAll() {
     try {
       const hc = hoveredVideoCard;
       if (hc && hc.isConnected && hc.offsetHeight > 0 && hc.dataset.hiddenByLocalBlacklist !== 'true') {
-        if (!hc.querySelector('.nyt-hunt-prey')) {
+        if (!(hc._nytHuntPrey && hc._nytHuntPrey.isConnected)) {
           const thumb = hc.querySelector(
             'ytd-thumbnail, #thumbnail, a#thumbnail, .yt-lockup-view-model-wiz__thumbnail, yt-thumbnail-view-model'
           );
@@ -2919,6 +3074,7 @@ function huntRoamAll() {
 function huntHit(el) {
   try {
     if (!huntActive) return;
+    huntTouched = true;
     huntShots++;
     huntHits++;
     huntScore += 100;
@@ -2939,6 +3095,7 @@ function huntHit(el) {
 function huntMiss() {
   try {
     if (!huntActive) return;
+    huntTouched = true;
     huntShots++;
     huntScore = Math.max(0, huntScore - 10);
     huntUpdateHud('miss −10');
@@ -3010,11 +3167,13 @@ function huntStop() {
     document.removeEventListener('mousemove', huntOnRingMove, true);
     document.removeEventListener('mousedown', huntOnDown, true);
     try { document.body.classList.remove('nyt-hunting'); } catch (_) {}
-    try { document.querySelectorAll('.nyt-hunt-prey').forEach((el) => { if (el.parentNode) el.parentNode.removeChild(el); }); } catch (_) {}
+    try { document.querySelectorAll('.nyt-hunt-prey').forEach((el) => { if (el._nytHuntCard) el._nytHuntCard._nytHuntPrey = null; if (el.parentNode) el.parentNode.removeChild(el); }); } catch (_) {}
     try { if (huntHud && huntHud.parentNode) huntHud.parentNode.removeChild(huntHud); } catch (_) {}
     try { if (huntRing && huntRing.parentNode) huntRing.parentNode.removeChild(huntRing); } catch (_) {}
     huntHud = null;
     huntRing = null;
+    // Only persist if this session actually changed the score — a fresh
+    // start/stop with no hits or misses must NOT zero a stored high score.
     huntPersist();
   } catch (_) {}
 }
@@ -3123,9 +3282,14 @@ function removeChipRescueButton() {
   chipRescueButton = null;
 }
 
+// Bounded poll: never reschedule forever on a feed that never renders.
+const CHIP_RESCUE_MAX_POLLS = 8;
+let chipRescuePolls = 0;
+
 function initChipRescue() {
   removeChipRescueButton();
   if (chipRescueTimer) { clearTimeout(chipRescueTimer); chipRescueTimer = null; }
+  chipRescuePolls = 0;
   if (!settings.chipRescue || !isHomePath()) return;
 
   const check = () => {
@@ -3133,7 +3297,9 @@ function initChipRescue() {
     // Only judge once the home feed rendered — YouTube can attach chips a beat late.
     const feedCards = document.querySelectorAll(VIDEO_CARD_SELECTORS).length;
     if (!feedCards) {
-      chipRescueTimer = setTimeout(check, 4000);
+      if (chipRescuePolls++ < CHIP_RESCUE_MAX_POLLS) {
+        chipRescueTimer = setTimeout(check, 4000);
+      }
       return;
     }
 
@@ -3281,6 +3447,7 @@ if (typeof module !== 'undefined' && module.exports) {
     cleanChannelText,
     hasWordBoundaryKeyword,
     extractEntityKey,
+    extractChannelNamesFromByline,
     isAutoDubBadgeText,
     autoDubHideDecision,
     chipRescueState,

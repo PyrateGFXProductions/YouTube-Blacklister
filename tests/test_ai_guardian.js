@@ -48,7 +48,11 @@ function hasWordBoundaryKeyword(text, keyword) {
     const cleanKw = cleanChannelText(keyword);
     const cleanT = cleanChannelText(text);
     if (cleanKw.length > 200) return cleanT.includes(cleanKw.toLowerCase());
-    return new RegExp(`\\b${escapeRegExp(cleanKw)}\\b`, 'i').test(cleanT);
+    // Match content.js: \b only where a word char sits so "#music"/"C++" work.
+    const first = cleanKw[0], last = cleanKw[cleanKw.length - 1];
+    const start = /[a-zA-Z0-9_]/.test(first) ? '\\b' : '';
+    const end = /[a-zA-Z0-9_]/.test(last) ? '\\b' : '';
+    return new RegExp(`${start}${escapeRegExp(cleanKw)}${end}`, 'i').test(cleanT);
   } catch (_) {
     return text.toLowerCase().includes(keyword.toLowerCase());
   }

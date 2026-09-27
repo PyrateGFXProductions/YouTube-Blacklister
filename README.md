@@ -10,6 +10,10 @@
 </p>
 
 <p align="center">
+  <strong>Start on “New to you” · hide AI-voiced auto-dubs · de-bait clickbait titles · TL;DR any video · ⛔ Hunt Mode · 100% local</strong>
+</p>
+
+<p align="center">
   <a href="https://github.com/PyrateGFXProductions/YouTube-Blacklister/releases"><img src="https://img.shields.io/github/v/release/PyrateGFXProductions/YouTube-Blacklister?display_name=tag&style=for-the-badge" alt="Latest release"></a>
   <a href="https://developer.chrome.com/docs/extensions/develop/migrate/what-is-mv3"><img src="https://img.shields.io/badge/Manifest-V3-4285F4?style=for-the-badge&logo=googlechrome&logoColor=white" alt="Manifest V3"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge" alt="MIT license"></a>
@@ -31,7 +35,7 @@
 
 YouTube is spectacular at finding one more thing to show you. It is less useful when you have already decided that a channel, a recurring clickbait format, or a genre of recommendation is not for you.
 
-Always New To You adds the missing control layer. Block a creator with one click, filter a title pattern, whitelist the people you trust, clear out Shorts or community posts, and keep your entire setup in local browser storage. The result is a feed that gets quieter, more intentional, and much easier to enjoy.
+Always New To You adds the missing control layer. Block a creator with one click, filter a title pattern, whitelist the people you trust, clear out Shorts or community posts, start your Home feed on YouTube's fresh “New to you” surface, and keep your entire setup in local browser storage. The result is a feed that gets quieter, more intentional, and much easier to enjoy.
 
 ```text
 YouTube card appears
@@ -57,13 +61,26 @@ YouTube card appears
 | | Feature | Why it matters |
 | --- | --- | --- |
 | ⚡ | **Instant local blacklisting** | Hide a channel, handle, channel URL, or video ID directly in the page—without waiting for a recommendation model to catch up. |
+| 🔀 | **“New to you” home** | Start your Home feed on YouTube's freshest tab every visit, so the same videos stop reshuffling at you. |
 | 🖱️ | **Three ways to block** | Use the thumbnail control, the injected three-dot menu action, or press <kbd>B</kbd> while hovering a card. |
 | 🧠 | **Smart title rules** | Add word-boundary-aware keywords or full `/pattern/flags` regular expressions for recurring tropes and formats. |
 | ⭐ | **Whitelist protection** | Keep favorite creators visible even when a broad keyword rule would otherwise match. |
-| 🧹 | **Feed decluttering** | Hide Shorts shelves and community posts when you want a calmer browse. |
+| 🧹 | **Feed decluttering** | Hide Shorts shelves, collapse community posts, or keep Shorts down to only your subscriptions. |
 | ↩️ | **Undo without regret** | Manual blocks show a five-second Undo option, so a misclick is never permanent. |
-| 💾 | **Portable setup** | Export or import your rules and settings as JSON. |
+| 🎬 | **Auto-Dubbed triage** | Hide every AI-voiced video—or keep only your subscriptions' dubs—with one 3-mode toggle. |
+| 📊 | **Diversity Meter** | See at a glance how much of your visible feed is genuinely subscribed vs. the algorithm's pool. |
+| ✏️ | **Edit rules in place** | Rename any saved channel, keyword, or whitelist rule directly in the list. |
+| 🗄️ | **Backup & Restore page** | Download your whole setup as one JSON file; restore it anywhere in one click. |
+| 💾 | **Portable setup** | Export or import your rules and settings as JSON—never vendor-locked. |
 | 🎯 | **Hunt Mode** | Turn a quick browsing break into a small local minigame—no blacklist changes, just score, accuracy, and a moving target. |
+
+---
+
+## 🔀 Your home, on “New to you”
+
+YouTube's Home page mostly re-promotes channels it already knows you watch—so after you purge the promoted tier you can be left with reshuffled repeats instead of discoveries. **“New to you” is the one surface YouTube built to surface channels you have not encountered before**, and Always New To You can make it your default.
+
+When enabled, every time YouTube renders the Home chip bar the extension clicks that chip for you: no reloads, no duplicate clicks, and a silent no-op in accounts or regions where YouTube does not offer the chip. It is a plain local click on YouTube's own button—nothing is rewritten, nothing leaves your device, and the toggle is yours (off by default, on with one switch in Settings).
 
 ---
 
@@ -96,7 +113,7 @@ The whitelist wins. Add a trusted channel to **Whitelist** and it remains visibl
 
 ### 🧹 Clean the feed, not just the channels
 
-The Settings tab includes switches for hiding Shorts shelves and community posts. It also lets you turn the quick-block control, TL;DW inspector, title de-baiter, server feedback, and Hunt Mode on or off independently.
+The Settings tab includes switches for hiding Shorts shelves, collapsing community posts, and trimming Shorts down to only your subscriptions. A 3-mode **Auto-Dubbed Videos** control triages AI-voiced dubs (hide everywhere · keep your subscriptions · off), **Chip Rescue** keeps YouTube's topic-chip bar alive when a server-side bug hides it, and everything else—the quick-block control, TL;DW inspector, title de-baiter, “New to you” home, server feedback, and Hunt Mode—can be toggled independently.
 
 ---
 
@@ -168,7 +185,9 @@ It is a small, optional way to turn passive scrolling into a moment of attention
 - **Keywords** — manage ordinary keyword rules and regular expressions; use curated starter packs for anti-brainrot, crypto/hustle, AI-slop, and drama/gossip patterns.
 - **Whitelist** — protect channels that should always remain visible.
 - **AI Guardian** — choose a local model, build a taste profile, run diagnostics, manage autonomous filtering, and review recent interceptions.
-- **Settings** — customize page controls, local decluttering, TL;DW, Hunt Mode, optional server feedback, and JSON import/export.
+- **Settings** — customize page controls, local decluttering, “New to you” home, TL;DW, Hunt Mode, optional server feedback, and JSON import/export.
+- **Backup & Restore** — opened from Settings; download your entire setup as one JSON file from a real page (not a popup that can close mid-download), and restore it anywhere with Replace or Merge.
+- **Diversity Meter** — on any YouTube tab, a 🔵 subscribed / 🟣 New-to-You ratio bar shows how much of the visible feed is genuinely yours, plus how many cards your rules already hid on that page.
 
 The rank, “time saved,” and purity indicators are playful motivation—not scientific measurements. They are calculated from local block counts, using an estimate of ten minutes saved per avoided video.
 
@@ -223,7 +242,7 @@ The point of this extension is control without unnecessary data collection.
 - **Subscription scanning:** the Mirror feature briefly opens `youtube.com/feed/channels` in a background tab, reads only the channel names, handles, and channel URLs on that page, and stores that identity snapshot in `chrome.storage.local` for the Diversity Meter and "Shorts: Subscribed Only" features. The scan never touches your watch history or recommendations.
 - **Subscribed-vs-New-to-You measurement:** the Diversity Meter compares the *currently visible* feed cards against that local snapshot inside the page; nothing about what you see is transmitted anywhere.
 
-The extension requests `storage` and a small set of `host_permissions`: YouTube (to read and modify your feed page) and the localhost ports used by the optional local-AI servers. It deliberately does **not** request the `tabs` permission, so it cannot read your browsing history outside YouTube. See [`manifest.json`](manifest.json) for the authoritative permission list and [PRIVACY.md](PRIVACY.md) for the complete data-flow disclosure.
+The extension requests `storage`, `downloads` (used only to save your JSON backup from the Backup & Restore page), and a small set of `host_permissions`: YouTube (to read and modify your feed page) and the localhost ports used by the optional local-AI servers. It deliberately does **not** request the `tabs` permission, so it cannot read your browsing history outside YouTube. See [`manifest.json`](manifest.json) for the authoritative permission list and [PRIVACY.md](PRIVACY.md) for the complete data-flow disclosure.
 
 ---
 
@@ -248,27 +267,20 @@ This is vanilla JavaScript, HTML, and CSS with a single universal `manifest.json
 2. Make your change.
 3. Choose **Reload** on the browser's extensions page.
 
-To package releases for every browser, run:
-
-```powershell
-.\package-extension.ps1
-```
-
-It derives per-browser manifests from `manifest.json` and writes:
-
-- `dist/chromium/` + `dist/chromium.zip` — Chrome Web Store / Edge / Brave / Opera
-- `dist/firefox/` + `dist/firefox.xpi` + `dist/firefox.zip` — Firefox / Zen / LibreWolf (sign the `.xpi` at addons.mozilla.org, or use the unpacked folder under a signature bypass)
-- `zen-unpacked/` + `blacklist-firefox.jar` / `.xpi` / `.zip` — refreshes the Zen install path used by [ZEN-INSTALL.md](ZEN-INSTALL.md)
-- `YouTube-Blacklister-v<version>.zip` — full release zip for GitHub Releases
-4. Test on YouTube's home, search, subscription, and watch/recommendation surfaces where relevant.
-
 To package a release from the repository root:
 
 ```powershell
 .\package-extension.ps1
 ```
 
-The script reads the version from `manifest.json` and creates `YouTube-Blacklister-v<version>.zip` (e.g. `YouTube-Blacklister-v1.10.1.zip`).
+It reads the version from `manifest.json`, derives per-browser manifests, and writes:
+
+- `dist/chromium/` + `dist/chromium.zip` — Chromium family (Chrome, Edge, Brave, Opera, Vivaldi)
+- `dist/firefox/` + `dist/firefox.xpi` + `dist/firefox.zip` — Firefox / Zen / LibreWolf (sign the `.xpi` at addons.mozilla.org, or use the unpacked folder under a signature bypass)
+- `zen-unpacked/` + `blacklist-firefox.jar` / `.xpi` / `.zip` — refreshes the Zen install path used by [ZEN-INSTALL.md](ZEN-INSTALL.md)
+- `YouTube-Blacklister-v<version>.zip` — full release zip (source + docs + installer) for GitHub Releases
+
+Test on YouTube's home, search, subscription, and watch/recommendation surfaces where relevant.
 
 Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request, and see [CHANGELOG.md](CHANGELOG.md) for release history.
 

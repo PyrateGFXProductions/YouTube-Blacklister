@@ -134,6 +134,8 @@ function cleanJsonParse(rawText) {
     .replace(/<thought>[\s\S]*?<\/thought>/gi, '')
     .replace(/<\|thinking\|>[\s\S]*?<\|end\|think\|>/gi, '')
     .replace(/<｜｜DSML｜｜think>[\s\S]*?<｜｜DSML｜｜end｜｜think｜｜>/gi, '')
+    .replace(/<reasoning>[\s\S]*?<\/reasoning>/gi, '')
+    .replace(/<\|reasoning\|>[\s\S]*?<\|end\|reason\|>/gi, '')
     .trim();
   const codeBlockMatch = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
   if (codeBlockMatch && codeBlockMatch[1]) {
@@ -180,7 +182,15 @@ function normalizeRegexRule(raw) {
   }
 }
 
-// Resolves the exact active model: explicit choice > storage > Ollama detected > fallback
+// Resolves the exact active model: explicit choice > storage > Ollama detected > fallback.
+// Detection is EXPENSIVE when the servers are down (2.5s Ollama + 2s LM Studio +
+// 9s ONNX probe ≈ 13.5s per call), so the probe result is cached for 60s. Without
+// the cache, every AI batch/tldw/debait call without an explicit model choice would
+// stall 13 seconds before falling back to the heuristic path.
+let modelProbeCache = null;
+let modelProbeAt = 0;
+const MODEL_PROBE_TTL = 60000;
+
 async function resolveActiveModel(modelChoice) {
   if (modelChoice && typeof modelChoice === 'string' && modelChoice.trim() && modelChoice !== 'heuristic') {
     return modelChoice.trim();
@@ -191,13 +201,23 @@ async function resolveActiveModel(modelChoice) {
       return store.aiModel.trim();
     }
   } catch (_) {}
+  const now = Date.now();
+  if (modelProbeCache !== undefined && now - modelProbeAt < MODEL_PROBE_TTL) {
+    return modelProbeCache;
+  }
   try {
     const status = await checkAiStatus();
-    if (status && status.ok && Array.isArray(status.models) && status.models.length) {
-      return status.models[0];
-    }
-  } catch (_) {}
-  return null;
+    const picked = status && status.ok && Array.isArray(status.models) && status.models.length
+      ? status.models[0]
+      : null;
+    modelProbeCache = picked;
+    modelProbeAt = now;
+    return picked;
+  } catch (_) {
+    modelProbeCache = null;
+    modelProbeAt = now;
+    return null;
+  }
 }
 
 // Shared heuristic constants — single source of truth for clickbait / slop patterns
@@ -298,6 +318,7 @@ async function queryLocalLlm({ messages, format = 'json', model, customUrl, time
   }
 
   // Try Ollama endpoint first
+  let ollamaError = null;
   try {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), timeout);
@@ -322,10 +343,14 @@ async function queryLocalLlm({ messages, format = 'json', model, customUrl, time
       const content = data?.message?.content || '';
       return { ok: true, content, provider: 'ollama', modelUsed: activeModel };
     }
-  } catch (_) {}
+    ollamaError = `ollama HTTP ${res.status}`;
+  } catch (e) {
+    ollamaError = e && e.name === 'AbortError' ? `ollama timeout (${timeout}ms)` : (e && e.message) || String(e);
+  }
 
   // Fallback to OpenAI / LM Studio endpoint
   const openAiUrl = isCustom ? customUrl : LMSTUDIO_DEFAULT_URL;
+  let openAiError = null;
   try {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), timeout);
@@ -352,9 +377,14 @@ async function queryLocalLlm({ messages, format = 'json', model, customUrl, time
       const content = data?.choices?.[0]?.message?.content || '';
       return { ok: true, content, provider: 'lmstudio', modelUsed: activeModel };
     }
-  } catch (_) {}
+    openAiError = `lmstudio HTTP ${res.status}`;
+  } catch (e) {
+    openAiError = e && e.name === 'AbortError' ? `lmstudio timeout (${timeout}ms)` : (e && e.message) || String(e);
+  }
 
-  return { ok: false, content: '', modelUsed: activeModel };
+  // Surface the real failure reason instead of swallowing it — callers and the
+  // diagnostics UI can show WHY the local model call fell back to heuristics.
+  return { ok: false, content: '', modelUsed: activeModel, reason: ollamaError || openAiError || 'unknown' };
 }
 
 // Fallback heuristic rule synthesizer when no LLM is running or query fails
@@ -585,9 +615,14 @@ function auditRuleHitsName(rule, channelName) {
       return new RegExp(kw.slice(1, lastSlash), kw.slice(lastSlash + 1) || 'i').test(channelName);
     } catch (_) { return false; }
   }
-  // Plain keyword — word-boundary match, same as hasWordBoundaryKeyword()
+  // Plain keyword — word-boundary match, same as hasWordBoundaryKeyword().
+  // \b can never match keywords that start/end with non-word characters
+  // ("#music", "C++"), so the boundary is only applied where a word char sits.
   try {
-    return new RegExp(`\\b${auditEscapeRegExp(kw)}\\b`, 'i').test(name);
+    const first = kw[0], last = kw[kw.length - 1];
+    const start = /[a-zA-Z0-9_]/.test(first) ? '\\b' : '';
+    const end = /[a-zA-Z0-9_]/.test(last) ? '\\b' : '';
+    return new RegExp(`${start}${auditEscapeRegExp(kw)}${end}`, 'i').test(name);
   } catch (_) {
     return name.toLowerCase().includes(kw.toLowerCase());
   }
@@ -774,9 +809,13 @@ async function evaluateBatchWithAi(videos, persona, sensitivity, modelChoice, cu
         } catch (_) {}
       } else {
         // Word-boundary match, mirroring content.js hasWordBoundaryKeyword().
+        // Only apply \b where a word char sits — "#music"/"C++" never match \b.
         try {
           const escaped = k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-          if (new RegExp(`\\b${escaped}\\b`, 'i').test(text)) return k;
+          const first = k[0], last = k[k.length - 1];
+          const start = /[a-zA-Z0-9_]/.test(first) ? '\\b' : '';
+          const end = /[a-zA-Z0-9_]/.test(last) ? '\\b' : '';
+          if (new RegExp(`${start}${escaped}${end}`, 'i').test(text)) return k;
         } catch (_) {
           if (text.toLowerCase().includes(k.toLowerCase())) return k;
         }
@@ -1103,13 +1142,19 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     const text = count > 0 ? (count > 99 ? '99+' : String(count)) : '';
     try {
       // Chrome MV3 supports tabId; Firefox/Zen may not. Fall back gracefully.
+      // Firefox's setBadgeText returns a Promise that REJECTS (not throws) when
+      // the target tab is closing — unguarded, that's an unhandled rejection.
+      const set = (cb) => {
+        const p = cb();
+        if (p && typeof p.catch === 'function') p.catch(() => {});
+      };
       if (typeof chrome.action !== 'undefined' && chrome.action.setBadgeText) {
         try {
-          chrome.action.setBadgeText({ text, tabId: sender.tab.id });
-          chrome.action.setBadgeBackgroundColor({ color: '#d92323', tabId: sender.tab.id });
+          set(() => chrome.action.setBadgeText({ text, tabId: sender.tab.id }));
+          set(() => chrome.action.setBadgeBackgroundColor({ color: '#d92323', tabId: sender.tab.id }));
         } catch (_) {
-          chrome.action.setBadgeText({ text });
-          chrome.action.setBadgeBackgroundColor({ color: '#d92323' });
+          set(() => chrome.action.setBadgeText({ text }));
+          set(() => chrome.action.setBadgeBackgroundColor({ color: '#d92323' }));
         }
       }
     } catch (_) {}
