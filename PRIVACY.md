@@ -1,6 +1,6 @@
 # Privacy Policy — Always New To You (YouTube Smart Blacklister)
 
-**Last updated:** 2026-09-26 · Version 1.10.1
+**Last updated:** 2026-09-27 · Version 1.11.0
 
 This extension is **local-first by design**: the point of it is control over your own YouTube feed without giving anyone — including us — a copy of what you watch, block, or scroll past.
 
@@ -24,12 +24,12 @@ The extension hosts **no** server, sends **no** analytics, and contains **no** t
 
 - **`storage`** — persists your rules and settings in `chrome.storage.local`. This is where your entire configuration lives, and nothing in this data is transmitted.
 - **`https://www.youtube.com/*`** (host permission) — lets the content script run on YouTube pages so it can hide cards you chose to block and read the feed elements described in §1. This is the only website the extension can read or modify. It does **not** have permission for any other site, and it does **not** request the `tabs` permission, so it cannot inspect your browsing history.
-- **`http://localhost:11434/*`, `http://127.0.0.1:11434/*`, `http://localhost:1234/*`** (host permissions) — optional local-AI servers (Ollama port 11434, LM Studio port 1234). These loopback permissions exist so the extension *can* talk to software you run yourself; they are used **only** when you enable a local-AI feature **and** a compatible server is actually detected on one of these ports. No request is made at install time, and none is made to any non-localhost address.
+- **`http://localhost:11434/*`, `http://127.0.0.1:11434/*`, `http://localhost:1234/*`, `http://127.0.0.1:1234/*`** (host permissions) — optional local-AI servers (Ollama port 11434, LM Studio port 1234). These loopback permissions exist so the extension *can* talk to software you run yourself; they are used **only** when you enable a local-AI feature **and** a compatible server is actually detected on one of these ports. No request is made at install time, and none is made to any non-localhost address.
 - **`downloads`** — saves the JSON backup file when you click Export on the **Backup & Restore** page. It is never used in the background, never uploads anything, and is the only permission involved in creating the export file on your disk.
 
 The user-visible permission description for the store listing:
 
-> Reads and changes your data on www.youtube.com. Also connects to localhost (ports 11434, 1234) only if you choose to use an optional local AI server. Stores your blacklist and settings locally, and can save a JSON backup file when you export. No browsing history is read; no data is sent to the developer or any third party.
+> Reads and changes your data on www.youtube.com. Also connects to localhost (ports 11434 and 1234) only if you choose to use an optional local AI server. Stores your blacklist and settings locally, and can save a JSON backup file when you export. No browsing history is read; no data is sent to the developer or any third party.
 
 ## 3. Local AI — the only connection that leaves the extension itself
 

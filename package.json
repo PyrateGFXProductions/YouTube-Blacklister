@@ -1,21 +1,32 @@
 {
   "name": "youtube-blacklister",
-  "version": "1.0.0",
-  "description": "<p align=\"center\">   <img src=\"icon128.png\" width=\"112\" height=\"112\" alt=\"Always New To You icon\"> </p>",
+  "version": "1.11.0",
+  "description": "Always New To You - Smart Feed Blacklist. A Manifest V3 browser extension that pins YouTube's 'New to You' feed and filters it with a local, server-invisible blacklist.",
   "main": "background.js",
   "directories": {
     "test": "tests"
   },
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node tests/shared-tables-harness.js && node tests/popup-smoke-harness.js && node tests/debait-recycle-harness.js && node tests/backup-harness.js && node tests/shorts-blacklist-harness.js && node tests/watch-block-harness.js && node tests/test_ai_guardian.js",
+    "test:live": "node tests/test_live_ollama.js",
+    "package": "powershell -NoProfile -ExecutionPolicy Bypass -File ./package-extension.ps1"
   },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/PyrateGFXProductions/YouTube-Blacklister.git"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "keywords": [
+    "chrome-extension",
+    "firefox-addon",
+    "manifest-v3",
+    "youtube",
+    "blacklist",
+    "content-filter",
+    "local-ai",
+    "ollama"
+  ],
+  "author": "PyrateGFX Productions",
+  "license": "MIT",
   "type": "commonjs",
   "bugs": {
     "url": "https://github.com/PyrateGFXProductions/YouTube-Blacklister/issues"

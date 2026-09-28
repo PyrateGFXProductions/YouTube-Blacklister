@@ -7,7 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [Unreleased]
+## [1.11.0] - 2026-09-27
+
+### Security
+- **Removed the port-8080 host permission and the entire ONNX "Local Phi" offering** (`manifest.json`, `background.js`, `popup.js`, `popup.html`, `PRIVACY.md`). The extension no longer declares, probes, or advertises any local server other than the two it actually speaks to (Ollama `11434`, LM Studio `1234`). A permission a reviewer has to be talked into is a permission not worth shipping when nothing uses it: the offering only advertised an unrelated third-party agent framework on a common port and bought the user nothing.
+- **Local-AI endpoint validation now pins the PORT, not just the hostname** (`background.js` → `resolveLocalAiBaseUrl()`): a `customUrl` arriving on the message payload is accepted only for `localhost` / `127.0.0.1` / `::1` on ports `11434` or `1234` — the same set the manifest grants. A stale caller can no longer direct the worker at a loopback port the extension does not declare. Locked in by an assertion that `http://localhost:8080` is now rejected.
+
+### Changed
+- **One source of truth for the heuristic pattern tables** (`shared-tables.js`, new): `CLICKBAIT_PATTERNS`, `DEBait_CLEANERS`, and the other slop/sport/noise tables are declared once and loaded into both JavaScript contexts that consume them — the service worker via `importScripts()` (Chrome MV3 classic worker) and the content script via the manifest's `content_scripts.js` list. Firefox, which has no `importScripts()` outside a worker, loads the file through `background.scripts`. The content script previously carried a hand-copied subset of two of these tables, and it had already drifted: the same title could be judged sensational by one engine and not the other, and neutralized differently depending on whether the local model answered.
+- **One source of truth for the card-thumbnail selector** (`content.js`): it had been copy-pasted into six call sites.
+- **Accessibility**: every form control now has a programmatic accessible name (placeholders are not accessible names, and the switch labels contain no text), and the persona chips plus the "Open YouTube" control are keyboard-operable (`role="button"`, `tabindex="0"`, Enter/Space).
 
 ### Fixed
 - **De-baited titles rendered black text, invisible on dark themes**: De-baiting wipes YouTube's title element and inserts a bare text node — but the theme color (`color: var(--yt-spec-text-primary)`) lives on YouTube's inner title `<a>`, which the wipe destroys. The bare text then falls back to the browser default black in *every* theme. The neutral title (and the "restore original" path) are now wrapped in a `.nyt-debait-title` span styled with `color: var(--yt-spec-text-primary, inherit)` — dark theme gets light text, light theme gets dark text, and any layout missing the variable inherits instead of going black.
@@ -49,6 +58,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Backup import was re-entrant**: a busy lock wraps the whole import; double-clicks do nothing, and the file picker is now gesture-only (`#import` auto-open removed).
   - **Release zip shipped the universal manifest**: the release zip now carries the stripped Chromium manifest (no `browser_specific_settings`, `service_worker` only — the extension `key` stays in the Chromium build by design to pin the extension ID).
   - **Non-atomic artifact copies**: all xpi/zip/jar swaps are atomic (`Copy-FileAtomic` — temp file + move), and `$OutputDir` defaults to the script's own folder instead of the caller's CWD (relative paths are rooted so `Move` can't land elsewhere).
+  - **De-bait state survived element recycling** (`content.js`): the de-baiter marked a card with a flat `dataset.debaitState` boolean and skipped anything carrying it — but YouTube recycles card elements, so a node de-baited once was never de-baited again for the *next* video it displayed. The state is now keyed to the video id (`debaitFor`) and the stale per-video fields are dropped when the element moves on, so a recycled card is re-evaluated for its new title while the ✨ original/neutral toggle keeps working on the card you are looking at. The title could not be used as the key, because de-baiting rewrites the title element itself.
+  - **AJAX-evaluated flag survived element recycling** (`content.js`): same class of bug on `dataset.aiEvaluated`, which could leave a recycled card permanently un-evaluated. Now keyed to the card's video identity.
+  - **Dead code removed** (`content.js`): `huntVisibleCards()` was never called by anything, and `huntThumbFor()` was unreferenced too — the latter is now `getCardThumbnail()`, the single implementation behind the six duplicated thumbnail lookups.
+  - **Spurious `Unchecked runtime.lastError`** whenever the feed-roast worker was asleep (`popup.js`): the `AI_ROAST_FEED` callback now reads `lastError`, like every other `sendMessage` callback in the file.
+  - **Feed-diversity percentages could print `NaN%`** on a feed with no visible cards (`popup.js`): message-sourced counters are coerced to numbers and the division is guarded.
+  - **Hardcoded version string in the popup footer**: it is now read from the manifest at runtime, which is why every past release left a stale version on screen.
+  - **README install steps for Firefox/Zen were wrong** — they pointed at the repository folder, whose universal manifest declares both `background.scripts` and `background.service_worker`. Firefox-family users are now directed to the packaged `blacklist-firefox.xpi` (or `zen-unpacked/`).
 
 ### Added
 - **Start Home on "New to you"** (`settings.newToYouAuto`, Settings > toggle, opt-in/off by default): YouTube's Home only promotes channels it's "safe to advertise" — everything else stays buried, and after hiding the promoted tier you're left with tier-2 junk, not the long tail. "New to you" is the one surface YouTube built specifically to surface channels you haven't encountered before. When enabled, the extension automatically clicks that chip each time the Home chip bar renders (no reloads, no repeat clicks; absent chip = silent no-op — YouTube makes it unavailable per account/region). Pure decision (`shouldAutoEnterNewToYou`) is covered by the Node harness (now 54 cases).

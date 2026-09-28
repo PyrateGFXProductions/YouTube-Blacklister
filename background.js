@@ -1,10 +1,45 @@
-// Background service worker for Always New To You - YouTube Blacklister v1.10.1
+// Background service worker for Always New To You - YouTube Blacklister v1.11.0
 // Manages badges, statistics, and the Autonomous AI Neural Slop Interceptor
+
+// The heuristic pattern tables live in ONE file, shared with the content script so
+// the two contexts can never drift apart. Chrome's MV3 service worker is a classic
+// worker and loads it with importScripts(); Firefox has no importScripts in its
+// event-page context, which is why the packager ALSO lists shared-tables.js in
+// background.scripts. This guard makes either load path work — if the tables are
+// already defined, the manifest loaded them and there is nothing to do.
+try {
+  if (typeof importScripts === 'function' && typeof CLICKBAIT_PATTERNS === 'undefined') {
+    importScripts('shared-tables.js');
+  }
+} catch (_) {}
 
 const OLLAMA_DEFAULT_URL = 'http://localhost:11434';
 const LMSTUDIO_DEFAULT_URL = 'http://localhost:1234';
-const FRAMEWORK_DEFAULT_URL = 'http://127.0.0.1:8080';
 let blockedCounterQueue = Promise.resolve();
+
+// Only loopback AI endpoints are ever contacted. `customUrl` rides in on the
+// message payload, so validating it here makes the "nothing leaves your machine"
+// guarantee a property of the code rather than a coincidence of the current popup
+// UI never populating that field. Returns `fallback` for anything that is not a
+// well-formed http(s) URL on a loopback host AND one of the two supported ports.
+const LOCAL_AI_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
+// The ports the manifest actually grants host permissions for (Ollama, LM Studio).
+// Port 8080 was removed with the ONNX offering — pinning it here too means a
+// stale caller cannot talk us into fetching a port we no longer declare.
+const LOCAL_AI_PORTS = new Set(['11434', '1234']);
+
+function resolveLocalAiBaseUrl(candidate, fallback) {
+  if (!candidate || typeof candidate !== 'string') return fallback;
+  try {
+    const parsed = new URL(candidate.trim());
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return fallback;
+    if (!LOCAL_AI_HOSTS.has(parsed.hostname.toLowerCase())) return fallback;
+    if (!LOCAL_AI_PORTS.has(parsed.port)) return fallback;
+    return parsed.origin;
+  } catch (_) {
+    return fallback;
+  }
+}
 
 function incrementBlockedTotal(inc) {
   blockedCounterQueue = blockedCounterQueue.then(() => new Promise((resolve) => {
@@ -30,7 +65,7 @@ function incrementBlockedTotal(inc) {
 // server actually down, while 'Failed to fetch' / 'NetworkError' = the browser
 // (extension context) blocked the request despite the manifest.
 async function checkAiStatus(customUrl) {
-  const ollamaUrl = customUrl || OLLAMA_DEFAULT_URL;
+  const ollamaUrl = resolveLocalAiBaseUrl(customUrl, OLLAMA_DEFAULT_URL);
   const errors = [];
   try {
     const ctrl = new AbortController();
@@ -68,57 +103,6 @@ async function checkAiStatus(customUrl) {
       provider: 'lmstudio',
       url: LMSTUDIO_DEFAULT_URL,
       error: e && e.name === 'AbortError' ? 'timeout 2000ms' : (e && e.message) || String(e)
-    });
-  }
-
-  // Third engine: bundled local Phi (ONNX) offered by the asus_argb_framework
-  // local server (/api/ai/status -> providers.onnx). Mirrors the framework's
-  // own offering: it surfaces the option plus download/install commands so the
-  // popup can render the link. Always an OFFERING, never a claimed-ready query
-  // engine: even a fully-installed onnx backend serves the framework's agent
-  // tool-loop (/api/ai/chat), a different protocol from this extension's
-  // Ollama/OpenAI-compatible query runner.
-  // NOTE: the framework's status endpoint probes every provider over the
-  // network, so keep the budget well above the ~4s it takes with a live Ollama.
-  try {
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 9000);
-    const res = await fetch(`${FRAMEWORK_DEFAULT_URL}/api/ai/status`, { signal: ctrl.signal });
-    clearTimeout(timer);
-    if (res.ok) {
-      const data = await res.json();
-      const onnx = data?.providers?.onnx;
-      if (onnx) {
-        const st = onnx.onnx_status || {};
-        const setup = {
-          installCommand: st.install_command || 'pip install onnxruntime-genai huggingface-hub',
-          downloadCommand: st.download_command || '',
-          modelPath: st.model_path || '',
-          modelDownloaded: st.model_downloaded ?? false,
-          onnxAvailable: st.onnx_available ?? false
-        };
-        const ready = onnx.ok === true;
-        return {
-          ok: false,
-          offering: true,
-          provider: 'onnx',
-          url: FRAMEWORK_DEFAULT_URL,
-          models: Array.isArray(onnx.models) ? onnx.models : [],
-          label: onnx.label || 'Local ONNX (Phi-3.5 mini)',
-          ready,
-          setup,
-          errors
-        };
-      }
-      errors.push({ provider: 'onnx-framework', url: FRAMEWORK_DEFAULT_URL, error: 'no providers.onnx in /api/ai/status' });
-    } else {
-      errors.push({ provider: 'onnx-framework', url: FRAMEWORK_DEFAULT_URL, error: `HTTP ${res.status}` });
-    }
-  } catch (e) {
-    errors.push({
-      provider: 'onnx-framework',
-      url: FRAMEWORK_DEFAULT_URL,
-      error: e && e.name === 'AbortError' ? 'timeout 9000ms' : (e && e.message) || String(e)
     });
   }
 
@@ -183,10 +167,10 @@ function normalizeRegexRule(raw) {
 }
 
 // Resolves the exact active model: explicit choice > storage > Ollama detected > fallback.
-// Detection is EXPENSIVE when the servers are down (2.5s Ollama + 2s LM Studio +
-// 9s ONNX probe ≈ 13.5s per call), so the probe result is cached for 60s. Without
-// the cache, every AI batch/tldw/debait call without an explicit model choice would
-// stall 13 seconds before falling back to the heuristic path.
+// Detection is EXPENSIVE when the servers are down (2.5s Ollama + 2s LM Studio),
+// so the probe result is cached for 60s. Without the cache, every AI
+// batch/tldw/debait call without an explicit model choice would
+// stall before falling back to the heuristic path.
 let modelProbeCache = null;
 let modelProbeAt = 0;
 const MODEL_PROBE_TTL = 60000;
@@ -220,95 +204,16 @@ async function resolveActiveModel(modelChoice) {
   }
 }
 
-// Shared heuristic constants — single source of truth for clickbait / slop patterns
-// used across the autonomous interceptor, the de-baiter, and the feed forensic roast.
-// Kept in one place so the interceptor, the de-baiter, and the roast can't drift apart.
-
-const CLICKBAIT_PATTERNS = [
-  /you won'?t believe/i,
-  /in 24 hours/i,
-  /shocking/i,
-  /exposed/i,
-  /skibidi/i,
-  /100x/i,
-  /!!!+/i,
-  /!!+/i,
-  /\b(?:OMG|LOL|WOW|INSANE|EPIC|CRAZY|HUGE|MASSIVE|LMAO|ROFL|WTF)\b/i,
-  /\b(?:prank|reaction|challenge|vs)\b/i,
-  /\?\?\?+/i,
-  /\b(?:drama|cancelled|canceled|apology)\b/i,
-  /\b(?:crypto|moon|pump|dump|rich|hustle)\b/i,
-  /\b(?:hot|sexy|leaked|banned|gone|died|destroyed|owned|roasted)\b/i,
-  /\b(?:nobody|everyone|anyone|somebody) (?:knows?|talks?|says?)\b/i,
-  /(?:\d+\s+)?(?:things?|ways?|reasons?|secrets?|hacks?|tricks?) (?:you|to|that)/i
-];
-
-const SENSATIONAL_ADJECTIVES = [
-  'shocking', 'exposed', 'insane', 'epic', 'crazy', 'massive', 'huge', 'wild',
-  'incredible', 'unbelievable', 'mind-blowing', 'jaw-dropping', 'absolutely'
-];
-
-const OUTRAGE_WORDS = ['drama', 'cancel', 'exposed', 'owned', 'roasted', 'destroyed',
-  'react', 'sues', 'beef', 'fight', 'controversy', 'leak'];
-
-const PARASOCIAL_WORDS = ['my', 'our', 'we did it', 'community', 'thanks for watching',
-  "here's", 'challenge', 'responding to'];
-
-const DESPERATION_WORDS = ['24 hours', 'last chance', 'before it', 'gone', 'banned',
-  'deleted', 'be careful', 'beware', 'how to get rich', 'free'];
-
-const SPORTS_KEYWORDS = [
-  'nba', 'nfl', 'mlb', 'nhl', 'fifa', 'uefa', 'football', 'soccer', 'basketball',
-  'baseball', 'tennis', 'golf', 'volleyball', 'rugby', 'cricket', 'touchdown',
-  'slam dunk', 'home run', 'super bowl', 'world cup', 'highlights'
-];
-
-const CRYPTO_KEYWORDS = ['crypto', 'bitcoin', 'memecoin', '100x', 'passive income',
-  'dropshipping', 'forex', 'get rich quick', 'signals', 'guaranteed', 'airdrops',
-  'pump', 'reversal packed', 'to the moon', 'crypto wealth', 'forex guru'];
-
-const AI_SLOP_KEYWORDS = ['ai generated', 'faceless channel', 'text to speech',
-  'ai voice', 'ai art', 'midjourney', 'stable diffusion'];
-
-const BRAINROT_KEYWORDS = ['prank', 'skibidi', 'in 24 hours', "you won't believe",
-  'shocking', 'exposed', 'reaction', 'challenge', '3am', 'cringe'];
-
-const DRAMA_KEYWORDS = ['drama', 'canceled', 'apology video', 'responds to',
-  'clout', 'drama alert'];
-
-const SLOP_REGEX = '\\b(vlog|prank)\\s*#?\\d+';
-
-// Title de-baiter: patterns to strip from sensational titles (shared with heuristicDebaitTitle)
-const DEBait_CLEANERS = [
-  /\b(in 24 hours)\b/gi,
-  /\b(?:shocking|exposed|insane|epic|crazy|massive|huge|wild)(?![\?!.])\b/gi,
-  /\b(hot|leaked|banned|gone|died|destroyed|owned|roasted)\b/gi,
-];
-
-// Heuristic fallback keyword set used when nothing in the persona matched.
-// Deliberately overlaps with the persona-specific tables above so the fallback
-// is never completely empty.
-const FALLBACK_KEYWORDS = ['prank', 'reaction', 'shocking', 'exposed', 'crypto', 'drama', 'skibidi'];
-
-// Heuristic fallback regex rules — mirrors the persona-specific regex tables.
-const FALLBACK_REGEX = ['/\\b(vlog|prank)\\s*#?\\d+/i'];
-
-// Patterns used by the subscription synthesizer's heuristic noise filter.
-// Shared with roastHeuristic's sensationalPatterns where they overlap.
-const NOISE_PATTERNS = [
-  /\b(prank|reaction|challenge|vs|showdown|competition|vs\.)\b/i,
-  /\b(diss|beef|response|reply|reaction video|cancellation|apology)\b/i,
-  /\b(how to get rich|passive income|side hustle|make money|crypto|100x|signals|guaranteed)\b/i,
-  /uploaded \d{4}|\b(?:day|week|month|year|hours?|minutes?|seconds?|today|tonight|last chance)\b/i,
-  /\?\?\?+|!!+|click here|must see|don't miss|subscribe|notification|follow\b/i,
-];
-
-//
+// Heuristic pattern tables (CLICKBAIT_PATTERNS, SPORTS_KEYWORDS, DEBait_CLEANERS,
+// NOISE_PATTERNS, …) are NOT declared here. They live in shared-tables.js, which
+// this file loads at the top and the content script loads via the manifest, so a
+// pattern can only ever be added, renamed, or removed in one place.
 
 // Unified query runner for local LLMs (Ollama with think:false + LM Studio / OpenAI-compatible)
 async function queryLocalLlm({ messages, format = 'json', model, customUrl, timeoutMs = 35000 }) {
-  const isCustom = Boolean(customUrl);
-  const targetUrl = customUrl || OLLAMA_DEFAULT_URL;
+  const localCustomUrl = resolveLocalAiBaseUrl(customUrl, null);
+  const isCustom = Boolean(localCustomUrl);
+  const targetUrl = localCustomUrl || OLLAMA_DEFAULT_URL;
   const timeout = Math.max(5000, Number(timeoutMs) || 35000);
   const activeModel = await resolveActiveModel(model);
 
@@ -349,7 +254,7 @@ async function queryLocalLlm({ messages, format = 'json', model, customUrl, time
   }
 
   // Fallback to OpenAI / LM Studio endpoint
-  const openAiUrl = isCustom ? customUrl : LMSTUDIO_DEFAULT_URL;
+  const openAiUrl = isCustom ? localCustomUrl : LMSTUDIO_DEFAULT_URL;
   let openAiError = null;
   try {
     const ctrl = new AbortController();
@@ -895,30 +800,26 @@ function looksSensationalist(title) {
   if (!t) return false;
   const capsCount = (t.match(/[A-Z]/g) || []).length;
   const isAllCaps = t.length > 10 && (capsCount / t.length) > 0.45;
-  const baitPats = CLICKBAIT_PATTERNS;
-  return isAllCaps || baitPats.some(p => p.test(t));
+  // CLICKBAIT_PATTERNS is the SHARED table (shared-tables.js): the pre-filter that
+  // decides what content.js sends for de-baiting and this evaluator must agree.
+  return isAllCaps || CLICKBAIT_PATTERNS.some(p => p.test(t));
 }
 
 // Heuristic neutralizer: strip ALL-CAPS, remove sensational hooks, keep facts.
+// This body is deliberately IDENTICAL to content.js's copy — the same title must
+// neutralize the same way whether the local model answered or the heuristic ran,
+// and content.js's side is the pre-filter that decides what gets de-baited at all.
+// DEBait_CLEANERS comes from shared-tables.js (the single source of the patterns).
 function heuristicDebaitTitle(title) {
   let t = String(title || '').trim();
   if (!t) return t;
-
   t = t.replace(/\b(?:OMG|LOL|LMAO|ROFL|WTF)\b/gi, '');
   t = t.replace(/\s*!{2,}/g, '.');
   t = t.replace(/\s*[?!]+(\s|$)/g, '. ');
   t = t.replace(/\s*\?\s*\?+/g, '.');
   t = t.replace(/\b(?:that is|is going to|gonna)\b/gi, 'is about to');
-  t = t.replace(/\s{2,}/g, ' ').trim();
-
-  const prefixers = [
-    /^(you won'?t believe\s+)(.+)/i,
-    /^(this is (?:the |what )?)(.*)$/i,
-    /^(how (?:to|i)\b.+)[\?!.]+$/i
-  ];
-  const cleaner = DEBait_CLEANERS;
-  for (const re of cleaner) t = t.replace(re, '');
-  const m = t.match(prefixers[0]);
+  for (const re of DEBait_CLEANERS) t = t.replace(re, '');
+  const m = t.match(/^(you won'?t believe\s+)(.+)/i);
   if (m && m[2]) t = m[2];
   t = t.replace(/\s*\.{2,}/g, '.').replace(/\s{2,}/g, ' ').trim();
   t = t.replace(/[.,]+$/, '');

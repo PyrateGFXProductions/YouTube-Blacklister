@@ -84,9 +84,13 @@ try {
     # force_installed = the enterprise-verified way to install an UNSIGNED add-on:
     # the browser installs it automatically and treats it as policy-managed.
     # ("allowed" would NOT work for unsigned — that was the bug in the earlier version.)
+    # Derive the install URL from this script's own location: a hardcoded absolute
+    # path only ever resolved on the machine that wrote it, so every other user got
+    # a policies.json pointing at a file that does not exist.
+    $xpiUri   = 'file:///' + ($xpi -replace '\\', '/')
     $policy   = @{ policies = @{ ExtensionSettings = @{ $id = @{
         installation_mode = 'force_installed'
-        install_url       = 'file:///C:/Users/Administrator/YouTube-Blacklister/blacklist-firefox.xpi'
+        install_url       = $xpiUri
     } } } }
     $policy | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $polDir 'policies.json') -Encoding utf8NoBOM
     Write-Host "[i] policies.json written (force_installed): $polDir" -ForegroundColor Green

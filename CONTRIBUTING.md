@@ -83,7 +83,7 @@ To generate the release packages for every browser:
 This derives per-browser manifests from the single universal `manifest.json` and produces:
 - `dist/chromium/` + `dist/chromium.zip` — Chromium family (Chrome, Edge, Brave, Opera, Vivaldi)
 - `dist/firefox/` + `dist/firefox.xpi` + `dist/firefox.zip` — Firefox family (Firefox, Zen, LibreWolf)
-- `zen-unpacked/` + `blacklist-firefox.jar`/`.xpi`/`.zip` — the Zen Browser install path from `ZEN-INSTALL.md`
+- `zen-unpacked/` + `blacklist-firefox.jar`/`.xpi`/`.zip` — the Zen Browser install path from `ZEN-INSTALL.md` (generated locally; not committed)
 - a release zip in the root directory (or `-OutputDir`), excluding development, git, and system files.
 
 ---

@@ -2,6 +2,7 @@
 const assert = require('assert');
 const fs = require('fs');
 const vm = require('vm');
+const path = require('path');
 
 global.chrome = {
   runtime: {
@@ -66,7 +67,16 @@ const bgContext = {
   console,
   AbortController,
   setTimeout,
-  clearTimeout
+  clearTimeout,
+  URL
+};
+// background.js loads its heuristic pattern tables from shared-tables.js via
+// importScripts() (Chrome MV3 classic worker). Mirror that here so the test
+// exercises the same single source the extension ships.
+bgContext.importScripts = (...files) => {
+  for (const f of files) {
+    vm.runInContext(fs.readFileSync(path.join(__dirname, '..', f), 'utf8'), bgContext, { filename: f });
+  }
 };
 vm.createContext(bgContext);
 vm.runInContext(bgCode, bgContext);
@@ -128,6 +138,24 @@ assert.strictEqual(bgContext.normalizeRegexRule('ball\\s*sports?'), '/ball\\s*sp
 assert.strictEqual(bgContext.normalizeRegexRule('/football/g'), '/football/g');
 assert.strictEqual(bgContext.normalizeRegexRule('[unclosed('), null);
 
+// Test 7: only loopback AI endpoints are accepted. This is the code-level
+// enforcement of the "nothing leaves your machine" privacy claim: customUrl rides
+// in on the message payload, so it must not be usable as an arbitrary fetch base.
+console.log('Test 7: local-only AI endpoint validation');
+const localOnly = (v, fb) => bgContext.resolveLocalAiBaseUrl(v, fb);
+assert.strictEqual(localOnly('http://localhost:11434', null), 'http://localhost:11434');
+assert.strictEqual(localOnly('http://127.0.0.1:1234/v1', null), 'http://127.0.0.1:1234');
+assert.strictEqual(localOnly('  http://localhost:11434  ', null), 'http://localhost:11434');
+// 8080 was dropped along with the ONNX offering: it is no longer an allowed port.
+assert.strictEqual(localOnly('http://localhost:8080', 'FALLBACK'), 'FALLBACK', 'port 8080 is no longer an allowed local-AI port');
+assert.strictEqual(localOnly('http://evil.example.com', 'FALLBACK'), 'FALLBACK', 'remote host must be rejected');
+assert.strictEqual(localOnly('https://notlocalhost.com:11434', 'FALLBACK'), 'FALLBACK', 'hostname lookalike must be rejected (exact match, not suffix)');
+assert.strictEqual(localOnly('file:///etc/passwd', 'FALLBACK'), 'FALLBACK', 'non-http scheme must be rejected');
+assert.strictEqual(localOnly('not a url', 'FALLBACK'), 'FALLBACK', 'garbage must be rejected');
+assert.strictEqual(localOnly('', 'FALLBACK'), 'FALLBACK');
+assert.strictEqual(localOnly(undefined, 'FALLBACK'), 'FALLBACK');
+assert.strictEqual(localOnly('http://localhost:11434/../../evil', 'FALLBACK'), 'http://localhost:11434', 'traversal must collapse to the origin');
+
 // Test 6: evaluateBatchWithAi respects sports persona in fallback
 console.log('Test 6: evaluateBatchWithAi persona-aware evaluation');
 (async () => {
@@ -142,5 +170,5 @@ console.log('Test 6: evaluateBatchWithAi persona-aware evaluation');
   assert(v1 && v1.block === true, 'NBA video should be blocked by sports persona');
   assert(v2 && v2.block === false, 'Rust video should NOT be blocked');
 
-  console.log('All 6 Test Suites Passed Successfully! ✅');
+  console.log('All 7 Test Suites Passed Successfully! ✅');
 })();

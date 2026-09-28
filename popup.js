@@ -1,4 +1,4 @@
-// Popup manager for YouTube Smart Blacklister v1.10.1
+// Popup manager for YouTube Smart Blacklister v1.11.0
 // Manages rules, settings, AI Guardian, search filtering, import/export, and stats.
 
 const RANKS = [
@@ -90,6 +90,10 @@ function load() {
       'chipRescue',
       'newToYouAuto'
     ], (res) => {
+      // Mirror save()'s teardown guard: reading storage can fail, and the popup can
+      // be torn down mid-read ("Extension context invalidated"), leaving res
+      // undefined — every line below dereferences it.
+      if (chrome.runtime?.lastError || !res || typeof res !== 'object') { resolve(); return; }
       data.channels = Array.isArray(res.channels) ? res.channels : [];
       data.keywords = Array.isArray(res.keywords) ? res.keywords : [];
       data.whitelistChannels = Array.isArray(res.whitelistChannels) ? res.whitelistChannels : [];
@@ -550,7 +554,7 @@ function wireAdd(inputId, btnId, handler) {
 // has no popup lifecycle, so both operations are reliable there.
 function openBackupPage(mode) {
   try {
-    chrome.tabs.create({ url: chrome.runtime.getURL('backup.html' + (mode === 'import' ? '#import' : '#export')) });
+    chrome.tabs.create({ url: chrome.runtime.getURL('backup.html' + (mode === 'import' ? '#import' : '#export')) }).catch(() => {});
   } catch (_) {}
 }
 
@@ -739,6 +743,10 @@ function runFeedRoast() {
           items,
           modelChoice: currentAiModelChoice()
         }, (roastRes) => {
+          // Consume the error explicitly (like every other sendMessage callback
+          // here): leaving lastError unread logs a spurious "Unchecked
+          // runtime.lastError" whenever the worker is asleep.
+          if (chrome.runtime?.lastError) roastRes = null;
           renderRoastResult(roastRes);
           if (roastBtn) {
             roastBtn.disabled = false;
@@ -1054,8 +1062,13 @@ function measureFeedDiversity() {
           return;
         }
 
-        const total = Math.max(res.total || res.visible, res.visible);
-        const pct = Math.round((res.subscribed / res.visible) * 100);
+        // Coerce at the sink: these arrive over a message from the content script.
+        // They are numeric counters today, but interpolating them raw into
+        // innerHTML means any future string value would be treated as markup.
+        const visibleN = Number(res.visible) || 0;
+        const hiddenN = Number(res.hidden) || 0;
+        const total = Math.max(Number(res.total) || 0, visibleN);
+        const pct = visibleN ? Math.round((Number(res.subscribed) / visibleN) * 100) : 0;
         const newPct = Math.max(0, 100 - pct);
 
         if (line) {
@@ -1067,13 +1080,13 @@ function measureFeedDiversity() {
               <span style="color:#4ade80;">🔵 ${pct}% subscribed</span>
               <span style="color:#9aa3b2;">·</span>
               <span style="color:#c4b5fd;">🟣 ${newPct}% New-to-You</span>
-              ${res.hidden ? `<span style="color:#9aa3b2;">·</span> <span style="color:#f87171;">🚫 ${res.hidden} hidden by rules</span>` : ''}
+              ${hiddenN ? `<span style="color:#9aa3b2;">·</span> <span style="color:#f87171;">🚫 ${hiddenN} hidden by rules</span>` : ''}
             </div>` +
             `<div style="position:relative;height:6px;background:#262a33;border-radius:3px;margin-top:5px;overflow:hidden;">
               <div style="position:absolute;left:0;top:0;bottom:0;width:${pct}%;background:linear-gradient(90deg,#1f7a33,#2ba640);border-radius:3px 0 0 3px;"></div>
               <div style="position:absolute;left:${pct}%;top:0;bottom:0;width:${newPct}%;background:linear-gradient(90deg,#6d28d9,#8b5cf6);"></div>
             </div>` +
-            `<div style="font-size:10px;color:#9aa3b2;margin-top:4px;">${res.visible} visible cards on this page${res.hidden ? ` · ${res.hidden} hidden` : ''} · ${total} total tracked</div>`;
+            `<div style="font-size:10px;color:#9aa3b2;margin-top:4px;">${visibleN} visible cards on this page${hiddenN ? ` · ${hiddenN} hidden` : ''} · ${total} total tracked</div>`;
         }
         done();
       });
@@ -1114,14 +1127,14 @@ function runSubscriptionSynthesize() {
       if (keepOpen) {
         // Kept open for the user to act on (sign-in wall): give it focus so they
         // see it — otherwise they'd stack a fresh tab on top on the next click.
-        try { chrome.tabs.update(createdTabId, { active: true }); } catch (_) {}
+        try { chrome.tabs.update(createdTabId, { active: true }).catch(() => {}); } catch (_) {}
       } else {
-        try { chrome.tabs.remove(createdTabId); } catch (_) {}
+        try { chrome.tabs.remove(createdTabId).catch(() => {}); } catch (_) {}
       }
       createdTabId = null;
     }
     if (!keepOpen && prevActiveTabId != null) {
-      try { chrome.tabs.update(prevActiveTabId, { active: true }); } catch (_) {}
+      try { chrome.tabs.update(prevActiveTabId, { active: true }).catch(() => {}); } catch (_) {}
     }
     prevActiveTabId = null;
     subSynthBusy = false;
@@ -1302,8 +1315,30 @@ let synthAttempts = 0;
   });
 }
 
+// Attach a click handler plus the Enter/Space activation that a role="button"
+// element needs to behave like a real button (the persona chips and the
+// "open YouTube" control in popup.html are spans, not <button>s).
+function onActivate(el, handler) {
+  if (!el) return;
+  el.addEventListener('click', handler);
+  el.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') {
+      e.preventDefault();
+      handler(e);
+    }
+  });
+}
+
 async function init() {
   await load();
+
+  // Never hardcode the version in the HTML: it has gone stale on every release
+  // in this repo's history. manifest.json is the single source of truth, so read
+  // it at runtime and the footer can never disagree with the shipped build again.
+  const versionEl = document.getElementById('versionText');
+  if (versionEl) {
+    try { versionEl.textContent = 'v' + chrome.runtime.getManifest().version; } catch (_) {}
+  }
 
   // Tab switching
   document.querySelectorAll('.tab-btn').forEach(btn => {
@@ -1366,13 +1401,19 @@ async function init() {
   const openYt = document.getElementById('openYoutube');
   if (openYt) {
     openYt.addEventListener('click', () => {
-      try { chrome.tabs.create({ url: 'https://www.youtube.com/' }); } catch (_) {}
+      try { chrome.tabs.create({ url: 'https://www.youtube.com/' }).catch(() => {}); } catch (_) {}
+    });
+    openYt.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') {
+        e.preventDefault();
+        try { chrome.tabs.create({ url: 'https://www.youtube.com/' }).catch(() => {}); } catch (_) {}
+      }
     });
   }
 
   // Ko-fi support links
   const openKofi = () => {
-    try { chrome.tabs.create({ url: 'https://ko-fi.com/pyrategfxproductions' }); } catch (_) {}
+    try { chrome.tabs.create({ url: 'https://ko-fi.com/pyrategfxproductions' }).catch(() => {}); } catch (_) {}
   };
   const kofiFooterBtn = document.getElementById('kofiFooterBtn');
   if (kofiFooterBtn) kofiFooterBtn.addEventListener('click', openKofi);
@@ -1481,44 +1522,9 @@ function initAiGuardian() {
   // rejection that bubbles into the popup.
   chrome.runtime.sendMessage({ type: 'CHECK_AI_STATUS' })
     .then((res) => {
+    // Only the two loopback engines the extension actually speaks to.
     const providerName = res && res.provider === 'ollama' ? 'Ollama'
-      : res && res.provider === 'lmstudio' ? 'LM Studio'
-      : res && res.provider === 'onnx' ? 'Local Phi (ONNX)' : '';
-    const offeringBox = document.getElementById('aiOnnxOffering');
-
-    if (res && res.offering && res.provider === 'onnx') {
-      // Third engine detected but the runtime/model isn't ready to serve yet —
-      // mirror the framework's own offering: show the option + download link.
-      if (statusPill) {
-        statusPill.className = 'ai-status-pill offline';
-        statusPill.textContent = '🟠 Local Phi (ONNX) — download to enable';
-        const setup = res.setup || {};
-        statusPill.title = [
-          setup.installCommand,
-          setup.downloadCommand
-        ].filter(Boolean).join('\n') || 'Local Phi (ONNX) offline engine offered via asus_argb_framework';
-      }
-      if (modelSelect) {
-        modelSelect.innerHTML = '<option value="heuristic">Built-in Heuristic</option>';
-      }
-      const link = offeringBox && offeringBox.querySelector('a');
-      if (link) {
-        const setup = res.setup || {};
-        link.href = setup.downloadCommand
-          ? 'https://huggingface.co/microsoft/Phi-3.5-mini-instruct-onnx'
-          : '#';
-        link.target = '_blank';
-        link.rel = 'noopener noreferrer';
-      }
-      const cmdEl = offeringBox && offeringBox.querySelector('#aiOnnxCommand');
-      if (cmdEl) {
-        const setup = res.setup || {};
-        cmdEl.textContent = [setup.installCommand, setup.downloadCommand].filter(Boolean).join('  ⏎  ') || 'pip install onnxruntime-genai huggingface-hub';
-      }
-      if (offeringBox) offeringBox.style.display = 'block';
-      if (detailEl) detailEl.textContent = 'Local Phi (ONNX) engine detected but not ready to serve — install the runtime to enable this fully offline engine.';
-      return;
-    }
+      : res && res.provider === 'lmstudio' ? 'LM Studio' : '';
 
     if (res && res.ok && Array.isArray(res.models) && res.models.length) {
       if (statusPill) {
@@ -1529,7 +1535,6 @@ function initAiGuardian() {
         const active = (data.aiModel || '').trim();
         detailEl.textContent = `${providerName} connected — ${res.models.length} model${res.models.length === 1 ? '' : 's'} ready${active ? ` · active: ${active}` : ''}. 100% offline, zero telemetry.`;
       }
-      if (offeringBox) offeringBox.style.display = 'none';
       if (modelSelect) {
         modelSelect.innerHTML = '';
         res.models.forEach(m => {
@@ -1559,7 +1564,6 @@ function initAiGuardian() {
         statusPill.title = 'Local LLM not detected. Running built-in heuristic neural fallback.';
       }
       if (detailEl) detailEl.textContent = 'No local LLM detected — running the built-in heuristic engine. Fully offline, nothing leaves this machine.';
-      if (offeringBox) offeringBox.style.display = 'none';
       if (modelSelect) {
         modelSelect.innerHTML = '<option value="heuristic">Built-in Heuristic</option>';
       }
@@ -1570,9 +1574,9 @@ function initAiGuardian() {
       if (detailEl) detailEl.textContent = 'Could not reach the background worker. Click the icon again to retry — if it persists, reload the extension.';
     });
 
-  // Preset chips
+  // Preset chips (role="button" spans — keyboard activation included)
   document.querySelectorAll('.ai-chip').forEach(chip => {
-    chip.addEventListener('click', () => {
+    onActivate(chip, () => {
       const personaKey = chip.dataset.persona;
       const text = PERSONA_PRESETS[personaKey];
       if (text && tasteInput) {

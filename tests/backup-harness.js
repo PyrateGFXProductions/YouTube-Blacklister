@@ -2,7 +2,7 @@
 // then drives the REAL doImportFile / buildPayload / downloadBlob path.
 let saved = null;
 global.chrome = {
-  runtime: { getManifest: () => ({ version: '1.10.1' }) },
+  runtime: { getManifest: () => ({ version: '1.11.0' }) },
   storage: {
     local: {
       get: (_k, cb) => cb({}),

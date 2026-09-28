@@ -219,10 +219,12 @@ Always New To You is an unpacked Manifest V3 extension that runs in Chromium bro
    | Chrome | `chrome://extensions` |
    | Edge | `edge://extensions` |
    | Brave | `brave://extensions` |
-   | Firefox | `about:debugging#/runtime/this-browser` → **Load Temporary Add-on** |
-   | Zen | `about:debugging#/runtime/this-browser` → **Load Temporary Add-on**, or **Install Add-on From File** (see [ZEN-INSTALL.md](ZEN-INSTALL.md)) |
+   | Firefox | `about:debugging#/runtime/this-browser` → **Load Temporary Add-on** → select `blacklist-firefox.xpi` |
+   | Zen | **Install Add-on From File** → select `blacklist-firefox.xpi` (see [ZEN-INSTALL.md](ZEN-INSTALL.md)) |
 
-3. Enable **Developer mode**, choose **Load unpacked**, and select the repository folder.
+   > **Firefox-family browsers must load the packaged `.xpi`, not the repository folder.** The repository root carries the *universal* manifest (it declares both `background.scripts` and `background.service_worker`), which Firefox can refuse to start. Run `npm run package` to (re)build `blacklist-firefox.xpi` and the `zen-unpacked/` folder, then load one of those — neither is committed, because both are generated from the source above.
+
+3. **Chromium** (Chrome / Edge / Brave): enable **Developer mode**, choose **Load unpacked**, and select the repository folder.
 4. Pin **Always New To You** from your browser's extensions menu.
 5. Open [YouTube](https://www.youtube.com/) and start curating.
 
@@ -263,7 +265,7 @@ YouTube can change its markup at any time. If a menu item, card type, or page la
 
 This is vanilla JavaScript, HTML, and CSS with a single universal `manifest.json` that loads in both Chromium and Firefox-based browsers.
 
-1. Load the repository as an unpacked extension (Chromium: **Load unpacked** on the extensions page; Firefox/Zen: `about:debugging` → **Load Temporary Add-on**).
+1. Load the repository as an unpacked extension in Chromium (**Load unpacked** on the extensions page). For Firefox/Zen, run `npm run package` and load the generated `blacklist-firefox.xpi` (or the `zen-unpacked/` folder it produces) — the repository root is not a valid Firefox install target. See [ZEN-INSTALL.md](ZEN-INSTALL.md).
 2. Make your change.
 3. Choose **Reload** on the browser's extensions page.
 
@@ -277,7 +279,7 @@ It reads the version from `manifest.json`, derives per-browser manifests, and wr
 
 - `dist/chromium/` + `dist/chromium.zip` — Chromium family (Chrome, Edge, Brave, Opera, Vivaldi)
 - `dist/firefox/` + `dist/firefox.xpi` + `dist/firefox.zip` — Firefox / Zen / LibreWolf (sign the `.xpi` at addons.mozilla.org, or use the unpacked folder under a signature bypass)
-- `zen-unpacked/` + `blacklist-firefox.jar` / `.xpi` / `.zip` — refreshes the Zen install path used by [ZEN-INSTALL.md](ZEN-INSTALL.md)
+- `zen-unpacked/` + `blacklist-firefox.jar` / `.xpi` / `.zip` — refreshes the Zen install path used by [ZEN-INSTALL.md](ZEN-INSTALL.md). Generated locally by this script; **not** committed (see `.gitignore`).
 - `YouTube-Blacklister-v<version>.zip` — full release zip (source + docs + installer) for GitHub Releases
 
 Test on YouTube's home, search, subscription, and watch/recommendation surfaces where relevant.

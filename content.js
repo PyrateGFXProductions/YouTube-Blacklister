@@ -1,5 +1,5 @@
 /*
- * Always New To You - Smart Feed Blacklist (v1.10.1)
+ * Always New To You - Smart Feed Blacklist (v1.11.0)
  * ---------------------------------------------------------------
  * Core mechanisms:
  *
@@ -43,6 +43,12 @@ const VIDEO_CARD_SELECTORS = [
   'ytd-playlist-video-renderer',
   'ytd-playlist-panel-video-renderer'
 ].join(', ');
+
+// The card's thumbnail element — needed both to position the hover/quick-block
+// control and by hunt mode. It had been copy-pasted into six call sites, so it
+// lives here once; getCardThumbnail() below is the accessor.
+const VIDEO_THUMB_SELECTOR =
+  'ytd-thumbnail, #thumbnail, a#thumbnail, .yt-lockup-view-model-wiz__thumbnail, yt-thumbnail-view-model';
 
 const MENU_BUTTON_SELECTORS = [
   'ytd-menu-renderer button#button',
@@ -1004,6 +1010,10 @@ function filterShortsToSubscriptions() {
     const reel = reels[i];
     if (!reel || reel.dataset.hiddenByLocalBlacklist === 'true') continue;
     if (cardIsSubscribed(reel)) continue;
+    // Tag what THIS filter hid. data-hidden-by-local-blacklist is shared with
+    // ordinary channel/keyword/video blacklisting, so unhideShorts() cannot use
+    // it to tell the two apart — see unhideShorts().
+    reel.dataset.nytHiddenByShorts = '1';
     hideCardElement(reel);
   }
 
@@ -1017,7 +1027,10 @@ function filterShortsToSubscriptions() {
       'yt-shorts-lockup-view-model:not([data-hidden-by-local-blacklist="true"]), ' +
       'ytd-rich-item-renderer:not([data-hidden-by-local-blacklist="true"])'
     );
-    if (!survivors.length) hideCardElement(shelf);
+    if (!survivors.length) {
+      shelf.dataset.nytHiddenByShorts = '1';
+      hideCardElement(shelf);
+    }
   }
 }
 
@@ -1026,14 +1039,21 @@ function filterShortsToSubscriptions() {
 function unhideShorts() {
   const reels = document.querySelectorAll(
     'ytd-reel-item-renderer, yt-shorts-lockup-view-model, ' +
-    'ytd-rich-item-renderer, ytd-reel-shelf-renderer, ' +
-    'ytd-rich-shelf-renderer[is-shorts]'
+    'ytd-rich-shelf-renderer[is-shorts] ytd-rich-item-renderer, ' +
+    'ytd-reel-shelf-renderer, ytd-rich-shelf-renderer[is-shorts]'
   );
   for (let i = 0; i < reels.length; i++) {
     const el = reels[i];
     if (!el) continue;
-    // Only unhide what the shorts filter hid — never a channel/video blacklist.
-    if (el.dataset.hiddenByLocalBlacklist === 'true') {
+    // Only unhide what the shorts filter hid — never a channel/video/keyword
+    // blacklist. The shared data-hidden-by-local-blacklist flag is NOT proof:
+    // hideCardElement() sets it for ordinary blacklisted cards too, and because
+    // `ytd-rich-item-renderer` is both a feed card (VIDEO_CARD_SELECTORS) and a
+    // grid slot, testing that flag here un-hid every channel-blacklisted card on
+    // the home feed on each pass. nytHiddenByShorts is set ONLY by
+    // filterShortsToSubscriptions().
+    if (el.dataset.nytHiddenByShorts === '1') {
+      delete el.dataset.nytHiddenByShorts;
       unhideCardElement(el);
     }
   }
@@ -1515,15 +1535,22 @@ function runAiEvaluationBatch() {
   for (let i = 0; i < cards.length && candidates.length < 6; i++) {
     const card = cards[i];
     if (card.dataset.hiddenByLocalBlacklist === 'true') continue;
-    if (card.dataset.aiEvaluated === 'true') continue;
 
     const vid = getVideoId(card);
     const title = getVideoTitle(card);
     const channel = getChannelName(card);
     if (!title || title.length < 5) continue;
 
-    card.dataset.aiEvaluated = 'true';
-    candidates.push({ card, id: vid || title, title, channel });
+    // Keyed to the card's VIDEO, not a flat boolean. YouTube recycles card
+    // elements; with a sticky 'true' a recycled element was never evaluated for
+    // the video that replaced it, which is exactly what this file's header
+    // promises against. `vid` is stable, so de-baiting the title text (which
+    // rewrites the title element) does not invalidate the key.
+    const identity = vid || title;
+    if (card.dataset.aiEvaluated === identity) continue;
+
+    card.dataset.aiEvaluated = identity;
+    candidates.push({ card, id: identity, title, channel });
   }
 
   if (!candidates.length) return;
@@ -1756,9 +1783,7 @@ document.addEventListener('mouseover', (e) => {
 
   if (!card || card.dataset.hiddenByLocalBlacklist === 'true') return;
 
-  const thumb = card.querySelector(
-    'ytd-thumbnail, #thumbnail, a#thumbnail, .yt-lockup-view-model-wiz__thumbnail, yt-thumbnail-view-model'
-  );
+  const thumb = getCardThumbnail(card);
   if (!thumb) return;
 
   // Mouseover fires on every element transition — do the expensive layout
@@ -2241,16 +2266,9 @@ function looksSensationalist(title) {
   if (!t) return false;
   const capsCount = (t.match(/[A-Z]/g) || []).length;
   const isAllCaps = t.length > 10 && (capsCount / t.length) > 0.45;
-  const baitPats = [
-    /you won'?t believe/i, /in 24 hours/i, /shocking/i, /exposed/i,
-    /skibidi/i, /100x/i, /!!+/i, /\b(?:OMG|LOL|WOW|INSANE|CRAZY|EPIC|HUGE|MASSIVE)\b/i,
-    /\bprank\b/i, /\breaction\b/i, /\bchallenge\b/i, /\bvs\b/i,
-    /\b(?:drama|cancelled|canceled|apology)\b/i, /\b(?:crypto|moon|pump|dump|rich|hustle)\b/i,
-    /\b(?:hot|sexy|leaked|banned|gone|died|destroyed|owned|roasted)\b/i,
-    /\b(?:nobody|everyone|anyone|somebody) (?:knows?|talks? |says? )\b/i,
-    /(?:\d+\s+)?(?:things?|ways?|reasons?|secrets?|hacks?|tricks?) (?:you|to|that)/i
-  ];
-  return isAllCaps || baitPats.some(p => p.test(t));
+  // CLICKBAIT_PATTERNS is the SHARED table (shared-tables.js), loaded into this
+  // context by the manifest — never a local copy, which is what used to drift.
+  return isAllCaps || CLICKBAIT_PATTERNS.some(p => p.test(t));
 }
 
 function heuristicDebaitTitle(title) {
@@ -2261,8 +2279,9 @@ function heuristicDebaitTitle(title) {
   t = t.replace(/\s*[?!]+(\s|$)/g, '. ');
   t = t.replace(/\s*\?\s*\?+/g, '.');
   t = t.replace(/\b(?:that is|is going to|gonna)\b/gi, 'is about to');
-  t = t.replace(/\b(in 24 hours)\b/gi, '');
-  t = t.replace(/\b(?:shocking|exposed|insane|epic|crazy|massive|huge|wild)\b/gi, '');
+  // DEBait_CLEANERS is the SHARED table (shared-tables.js): a title must be
+  // neutralized identically whether the local model answered or this fallback ran.
+  for (const re of DEBait_CLEANERS) t = t.replace(re, '');
   const m = t.match(/^(you won'?t believe\s+)(.+)/i);
   if (m && m[2]) t = m[2];
   t = t.replace(/\s*\.{2,}/g, '.').replace(/\s{2,}/g, ' ').trim();
@@ -2299,6 +2318,38 @@ function scheduleDebaitPass() {
   }, 350);
 }
 
+// De-bait state is keyed to the VIDEO, never to a flat per-element boolean.
+// YouTube recycles card elements: the same node comes back holding a different
+// video, so a sticky marker made the de-baiter skip the new title forever. The
+// key cannot be the title text, because showDebaitState() rewrites the title
+// element itself — so it is the video id, falling back to the sticky flag only
+// when the card exposes no id (where recycling cannot be detected at all).
+function debaitIdentity(card) {
+  return (card && getVideoId(card)) || '';
+}
+
+function debaitAlreadyApplied(card) {
+  if (!card) return false;
+  const id = debaitIdentity(card);
+  if (!id) return Boolean(card.dataset.debaitState);
+  return card.dataset.debaitFor === id;
+}
+
+// Forget stale per-video de-bait state once the element has moved on to a
+// different video, so the new title is never compared against — or "restored"
+// to — the previous video's text. A no-op while the card still shows the same
+// video, which is what keeps the ✨ original/neutral toggle working.
+function resetDebaitStateIfRecycled(card) {
+  if (!card || !card.dataset) return false;
+  const id = debaitIdentity(card);
+  if (!id || !card.dataset.debaitFor || card.dataset.debaitFor === id) return false;
+  delete card.dataset.debaitState;
+  delete card.dataset.debaitFor;
+  delete card.dataset.neutralTitle;
+  delete card.dataset.originalTitle;
+  return true;
+}
+
 function runDebaitPass() {
   lastDebaitRun = Date.now();
   const cards = document.querySelectorAll(VIDEO_CARD_SELECTORS);
@@ -2307,7 +2358,8 @@ function runDebaitPass() {
   for (let i = 0; i < cards.length; i++) {
     const card = cards[i];
     if (!card || card.dataset.hiddenByLocalBlacklist === 'true') continue;
-    if (card.dataset.debaitState) continue;
+    resetDebaitStateIfRecycled(card);
+    if (debaitAlreadyApplied(card)) continue;
     const el = getVideoTitleElement(card);
     if (!el) continue;
     const t = el.textContent.trim();
@@ -2363,7 +2415,9 @@ function applyDebaitResults(candidates, res) {
     if (c.vid) debaitCache.set(c.vid, { neutral, original: c.title });
 
     const card = c.card;
-    if (!card || !card.isConnected || card.dataset.debaitState) return;
+    if (!card || !card.isConnected) return;
+    resetDebaitStateIfRecycled(card);
+    if (debaitAlreadyApplied(card)) return;
     const el = getVideoTitleElement(card);
     if (el && el.textContent.trim() === c.title) {
       showDebaitState(card, 'ai', neutral);
@@ -2381,6 +2435,7 @@ function showDebaitState(card, state, neutral) {
     }
     card.dataset.neutralTitle = neutral;
     card.dataset.debaitState = 'ai';
+    card.dataset.debaitFor = debaitIdentity(card);
     el.textContent = '';
 
     const badge = document.createElement('span');
@@ -2835,6 +2890,7 @@ function start() {
             node.classList.contains('custom-blacklist-option') ||
             node.classList.contains('nyt-quick-block-btn') ||
             node.classList.contains('nyt-debait-badge') ||
+            node.classList.contains('nyt-debait-title') ||
             node.classList.contains('nyt-tldw-btn') ||
             node.classList.contains('nyt-tldw-overlay') ||
             node.classList.contains('nyt-tldw-modal') ||
@@ -2938,26 +2994,6 @@ function ensureHuntStyles() {
   } catch (_) {}
 }
 
-function huntVisibleCards() {
-  try {
-    const all = document.querySelectorAll(VIDEO_CARD_SELECTORS);
-    const out = [];
-    for (let i = 0; i < all.length; i++) {
-      const c = all[i];
-      if (!c || c.dataset.hiddenByLocalBlacklist === 'true') continue;
-      if (c.offsetHeight <= 0) continue;
-      const thumb = c.querySelector(
-        'ytd-thumbnail, #thumbnail, a#thumbnail, .yt-lockup-view-model-wiz__thumbnail, yt-thumbnail-view-model'
-      );
-      if (!thumb) continue;
-      const r = thumb.getBoundingClientRect();
-      if (r.width < 60 || r.height < 40) continue;
-      out.push({ card: c, thumb });
-    }
-    return out;
-  } catch (_) { return []; }
-}
-
 function huntUpdateHud(note) {
   try {
     if (!huntHud) return;
@@ -3002,9 +3038,7 @@ function huntAddPrey(card, thumb) {
 
 function huntMovePreyEl(el, anchor) {
   try {
-    const thumb = anchor || (el && document.querySelector(
-      'ytd-thumbnail, #thumbnail, a#thumbnail, .yt-lockup-view-model-wiz__thumbnail, yt-thumbnail-view-model'
-    ));
+    const thumb = anchor || (el && document.querySelector(VIDEO_THUMB_SELECTOR));
     if (!thumb || !thumb.clientWidth) return;
     const thumbRect = thumb.getBoundingClientRect();
     const maxX = Math.max(0, thumbRect.width - 38);
@@ -3019,12 +3053,12 @@ function huntMovePreyEl(el, anchor) {
   } catch (_) {}
 }
 
-function huntThumbFor(card) {
+// The single card-thumbnail lookup. huntVisibleCards() used to duplicate this and
+// was never called by anything; every remaining call site shares this one now.
+function getCardThumbnail(card) {
   try {
     if (!card) return null;
-    return card.querySelector(
-      'ytd-thumbnail, #thumbnail, a#thumbnail, .yt-lockup-view-model-wiz__thumbnail, yt-thumbnail-view-model'
-    );
+    return card.querySelector(VIDEO_THUMB_SELECTOR);
   } catch (_) { return null; }
 }
 
@@ -3039,9 +3073,7 @@ function huntRoamAll() {
           if (el.parentNode) el.parentNode.removeChild(el);
           return;
         }
-        const thumb = el._nytHuntThumb?.isConnected ? el._nytHuntThumb : card.querySelector(
-          'ytd-thumbnail, #thumbnail, a#thumbnail, .yt-lockup-view-model-wiz__thumbnail, yt-thumbnail-view-model'
-        );
+        const thumb = el._nytHuntThumb?.isConnected ? el._nytHuntThumb : getCardThumbnail(card);
         if (!thumb) {
           card._nytHuntPrey = null;
           if (el.parentNode) el.parentNode.removeChild(el);
@@ -3061,10 +3093,7 @@ function huntRoamAll() {
       const hc = hoveredVideoCard;
       if (hc && hc.isConnected && hc.offsetHeight > 0 && hc.dataset.hiddenByLocalBlacklist !== 'true') {
         if (!(hc._nytHuntPrey && hc._nytHuntPrey.isConnected)) {
-          const thumb = hc.querySelector(
-            'ytd-thumbnail, #thumbnail, a#thumbnail, .yt-lockup-view-model-wiz__thumbnail, yt-thumbnail-view-model'
-          );
-          huntAddPrey(hc, thumb);
+          huntAddPrey(hc, getCardThumbnail(hc));
         }
       }
     } catch (_) {}

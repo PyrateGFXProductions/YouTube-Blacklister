@@ -81,7 +81,7 @@ time (popup → Settings → **Export Backup** opens the Backup & Restore page) 
 - **Last resort — self-sign via AMO (works on every Firefox-family build, no exceptions):**
   1. Create a free account at `addons.mozilla.org` and generate API keys at
      `https://addons.mozilla.org/developers/addon/api/key/`.
-  2. In this folder:
+  2. In this folder — run `.\package-extension.ps1` first, since `zen-unpacked/` is generated locally and is not part of the repository:
      ```powershell
      npm install -g web-ext
      $env:WEB_EXT_API_KEY="<your API key>"

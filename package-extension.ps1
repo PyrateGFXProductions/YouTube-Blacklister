@@ -36,6 +36,7 @@ $essentialFiles = @(
     "manifest.json",
     "background.js",
     "content.js",
+    "shared-tables.js",
     "popup.html",
     "popup.js",
     "backup.html",
@@ -66,6 +67,7 @@ foreach ($file in $essentialFiles) {
 $extensionFiles = @(
     "background.js",
     "content.js",
+    "shared-tables.js",
     "popup.html",
     "popup.js",
     "backup.html",
@@ -83,12 +85,35 @@ $firefoxManifest = $manifest | ConvertTo-Json -Depth 10 | ConvertFrom-Json
 # `key` is Chromium-only (pins the extension ID in Chrome-based browsers).
 # Keep it OUT of Firefox-family manifests: web-ext/AMO lint flags it as an unexpected property.
 $firefoxManifest.PSObject.Properties.Remove("key")
-$firefoxManifest.background = [pscustomobject]@{ scripts = @("background.js") }
+# Firefox has no importScripts() outside a worker context, so the shared tables
+# are listed as a second background script (loaded before background.js).
+$firefoxManifest.background = [pscustomobject]@{ scripts = @("shared-tables.js", "background.js") }
 
 function Write-ManifestJson {
     param([object]$ManifestObj, [string]$Path)
     $json = $ManifestObj | ConvertTo-Json -Depth 10
     [System.IO.File]::WriteAllText($Path, $json, (New-Object System.Text.UTF8Encoding($false)))
+}
+
+function Move-FileOverwriting {
+    param([string]$Source, [string]$Destination)
+    # [System.IO.File]::Move($src, $dst, $true) — the overwriting overload — is a
+    # .NET Core / PowerShell 7 API. `npm run package` invokes `powershell.exe`, which
+    # on Windows is Windows PowerShell 5.1 on .NET Framework, where only the
+    # 2-argument Move exists. That call failed with a method-overload binding error
+    # and aborted the build immediately after dist/chromium.zip, so the Firefox xpi,
+    # zen-unpacked/, manifest-firefox.json and the release zip were never produced.
+    # Prefer the atomic overwrite where it exists; otherwise fall back to a
+    # same-volume delete + rename, which still cannot leave a truncated artifact.
+    try {
+        [System.IO.File]::Move($Source, $Destination, $true)
+    }
+    catch {
+        if (Test-Path $Destination) {
+            Remove-Item -Force -ErrorAction SilentlyContinue $Destination
+        }
+        [System.IO.File]::Move($Source, $Destination)
+    }
 }
 
 function Copy-FileAtomic {
@@ -107,7 +132,7 @@ function Copy-FileAtomic {
     $tempPath = Join-Path $destinationDir ".$([System.IO.Path]::GetFileName($DestinationPath)).$PID.tmp"
     try {
         Copy-Item -Path $SourcePath -Destination $tempPath -Force
-        [System.IO.File]::Move($tempPath, $DestinationPath, $true)
+        Move-FileOverwriting -Source $tempPath -Destination $DestinationPath
     }
     finally {
         if (Test-Path $tempPath) {
@@ -200,7 +225,7 @@ try {
     $zipTempPath = Join-Path $OutputDir ".$zipName.partial.zip"
     try {
         Compress-Archive -Path "$stagingDir\*" -DestinationPath $zipTempPath -CompressionLevel Optimal
-        [System.IO.File]::Move($zipTempPath, $zipPath, $true)
+        Move-FileOverwriting -Source $zipTempPath -Destination $zipPath
     }
     finally {
         if (Test-Path $zipTempPath) {

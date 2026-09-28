@@ -1,4 +1,4 @@
-// Backup & Restore page for Always New To You - YouTube Smart Blacklister v1.10.1
+// Backup & Restore page for Always New To You - YouTube Smart Blacklister v1.11.0
 //
 // WHY THIS PAGE EXISTS (and why export/import were broken in the popup):
 //  - Export used a detached <a download> + immediate URL.revokeObjectURL(), which
