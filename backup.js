@@ -184,6 +184,10 @@ function buildPayload() {
     keywords: data.keywords,
     whitelistChannels: data.whitelistChannels,
     subsSnapshot: data.subsSnapshot,
+    keywordExceptions: data.keywordExceptions,
+    feedHealthLog: data.feedHealthLog,
+    communityPacks: data.communityPacks,
+    temporalRules: data.temporalRules,
     settings: {
       blockShorts: data.blockShorts, shortsSubOnly: data.shortsSubOnly,
       blockCommunity: data.blockCommunity, autoDubMode: data.autoDubMode,

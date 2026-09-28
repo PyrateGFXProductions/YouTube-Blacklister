@@ -154,7 +154,9 @@ function loadSettings() {
         'tldwEnabled',
         'huntMode',
         'chipRescue',
-        'newToYouAuto'
+        'newToYouAuto',
+        'keywordExceptions',
+        'temporalRules'
       ], (res) => {
         if (chrome.runtime?.lastError) { resolve(); return; }
         settings.channels = (Array.isArray(res.channels) ? res.channels : settings.channels)
@@ -194,6 +196,8 @@ function loadSettings() {
         settings.huntMode = Boolean(res.huntMode);
         settings.chipRescue = Boolean(res.chipRescue);
         settings.newToYouAuto = Boolean(res.newToYouAuto);
+        settings.keywordExceptions = res.keywordExceptions && typeof res.keywordExceptions === 'object' ? res.keywordExceptions : {};
+        settings.temporalRules = Array.isArray(res.temporalRules) ? res.temporalRules : [];
 
         injectBlacklistStyles();
         refreshSubscriptionKeySet();
@@ -354,6 +358,39 @@ function injectBlacklistStyles() {
       ytd-video-renderer:hover .nyt-quick-block-btn,
       ytd-compact-video-renderer:hover .nyt-quick-block-btn,
       ytd-grid-video-renderer:hover .nyt-quick-block-btn {
+        opacity: 0.92;
+      }
+      .nyt-extract-kw-btn {
+        position: absolute;
+        top: 40px;
+        left: 8px;
+        z-index: 999;
+        width: 28px;
+        height: 28px;
+        border-radius: 50%;
+        background: rgba(18, 18, 18, 0.85);
+        color: #7be2ff;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        opacity: 0;
+        transition: opacity 0.15s ease, background-color 0.15s ease, transform 0.15s ease;
+        cursor: pointer;
+        border: 1px solid rgba(255, 255, 255, 0.25);
+        backdrop-filter: blur(4px);
+        box-shadow: 0 2px 6px rgba(0,0,0,0.5);
+      }
+      .nyt-extract-kw-btn:hover {
+        background: #2b9fff !important;
+        color: #ffffff !important;
+        transform: scale(1.1);
+        border-color: #ffffff;
+      }
+      ytd-rich-item-renderer:hover .nyt-extract-kw-btn,
+      yt-lockup-view-model:hover .nyt-extract-kw-btn,
+      ytd-video-renderer:hover .nyt-extract-kw-btn,
+      ytd-compact-video-renderer:hover .nyt-extract-kw-btn,
+      ytd-grid-video-renderer:hover .nyt-extract-kw-btn {
         opacity: 0.92;
       }
       ${getAiFeatureCss()}
@@ -1206,16 +1243,28 @@ function autoDubHideDecision(mode, subscribed, badgeText) {
 // channel/video blacklists are handled separately by the caller.
 // `extraText` carries badge text (e.g. "Auto-dubbed") so plain keyword/regex
 // rules like `/auto.?dubbed/i` match the badge the same way they match titles.
-function keywordRulesHidden({ title, channel, keywords, subscribed, whitelisted, extraText }) {
-  if (subscribed || whitelisted) return { hidden: false, reason: null };
+// `keywordExceptions` is { keyword: [channel1, channel2] } - channels exempt from that keyword.
+function keywordRulesHidden({ title, channel, keywords, subscribed, whitelisted, extraText, keywordExceptions }) {
+  if (subscribed || whitelisted) return { hidden: false, reason: null, matchedKeyword: null };
   const kw = Array.isArray(keywords) ? keywords : [];
+  const exc = keywordExceptions && typeof keywordExceptions === 'object' ? keywordExceptions : {};
   const haystacks = [title, extraText, channel].filter(v => typeof v === 'string' && v);
   for (let i = 0; i < haystacks.length; i++) {
-    if (kw.some(k => hasWordBoundaryKeyword(haystacks[i], k))) {
-      return { hidden: true, reason: `keyword in ${haystacks[i]}` };
+    for (let j = 0; j < kw.length; j++) {
+      if (hasWordBoundaryKeyword(haystacks[i], kw[j])) {
+        // Check if this channel is exempt from this keyword
+        const exemptChannels = exc[kw[j].toLowerCase()] || [];
+        const channelNorm = (channel || '').toLowerCase();
+        const isExempt = exemptChannels.some(c => {
+          const cn = c.toLowerCase();
+          return cn === channelNorm || cn === '@' + channelNorm.replace(/^@/, '');
+        });
+        if (isExempt) continue; // Skip this keyword for this channel
+        return { hidden: true, reason: `keyword in ${haystacks[i]}`, matchedKeyword: kw[j] };
+      }
     }
   }
-  return { hidden: false, reason: null };
+  return { hidden: false, reason: null, matchedKeyword: null };
 }
 
 function evaluateCard(card) {
@@ -1278,10 +1327,15 @@ function evaluateCard(card) {
     keywords: settings.keywords,
     extraText: badgeText,
     subscribed: subscribedForAutoDub,
-    whitelisted: false // whitelist already returned above
+    whitelisted: false, // whitelist already returned above
+    keywordExceptions: settings.keywordExceptions
   });
   if (kwDecision.hidden) {
     if (window.__blkDebug) console.log('[blkDebug] KEYWORD HIT:', kwDecision.reason);
+    // Increment hit counter for the matched keyword
+    if (kwDecision.matchedKeyword && typeof chrome !== 'undefined' && chrome.runtime) {
+      chrome.runtime.sendMessage({ type: 'INCREMENT_KEYWORD_HIT', keyword: kwDecision.matchedKeyword }).catch(() => {});
+    }
     return { hidden: true, reason: kwDecision.reason, resolved: true };
   }
 
@@ -1825,6 +1879,38 @@ document.addEventListener('mouseover', (e) => {
     thumb.appendChild(btn);
   }
 
+  // Keyword extractor button (below quick-block)
+  if (settings.enableQuickBlock !== false && !card.querySelector('.nyt-extract-kw-btn')) {
+    const kwBtn = document.createElement('div');
+    kwBtn.className = 'nyt-extract-kw-btn';
+    kwBtn.setAttribute('title', 'Extract Keywords from Title (1-Click)');
+    kwBtn.setAttribute('role', 'button');
+    kwBtn.innerHTML = `
+      <svg height="16" viewBox="0 0 24 24" width="16" focusable="false" style="fill:currentColor;pointer-events:none;">
+        <path d="M12 17c1.65 0 3-1.35 3-3s-1.35-3-3-3-3 1.35-3 3 1.35 3 3 3zm7.99-8c.01.34.01.68 0 1.01 0 1.79-.73 3.42-1.9 4.59.01 0 .02.02.02.03 1.31-.79 2.19-2.19 2.19-3.75 0-1.26-.5-2.4-1.31-3.27l-1.5 1.5c.53.99.84 2.1.84 3.32zm0-2.52c-.03-.01-.05-.02-.08-.03 1.22-.19 2.16-1.24 2.16-2.48 0-1.38-1.12-2.5-2.5-2.5-1.24 0-2.29.94-2.48 2.16-.94-.47-2-.76-3.11-.76s-2.16.5-3.01 1.31l-4.23 4.23c-.48.48-.78 1.13-.78 1.82 0 .66.28 1.27.73 1.72l5.02 5.02c.94-.94 1.51-2.25 1.51-3.65 0-1.66-.87-3.13-2.16-3.99.01-.02.02-.04.02-.06-1.65-.42-2.87-1.92-2.87-3.69 0-2.21 1.79-4 4-4 1.77 0 3.27 1.22 3.69 2.87.02-.02.04-.05.06-.08z"/>
+      </svg>
+    `;
+
+    kwBtn.addEventListener('pointerdown', (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      ev.stopImmediatePropagation();
+    }, true);
+    kwBtn.addEventListener('mousedown', (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      ev.stopImmediatePropagation();
+    }, true);
+    kwBtn.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      ev.stopImmediatePropagation();
+      extractKeywordsFromCard(card);
+    }, true);
+
+    thumb.appendChild(kwBtn);
+  }
+
   if (settings.huntMode && (!card._nytHuntPrey || !card._nytHuntPrey.isConnected)) {
     huntAddPrey(card, thumb);
   }
@@ -2287,6 +2373,126 @@ function heuristicDebaitTitle(title) {
   t = t.replace(/\s*\.{2,}/g, '.').replace(/\s{2,}/g, ' ').trim();
   t = t.replace(/[.,]+$/, '');
   return t || String(title).trim();
+}
+
+// ------------------------------------------------------------------
+// QUICK KEYWORD EXTRACTION (from video title)
+// ------------------------------------------------------------------
+
+// Common filler/stop words to filter out when extracting candidate
+// blacklist keywords from a video title.
+const KW_STOP_WORDS = new Set([
+  'the','a','an','and','or','to','in','on','of','for','is','it','at','by',
+  'with','from','as','this','that','these','those','your','you','we','our',
+  'be','been','was','are','were','so','if','no','not','but','than','then',
+  'will','can','just','more','what','how','why','when','where','which','who',
+  'new','now','has','have','had','do','does','did','going','going','video',
+  'youtube','feat','ft','vs','vs.','and','or','the','this','that','these',
+  'those','very','really','still','ever','never','too','also','such','much',
+  'many','most','least','best','worst','better','worse','thing','things',
+]);
+
+// Extracts candidate keywords from the card's title text.
+// Returns an array of normalized keyword strings suitable for adding
+// directly to the keyword blacklist.
+function extractKeywordsFromTitle(title) {
+  if (!title || typeof title !== 'string') return [];
+  const t = title.trim();
+  if (!t) return [];
+
+  // Split on non-alphanumeric boundaries, then filter meaningful tokens.
+  const tokens = t.split(/[^a-zA-Z0-9]+/i).map(s => s.toLowerCase()).filter(Boolean);
+
+  const candidates = [];
+  const seen = new Set();
+
+  for (const token of tokens) {
+    if (!token || token.length < 3) continue;
+    if (KW_STOP_WORDS.has(token)) continue;
+    if (seen.has(token)) continue;
+    seen.add(token);
+    candidates.push(token);
+  }
+
+  // Also extract multi-word phrases (2-word and 3-word n-grams) that are
+  // NOT purely filler, to catch things like "year review", "holiday gift".
+  const filteredTokens = tokens.filter(t => t.length >= 3 && !KW_STOP_WORDS.has(t));
+  for (let i = 0; i < filteredTokens.length - 1; i++) {
+    for (let n = 2; n <= 3 && i + n <= filteredTokens.length; n++) {
+      const phrase = filteredTokens.slice(i, i + n).join(' ');
+      if (phrase.length >= 5 && !seen.has(phrase)) {
+        seen.add(phrase);
+        candidates.push(phrase);
+      }
+    }
+  }
+
+  return candidates;
+}
+
+// Main entry point triggered by the quick-extract icon on a video card.
+function extractKeywordsFromCard(card) {
+  if (!card || !card.querySelector) {
+    showToast('Could not extract keywords: no card found');
+    return;
+  }
+
+  const titleEl = getVideoTitleElement(card);
+  let titleText = '';
+  if (titleEl) {
+    titleText = titleEl.textContent || titleEl.getAttribute('aria-label') || '';
+  } else {
+    // Fallback: try aria-label on the card's anchor
+    const anchor = card.querySelector('a#video-title-link');
+    titleText = anchor ? (anchor.getAttribute('title') || anchor.getAttribute('aria-label') || '') : '';
+  }
+
+  if (!titleText.trim()) {
+    showToast('No title found to extract keywords from');
+    return;
+  }
+
+  const keywords = extractKeywordsFromTitle(titleText);
+  if (!keywords.length) {
+    showToast('No meaningful keywords found to extract');
+    return;
+  }
+
+  // Add extracted keywords to storage. We add only up to a reasonable
+  // cap to avoid spamming the blacklist from a single click.
+  const toAdd = keywords.slice(0, 8);
+
+  chrome.storage.local.get(['keywords'], (result) => {
+    const existing = result.keywords || [];
+    const newOnes = toAdd.filter(k => !existing.includes(k));
+
+    if (!newOnes.length) {
+      showToast('All extracted keywords already in blacklist');
+      return;
+    }
+
+    const updated = [...existing, ...newOnes];
+    chrome.storage.local.set({ keywords: updated }, () => {
+      // Trigger a re-scan to apply the new keywords immediately
+      if (typeof processFeed === 'function') {
+        setTimeout(() => processFeed(true), 300);
+      }
+      showToast(
+        `Added ${newOnes.length} keyword${newOnes.length > 1 ? 's' : ''}: ${newOnes.join(', ')}`,
+        () => {
+          chrome.storage.local.get(['keywords'], (r) => {
+            const filtered = (r.keywords || []).filter(k => !newOnes.includes(k));
+            chrome.storage.local.set({ keywords: filtered }, () => {
+              if (typeof processFeed === 'function') {
+                setTimeout(() => processFeed(true), 300);
+              }
+              showToast('Removed ' + newOnes.join(', '));
+            });
+          });
+        }
+      );
+    });
+  });
 }
 
 function getVideoTitleElement(card) {

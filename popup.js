@@ -12,20 +12,250 @@ const RANKS = [
 ];
 
 const STARTER_PACKS = {
-  brainrot: ['prank', 'skibidi', 'in 24 hours', "you won't believe", 'shocking', 'exposed', 'reaction'],
-  crypto: ['crypto', 'bitcoin', 'memecoin', '100x', 'passive income', 'dropshipping'],
-  aislop: ['ai generated', 'faceless channel', 'text to speech', 'midjourney'],
-  drama: ['drama', 'canceled', 'apology video', 'responds to', 'clout'],
+  brainrot: [
+    { kw: 'prank' },
+    { kw: 'skibidi' },
+    { kw: 'in 24 hours' },
+    { kw: "you won't believe" },
+    { kw: 'shocking' },
+    { kw: 'exposed' },
+    { kw: 'reaction' }
+  ],
+  crypto: [
+    { kw: 'crypto' },
+    { kw: 'bitcoin' },
+    { kw: 'memecoin' },
+    { kw: '100x' },
+    { kw: 'passive income' },
+    { kw: 'dropshipping' }
+  ],
+  aislop: [
+    { kw: 'ai generated' },
+    { kw: 'faceless channel' },
+    { kw: 'text to speech' },
+    { kw: 'midjourney' }
+  ],
+  drama: [
+    { kw: 'drama' },
+    { kw: 'canceled' },
+    { kw: 'apology video' },
+    { kw: 'responds to' },
+    { kw: 'clout' }
+  ],
 
   // --- NEW PACKS (added alongside original 4) ---
-  nonenglish: ['auto-dubbed', 'auto dub', 'dubbed', 'subtitled', 'foreign', 'non english', 'multi language', 'international', 'global version', 'translated', 'foreign language', 'non-english', 'dub', 'subtitle', 'global edition'],
-  sports: ['football', 'baseball', 'basketball', 'soccer', 'golf', 'hockey', 'volleyball', 'cup', 'match', 'tennis', 'espn', 'mlb', 'nfl', 'nba', 'fifa', 'uefa', 'highlights', 'touchdown', 'home run', 'super bowl', 'world cup'],
-  politics: ['trump', 'politics', 'cnn', 'elon musk', 'governor', 'president', 'mayor', 'breaking news', "america's most", 'america\'s best', "america's worst", 'fox news', 'msnbc', 'congress', 'senate', 'election', 'vote', 'campaign', 'rally', 'impeachment', 'indictment'],
-  listicles: ['top 5', 'top 10', 'top 100', 'best of', 'the best', 'the worst', 'best to worst', 'first look', 'first hands on', 'ultimate guide', 'walkthrough', 'walkaround', 'topgear', 'top gear', 'best kept secret', 'ranked', 'tier list', 'power ranking', 'definitive guide', 'complete guide'],
-  automotive: ['dashcam', 'dash cam', 'bad drivers', 'car talk', 'i drove', 'mpg test', 'walkaround', 'pricing', 'should you buy', 'do not buy', 'never finance', 'dealer', 'dealership', 'car wizard', 'customer states', 'mile update', 'reliability guide', 'daily driver', 'first look', 'test drive', 'review', 'buyers guide', 'buying guide'],
-  religious: ['catholic', 'islamic', 'jewish', 'christian', 'church', 'sermon', 'islam', 'hindu', 'hindi', 'church of', 'bible', 'quran', 'torah', 'pastor', 'preacher', 'ministry', 'gospel', 'prayer', 'worship', 'faith', 'belief', 'religion', 'spiritual', 'god', 'jesus', 'allah', 'prophet'],
-  gaming: ['minecraft', 'world of warcraft', 'warcraft', 'warhammer', 'ranked', 'games', 'gaming', 'gamers', 'let\'s play', 'playthrough', 'walkthrough', 'speedrun', 'tier list', 'meta', 'build guide', 'patch notes', 'update', 'dlc', 'expansion', 'season pass', 'battle pass', 'loot', 'grind', 'farm', 'raid', 'dungeon', 'boss fight', 'pvp', 'pve', 'mmorpg', 'rpg', 'fps', 'moba', 'battle royale'],
-  musicspam: ['music', 'music video', 'official music video', 'official video', 'official trailer', 'trailer', 'teaser', 'playlist', 'new music', 'new release', 'lyric video', 'audio', 'visualizer', 'mix', 'remix', 'cover', 'reaction', 'live performance', 'concert', 'tour', 'album', 'single', 'ep', 'vinyl', 'streaming', 'spotify', 'apple music']
+  nonenglish: [
+    { kw: 'auto-dubbed' },
+    { kw: 'auto dub' },
+    { kw: 'dubbed' },
+    { kw: 'subtitled' },
+    { kw: 'foreign' },
+    { kw: 'non english' },
+    { kw: 'multi language' },
+    { kw: 'international' },
+    { kw: 'global version' },
+    { kw: 'translated' },
+    { kw: 'foreign language' },
+    { kw: 'non-english' },
+    { kw: 'dub' },
+    { kw: 'subtitle' },
+    { kw: 'global edition' },
+    { kw: '/auto.?dub/i' }
+  ],
+  sports: [
+    { kw: 'football' },
+    { kw: 'baseball' },
+    { kw: 'basketball' },
+    { kw: 'soccer' },
+    { kw: 'golf' },
+    { kw: 'hockey' },
+    { kw: 'volleyball' },
+    { kw: 'cup' },
+    { kw: 'match' },
+    { kw: 'tennis' },
+    { kw: 'espn' },
+    { kw: 'mlb' },
+    { kw: 'nfl' },
+    { kw: 'nba' },
+    { kw: 'fifa' },
+    { kw: 'uefa' },
+    { kw: 'highlights' },
+    { kw: 'touchdown' },
+    { kw: 'home run' },
+    { kw: 'super bowl' },
+    { kw: 'world cup' }
+  ],
+  politics: [
+    { kw: 'trump' },
+    { kw: 'politics' },
+    { kw: 'cnn' },
+    { kw: 'elon musk' },
+    { kw: 'governor' },
+    { kw: 'president' },
+    { kw: 'mayor' },
+    { kw: 'breaking news' },
+    { kw: "america's most" },
+    { kw: "america's best" },
+    { kw: "america's worst" },
+    { kw: 'fox news' },
+    { kw: 'msnbc' },
+    { kw: 'congress' },
+    { kw: 'senate' },
+    { kw: 'election' },
+    { kw: 'vote' },
+    { kw: 'campaign' },
+    { kw: 'rally' },
+    { kw: 'impeachment' },
+    { kw: 'indictment' }
+  ],
+  listicles: [
+    { kw: 'top 5' },
+    { kw: 'top 10' },
+    { kw: 'top 100' },
+    { kw: 'best of' },
+    { kw: 'the best' },
+    { kw: 'the worst' },
+    { kw: 'best to worst' },
+    { kw: 'first look' },
+    { kw: 'first hands on' },
+    { kw: 'ultimate guide' },
+    { kw: 'walkthrough' },
+    { kw: 'walkaround' },
+    { kw: 'topgear' },
+    { kw: 'top gear' },
+    { kw: 'best kept secret' },
+    { kw: 'ranked' },
+    { kw: 'tier list' },
+    { kw: 'power ranking' },
+    { kw: 'definitive guide' },
+    { kw: 'complete guide' },
+    { kw: '/\\btop\\s+\\d+\\b/i' },
+    { kw: '/\\bbest\\s+(of|\\d+)\\b/i' }
+  ],
+  automotive: [
+    { kw: 'dashcam' },
+    { kw: 'dash cam' },
+    { kw: 'bad drivers' },
+    { kw: 'car talk' },
+    { kw: 'i drove' },
+    { kw: 'mpg test' },
+    { kw: 'walkaround' },
+    { kw: 'pricing' },
+    { kw: 'should you buy' },
+    { kw: 'do not buy' },
+    { kw: 'never finance' },
+    { kw: 'dealer' },
+    { kw: 'dealership' },
+    { kw: 'car wizard' },
+    { kw: 'customer states' },
+    { kw: 'mile update' },
+    { kw: 'reliability guide' },
+    { kw: 'daily driver' },
+    { kw: 'first look' },
+    { kw: 'test drive' },
+    { kw: 'review' },
+    { kw: 'buyers guide' },
+    { kw: 'buying guide' },
+    { kw: '/\\b(car|truck|suv)\\s+(review|test|drive)\\b/i' },
+    { kw: '/\\b(mpg|fuel economy)\\s+(test|numbers?)\\b/i' },
+    { kw: '/\\bwalk.?around\\b/i' }
+  ],
+  religious: [
+    { kw: 'catholic' },
+    { kw: 'islamic' },
+    { kw: 'jewish' },
+    { kw: 'christian' },
+    { kw: 'church' },
+    { kw: 'sermon' },
+    { kw: 'islam' },
+    { kw: 'hindu' },
+    { kw: 'hindi' },
+    { kw: 'church of' },
+    { kw: 'bible' },
+    { kw: 'quran' },
+    { kw: 'torah' },
+    { kw: 'pastor' },
+    { kw: 'preacher' },
+    { kw: 'ministry' },
+    { kw: 'gospel' },
+    { kw: 'prayer' },
+    { kw: 'worship' },
+    { kw: 'faith' },
+    { kw: 'belief' },
+    { kw: 'religion' },
+    { kw: 'spiritual' },
+    { kw: 'god' },
+    { kw: 'jesus' },
+    { kw: 'allah' },
+    { kw: 'prophet' }
+  ],
+  gaming: [
+    { kw: 'minecraft' },
+    { kw: 'world of warcraft' },
+    { kw: 'warcraft' },
+    { kw: 'warhammer' },
+    { kw: 'ranked' },
+    { kw: 'games' },
+    { kw: 'gaming' },
+    { kw: 'gamers' },
+    { kw: "let's play" },
+    { kw: 'playthrough' },
+    { kw: 'walkthrough' },
+    { kw: 'speedrun' },
+    { kw: 'tier list' },
+    { kw: 'meta' },
+    { kw: 'build guide' },
+    { kw: 'patch notes' },
+    { kw: 'update' },
+    { kw: 'dlc' },
+    { kw: 'expansion' },
+    { kw: 'season pass' },
+    { kw: 'battle pass' },
+    { kw: 'loot' },
+    { kw: 'grind' },
+    { kw: 'farm' },
+    { kw: 'raid' },
+    { kw: 'dungeon' },
+    { kw: 'boss fight' },
+    { kw: 'pvp' },
+    { kw: 'pve' },
+    { kw: 'mmorpg' },
+    { kw: 'rpg' },
+    { kw: 'fps' },
+    { kw: 'moba' },
+    { kw: 'battle royale' }
+  ],
+  musicspam: [
+    { kw: 'music' },
+    { kw: 'music video' },
+    { kw: 'official music video' },
+    { kw: 'official video' },
+    { kw: 'official trailer' },
+    { kw: 'trailer' },
+    { kw: 'teaser' },
+    { kw: 'playlist' },
+    { kw: 'new music' },
+    { kw: 'new release' },
+    { kw: 'lyric video' },
+    { kw: 'audio' },
+    { kw: 'visualizer' },
+    { kw: 'mix' },
+    { kw: 'remix' },
+    { kw: 'cover' },
+    { kw: 'reaction' },
+    { kw: 'live performance' },
+    { kw: 'concert' },
+    { kw: 'tour' },
+    { kw: 'album' },
+    { kw: 'single' },
+    { kw: 'ep' },
+    { kw: 'vinyl' },
+    { kw: 'streaming' },
+    { kw: 'spotify' },
+    { kw: 'apple music' },
+    { kw: '/\\bofficial\\s+(music\\s+)?video\\b/i' },
+    { kw: '/\\b(lyric|audio|visualizer)\\s+video\\b/i' }
+  ]
 };
 
 const ALGORITHM_WISDOM = [
@@ -67,7 +297,13 @@ let data = {
   tldwEnabled: true,
   huntMode: false,
   chipRescue: false,
-  newToYouAuto: false
+  newToYouAuto: false,
+
+  // --- NEW FEATURES ---
+  keywordExceptions: {},      // { keyword: [whitelistedChannel1, whitelistedChannel2] }
+  feedHealthLog: [],          // [{ ts, hiddenByChannel, hiddenByKeyword, hiddenByAI, totalVisible, purity }]
+  communityPacks: [],         // [{ url, name, enabled, lastFetched, rules: [] }]
+  temporalRules: []           // [{ keyword, expires: ISO date, reason }]
 };
 
 let channelFilter = '';
@@ -98,7 +334,11 @@ function load() {
       'tldwEnabled',
       'huntMode',
       'chipRescue',
-      'newToYouAuto'
+      'newToYouAuto',
+      'keywordExceptions',
+      'feedHealthLog',
+      'communityPacks',
+      'temporalRules'
     ], (res) => {
       // Mirror save()'s teardown guard: reading storage can fail, and the popup can
       // be torn down mid-read ("Extension context invalidated"), leaving res
@@ -127,6 +367,10 @@ function load() {
       data.huntMode = Boolean(res.huntMode);
       data.chipRescue = Boolean(res.chipRescue);
       data.newToYouAuto = Boolean(res.newToYouAuto);
+      data.keywordExceptions = res.keywordExceptions && typeof res.keywordExceptions === 'object' ? res.keywordExceptions : {};
+      data.feedHealthLog = Array.isArray(res.feedHealthLog) ? res.feedHealthLog : [];
+      data.communityPacks = Array.isArray(res.communityPacks) ? res.communityPacks : [];
+      data.temporalRules = Array.isArray(res.temporalRules) ? res.temporalRules : [];
       resolve();
     });
   });
@@ -158,7 +402,11 @@ async function save() {
     tldwEnabled: data.tldwEnabled,
     huntMode: data.huntMode,
     chipRescue: data.chipRescue,
-    newToYouAuto: data.newToYouAuto
+    newToYouAuto: data.newToYouAuto,
+    keywordExceptions: data.keywordExceptions,
+    feedHealthLog: data.feedHealthLog,
+    communityPacks: data.communityPacks,
+    temporalRules: data.temporalRules
   }).catch(() => {});
 
   // Notify active YouTube tabs to re-apply rules immediately.
@@ -469,8 +717,9 @@ function renderGamification() {
   // Update starter packs active status
   document.querySelectorAll('.pack-btn').forEach(btn => {
     const packKey = btn.dataset.pack;
-    const words = STARTER_PACKS[packKey];
-    if (words && words.length) {
+    const pack = STARTER_PACKS[packKey];
+    if (pack && pack.length) {
+      const words = pack.map(p => p.kw);
       const allIncluded = words.every(w => data.keywords.includes(w));
       if (allIncluded) {
         btn.classList.add('applied');
@@ -1459,9 +1708,10 @@ async function init() {
   document.querySelectorAll('.pack-btn').forEach(btn => {
     btn.addEventListener('click', () => {
       const packKey = btn.dataset.pack;
-      const words = STARTER_PACKS[packKey];
-      if (!words || !words.length) return;
+      const pack = STARTER_PACKS[packKey];
+      if (!pack || !pack.length) return;
 
+      const words = pack.map(p => p.kw);
       const allIncluded = words.every(w => data.keywords.includes(w));
       if (allIncluded) {
         // Remove pack
@@ -1496,6 +1746,8 @@ async function init() {
   }
 
   renderAll();
+  initKeywordFeatures();
+  initAdvancedFeatures();
 }
 
 const PERSONA_PRESETS = {
@@ -1719,6 +1971,604 @@ function renderAiLog() {
     row.appendChild(reason);
     listEl.appendChild(row);
   });
+}
+
+// ===== KEYWORD RULE TESTER =====
+async function runKeywordTest() {
+  const input = document.getElementById('keywordTestInput');
+  const resultsEl = document.getElementById('keywordTestResults');
+  if (!input || !resultsEl) return;
+
+  const titles = input.value.split('\n').map(t => t.trim()).filter(t => t.length > 0);
+  if (!titles.length) {
+    resultsEl.innerHTML = '<span style="color: var(--muted);">No titles to test.</span>';
+    return;
+  }
+
+  resultsEl.innerHTML = '<span style="color: var(--muted);">Testing...</span>';
+
+  // Use the same matching logic as content.js
+  function testKeyword(text, keyword) {
+    if (!text || !keyword) return false;
+    if (keyword.startsWith('/') && keyword.lastIndexOf('/') > 0) {
+      const lastSlash = keyword.lastIndexOf('/');
+      const pattern = keyword.slice(1, lastSlash);
+      const flags = keyword.slice(lastSlash + 1) || 'i';
+      if (pattern.length <= 200) {
+        try { return new RegExp(pattern, flags).test(text); } catch (_) {}
+      }
+    }
+    try {
+      const cleanKw = keyword.toLowerCase().replace(/[^\w\s]/g, '');
+      const cleanT = text.toLowerCase().replace(/[^\w\s]/g, '');
+      if (cleanKw.length > 200) return cleanT.includes(cleanKw);
+      const first = cleanKw[0], last = cleanKw[cleanKw.length - 1];
+      const fB = /[a-z0-9_]/.test(first);
+      const lB = /[a-z0-9_]/.test(last);
+      const start = fB ? '\\b' : '';
+      const end = lB ? '\\b' : '';
+      return new RegExp(`${start}${cleanKw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}${end}`, 'i').test(cleanT);
+    } catch (_) {
+      return text.toLowerCase().includes(keyword.toLowerCase());
+    }
+  }
+
+  const keywords = data.keywords || [];
+  let html = '';
+  titles.forEach(title => {
+    const matches = keywords.filter(kw => testKeyword(title, kw));
+    html += `<div style="margin-bottom: 6px; padding: 6px; background: ${matches.length ? 'rgba(255,0,51,0.1)' : 'transparent'}; border-radius: 4px; border-left: 3px solid ${matches.length ? 'var(--accent)' : 'var(--border)'};">
+      <div style="font-weight: 600; color: ${matches.length ? 'var(--accent)' : 'var(--text)'};">${title}</div>`;
+    if (matches.length) {
+      html += `<div style="font-size: 10px; color: var(--muted); margin-top: 2px;">Matches: ${matches.map(m => `<code>${m}</code>`).join(', ')}</div>`;
+    }
+    html += '</div>';
+  });
+  resultsEl.innerHTML = html;
+}
+
+async function fetchVisibleTitles() {
+  const input = document.getElementById('keywordTestInput');
+  if (!input) return;
+
+  try {
+    const tabs = await chrome.tabs.query({ url: 'https://www.youtube.com/*', active: true });
+    if (!tabs.length) {
+      input.value = 'No active YouTube tab found.';
+      return;
+    }
+    const tab = tabs[0];
+    const result = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: () => {
+        const cards = document.querySelectorAll('ytd-rich-item-renderer, ytd-video-renderer, ytd-grid-video-renderer, ytd-compact-video-renderer');
+        const titles = [];
+        cards.forEach(card => {
+          const titleEl = card.querySelector('#video-title, h3 a, a#video-title-link');
+          if (titleEl) {
+            const t = titleEl.textContent?.trim() || titleEl.getAttribute('title') || '';
+            if (t && t.length > 5) titles.push(t);
+          }
+        });
+        return [...new Set(titles)].slice(0, 20);
+      }
+    });
+    if (result && result[0] && result[0].result && result[0].result.length) {
+      input.value = result[0].result.join('\n');
+    } else {
+      input.value = 'No titles found on current page.';
+    }
+  } catch (e) {
+    input.value = 'Error fetching: ' + e.message;
+  }
+}
+
+// ===== HIT COUNTER UI =====
+async function loadHitCounters() {
+  const listEl = document.getElementById('hitCounterList');
+  if (!listEl) return;
+  listEl.innerHTML = '<span style="color: var(--muted);">Loading...</span>';
+
+  return new Promise((resolve) => {
+    chrome.runtime.sendMessage({ type: 'GET_KEYWORD_HITS' }, (res) => {
+      if (chrome.runtime?.lastError || !res?.ok) {
+        listEl.innerHTML = '<span style="color: var(--danger);">Failed to load hit counters.</span>';
+        resolve();
+        return;
+      }
+      const hits = res.hits || {};
+      const keywords = data.keywords || [];
+
+      // Combine: all keywords with their hit counts (0 if never matched)
+      const combined = keywords.map(kw => ({
+        kw,
+        hits: hits[kw.toLowerCase()] || 0
+      })).sort((a, b) => a.hits - b.hits); // 0-hit rules first
+
+      if (!combined.length) {
+        listEl.innerHTML = '<span style="color: var(--muted);">No keyword rules to show.</span>';
+        resolve();
+        return;
+      }
+
+      let html = '';
+      combined.forEach(({ kw, hits: h }) => {
+        const isZero = h === 0;
+        html += `<div class="hit-counter-row" data-kw="${kw.replace(/"/g, '"')}" style="display: flex; justify-content: space-between; align-items: center; padding: 4px 8px; margin: 2px 0; background: ${isZero ? 'rgba(255,0,51,0.05)' : 'transparent'}; border-radius: 4px; border: 1px solid ${isZero ? 'rgba(255,0,51,0.2)' : 'var(--border)'};">
+          <code style="font-size: 11px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${kw}</code>
+          <span style="font-weight: ${isZero ? '700' : '400'}; color: ${isZero ? 'var(--danger)' : 'var(--muted)'}; margin-left: 8px; min-width: 40px; text-align: right;">${h} hit${h !== 1 ? 's' : ''}</span>
+          ${isZero ? '<span class="reset-hit-btn" title="Reset counter" style="cursor: pointer; margin-left: 8px; color: var(--muted); font-size: 12px;">↺</span>' : ''}
+        </div>`;
+      });
+      listEl.innerHTML = html;
+
+      // Add click handlers for reset buttons
+      listEl.querySelectorAll('.reset-hit-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const row = e.target.closest('.hit-counter-row');
+          if (row) resetSingleHitCounter(row.dataset.kw);
+        });
+      });
+
+      // Click on row to reset (for zero-hit rules)
+      listEl.querySelectorAll('.hit-counter-row[data-kw]').forEach(row => {
+        row.style.cursor = 'pointer';
+        row.addEventListener('click', () => {
+          const kw = row.dataset.kw;
+          const h = hits[kw.toLowerCase()] || 0;
+          if (h === 0) resetSingleHitCounter(kw);
+        });
+      });
+
+      resolve();
+    });
+  });
+}
+
+async function resetSingleHitCounter(kw) {
+  return new Promise((resolve) => {
+    chrome.runtime.sendMessage({ type: 'RESET_KEYWORD_HITS', keyword: kw }, (res) => {
+      if (res?.ok) loadHitCounters().then(resolve);
+      else resolve();
+    });
+  });
+}
+
+async function resetAllHitCounters() {
+  if (!confirm('Reset ALL keyword hit counters to zero?')) return;
+  return new Promise((resolve) => {
+    chrome.runtime.sendMessage({ type: 'RESET_KEYWORD_HITS', keyword: '' }, (res) => {
+      if (res?.ok) loadHitCounters().then(resolve);
+      else resolve();
+    });
+  });
+}
+
+async function cleanupZeroHitRules() {
+  const hits = await new Promise((resolve) => {
+    chrome.runtime.sendMessage({ type: 'GET_KEYWORD_HITS' }, (res) => {
+      resolve(res?.ok ? (res.hits || {}) : {});
+    });
+  });
+
+  const zeroHitKeywords = (data.keywords || []).filter(kw => !(hits[kw.toLowerCase()] > 0));
+  if (!zeroHitKeywords.length) {
+    setStatus('No zero-hit rules to remove.');
+    return;
+  }
+
+  if (!confirm(`Remove ${zeroHitKeywords.length} keyword rule${zeroHitKeywords.length !== 1 ? 's' : ''} with 0 hits?`)) return;
+
+  data.keywords = (data.keywords || []).filter(kw => hits[kw.toLowerCase()] > 0);
+  await save();
+  renderAll();
+  await loadHitCounters();
+  setStatus(`Removed ${zeroHitKeywords.length} zero-hit rule${zeroHitKeywords.length !== 1 ? 's' : ''}.`);
+}
+
+// Initialize new features after renderAll
+function initKeywordFeatures() {
+  const runTestBtn = document.getElementById('runKeywordTest');
+  const fetchBtn = document.getElementById('fetchVisibleTitles');
+  const refreshHitsBtn = document.getElementById('refreshHitCounters');
+  const cleanupBtn = document.getElementById('cleanupZeroHitRules');
+  const resetAllBtn = document.getElementById('resetAllHitCounters');
+
+  if (runTestBtn) runTestBtn.addEventListener('click', runKeywordTest);
+  if (fetchBtn) fetchBtn.addEventListener('click', fetchVisibleTitles);
+  if (refreshHitsBtn) refreshHitsBtn.addEventListener('click', loadHitCounters);
+  if (cleanupBtn) cleanupBtn.addEventListener('click', cleanupZeroHitRules);
+  if (resetAllBtn) resetAllBtn.addEventListener('click', resetAllHitCounters);
+
+  // Load hit counters on Keywords tab activation (guard MutationObserver for test env)
+  const keywordsTab = document.getElementById('keywordsTab');
+  if (keywordsTab && typeof MutationObserver !== 'undefined') {
+    const observer = new MutationObserver(() => {
+      if (keywordsTab.classList.contains('active')) {
+        loadHitCounters();
+        observer.disconnect();
+      }
+    });
+    observer.observe(keywordsTab, { attributes: true, attributeFilter: ['class'] });
+  }
+}
+
+// ===== PER-CHANNEL KEYWORD EXCEPTIONS =====
+function renderKeywordExceptions() {
+  const listEl = document.getElementById('keywordExceptionsList');
+  if (!listEl) return;
+  const exc = data.keywordExceptions || {};
+  if (!Object.keys(exc).length) {
+    listEl.innerHTML = '<span style="color: var(--muted);">No exceptions yet.</span>';
+    return;
+  }
+  let html = '';
+  for (const [keyword, channels] of Object.entries(exc)) {
+    html += `<div style="display: flex; justify-content: space-between; align-items: center; padding: 4px 8px; margin: 2px 0; background: var(--card); border: 1px solid var(--border); border-radius: 4px;">
+      <code style="font-size: 11px;">${keyword}</code>
+      <span style="font-size: 10px; color: var(--muted); margin: 0 8px;">→</span>
+      <span style="font-size: 11px; flex: 1; text-align: right;">${channels.join(', ')}</span>
+      <button class="remove-exception" data-kw="${keyword}" style="margin-left: 8px; background: none; border: none; color: var(--danger); cursor: pointer; font-size: 14px;">✕</button>
+    </div>`;
+  }
+  listEl.innerHTML = html;
+  listEl.querySelectorAll('.remove-exception').forEach(btn => {
+    btn.addEventListener('click', () => {
+      delete data.keywordExceptions[btn.dataset.kw];
+      save();
+      renderKeywordExceptions();
+      setStatus('Exception removed.');
+    });
+  });
+}
+
+function addKeywordException() {
+  const kwInput = document.getElementById('exceptionKeyword');
+  const chInput = document.getElementById('exceptionChannel');
+  if (!kwInput || !chInput) return;
+  const kw = kwInput.value.trim().toLowerCase();
+  const ch = chInput.value.trim().toLowerCase();
+  if (!kw || !ch) { setStatus('Enter both keyword and channel.'); return; }
+  if (!data.keywordExceptions[kw]) data.keywordExceptions[kw] = [];
+  if (!data.keywordExceptions[kw].includes(ch)) {
+    data.keywordExceptions[kw].push(ch);
+  }
+  kwInput.value = '';
+  chInput.value = '';
+  save();
+  renderKeywordExceptions();
+  setStatus(`Exception added: "${kw}" → ${ch}`);
+}
+
+// ===== COMMUNITY BLOCKLIST SUBSCRIPTION =====
+async function renderCommunityPacks() {
+  const listEl = document.getElementById('communityPacksList');
+  if (!listEl) return;
+  const packs = data.communityPacks || [];
+  if (!packs.length) {
+    listEl.innerHTML = '<span style="color: var(--muted);">No community packs subscribed.</span>';
+    return;
+  }
+  let html = '';
+  for (let i = 0; i < packs.length; i++) {
+    const p = packs[i];
+    const last = p.lastFetched ? new Date(p.lastFetched).toLocaleDateString() : 'never';
+    html += `<div style="display: flex; justify-content: space-between; align-items: center; padding: 8px; margin: 4px 0; background: var(--card); border: 1px solid var(--border); border-radius: 4px;">
+      <div style="flex: 1;">
+        <div style="font-weight: 600; font-size: 12px;">${p.name || 'Unnamed Pack'}</div>
+        <div style="font-size: 10px; color: var(--muted);">${p.url}</div>
+        <div style="font-size: 10px; color: var(--muted);">Rules: ${p.rules?.length || 0} | Last fetched: ${last} | ${p.enabled ? 'Enabled' : 'Disabled'}</div>
+      </div>
+      <div style="display: flex; gap: 4px;">
+        <button class="toggle-pack" data-i="${i}" style="padding: 2px 8px; font-size: 10px; background: ${p.enabled ? 'var(--accent)' : 'var(--muted)'}; color: white; border: none; border-radius: 3px; cursor: pointer;">${p.enabled ? 'Disable' : 'Enable'}</button>
+        <button class="fetch-pack" data-i="${i}" style="padding: 2px 8px; font-size: 10px; background: var(--accent); color: white; border: none; border-radius: 3px; cursor: pointer;">Fetch Now</button>
+        <button class="remove-pack" data-i="${i}" style="padding: 2px 8px; font-size: 10px; background: var(--danger); color: white; border: none; border-radius: 3px; cursor: pointer;">Remove</button>
+      </div>
+    </div>`;
+  }
+  listEl.innerHTML = html;
+  listEl.querySelectorAll('.toggle-pack').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const i = parseInt(btn.dataset.i);
+      data.communityPacks[i].enabled = !data.communityPacks[i].enabled;
+      save();
+      renderCommunityPacks();
+    });
+  });
+  listEl.querySelectorAll('.fetch-pack').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const i = parseInt(btn.dataset.i);
+      await fetchCommunityPack(i);
+      renderCommunityPacks();
+    });
+  });
+  listEl.querySelectorAll('.remove-pack').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const i = parseInt(btn.dataset.i);
+      data.communityPacks.splice(i, 1);
+      save();
+      renderCommunityPacks();
+      setStatus('Community pack removed.');
+    });
+  });
+}
+
+async function addCommunityPack() {
+  const urlInput = document.getElementById('communityPackUrl');
+  const nameInput = document.getElementById('communityPackName');
+  if (!urlInput || !nameInput) return;
+  const url = urlInput.value.trim();
+  const name = nameInput.value.trim() || 'Community Pack';
+  if (!url) { setStatus('Enter a URL.'); return; }
+  data.communityPacks.push({ url, name, enabled: true, lastFetched: null, rules: [] });
+  urlInput.value = '';
+  nameInput.value = '';
+  save();
+  await fetchCommunityPack(data.communityPacks.length - 1);
+  renderCommunityPacks();
+  setStatus(`Community pack added: ${name}`);
+}
+
+async function fetchCommunityPack(index) {
+  const pack = data.communityPacks[index];
+  if (!pack) return;
+  try {
+    const res = await fetch(pack.url);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const json = await res.json();
+    pack.rules = {
+      keywords: Array.isArray(json.keywords) ? json.keywords.filter(k => typeof k === 'string') : [],
+      channels: Array.isArray(json.channels) ? json.channels.filter(c => typeof c === 'string') : []
+    };
+    pack.lastFetched = new Date().toISOString();
+    await save();
+    setStatus(`Fetched ${pack.name}: ${pack.rules.keywords.length} keywords, ${pack.rules.channels.length} channels`);
+  } catch (e) {
+    setStatus(`Fetch failed: ${e.message}`);
+  }
+}
+
+// Auto-fetch community packs weekly (run on load)
+async function autoFetchCommunityPacks() {
+  const now = Date.now();
+  const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+  for (let i = 0; i < (data.communityPacks || []).length; i++) {
+    const p = data.communityPacks[i];
+    if (!p.enabled) continue;
+    const last = p.lastFetched ? new Date(p.lastFetched).getTime() : 0;
+    if (now - last > WEEK_MS) {
+      await fetchCommunityPack(i);
+    }
+  }
+}
+
+// Merge community pack rules into active rules (run on load)
+function mergeCommunityPacks() {
+  for (const p of (data.communityPacks || [])) {
+    if (!p.enabled || !p.rules) continue;
+    if (p.rules.keywords) {
+      for (const kw of p.rules.keywords) {
+        if (!data.keywords.includes(kw)) data.keywords.push(kw);
+      }
+    }
+    if (p.rules.channels) {
+      for (const ch of p.rules.channels) {
+        if (!data.channels.includes(ch)) data.channels.push(ch);
+      }
+    }
+  }
+}
+
+// ===== TEMPORAL/SEASONAL RULES =====
+function renderTemporalRules() {
+  const listEl = document.getElementById('temporalRulesList');
+  if (!listEl) return;
+  const rules = data.temporalRules || [];
+  if (!rules.length) {
+    listEl.innerHTML = '<span style="color: var(--muted);">No temporal rules.</span>';
+    return;
+  }
+  // Auto-expire check
+  const now = new Date();
+  let changed = false;
+  for (let i = rules.length - 1; i >= 0; i--) {
+    if (new Date(rules[i].expires) <= now) {
+      // Remove expired keyword from active list
+      const kw = rules[i].keyword;
+      data.keywords = data.keywords.filter(k => k !== kw);
+      rules.splice(i, 1);
+      changed = true;
+    }
+  }
+  if (changed) save();
+
+  let html = '';
+  rules.forEach((r, i) => {
+    const exp = new Date(r.expires).toLocaleDateString();
+    const daysLeft = Math.ceil((new Date(r.expires) - now) / (1000 * 60 * 60 * 24));
+    html += `<div style="display: flex; justify-content: space-between; align-items: center; padding: 4px 8px; margin: 2px 0; background: var(--card); border: 1px solid var(--border); border-radius: 4px;">
+      <div style="flex: 1;">
+        <code style="font-size: 11px;">${r.keyword}</code>
+        ${r.reason ? `<span style="font-size: 10px; color: var(--muted); margin-left: 8px;">(${r.reason})</span>` : ''}
+      </div>
+      <div style="display: flex; align-items: center; gap: 8px;">
+        <span style="font-size: 10px; color: ${daysLeft <= 3 ? 'var(--danger)' : 'var(--muted)'};">
+          Expires ${exp} (${daysLeft}d left)
+        </span>
+        <button class="remove-temporal" data-i="${i}" style="background: none; border: none; color: var(--danger); cursor: pointer; font-size: 14px;">✕</button>
+      </div>
+    </div>`;
+  });
+  listEl.innerHTML = html;
+  listEl.querySelectorAll('.remove-temporal').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const i = parseInt(btn.dataset.i);
+      data.temporalRules.splice(i, 1);
+      save();
+      renderTemporalRules();
+      setStatus('Temporal rule removed.');
+    });
+  });
+}
+
+function addTemporalRule() {
+  const kwInput = document.getElementById('temporalKeyword');
+  const expInput = document.getElementById('temporalExpires');
+  const reasonInput = document.getElementById('temporalReason');
+  if (!kwInput || !expInput) return;
+  const kw = kwInput.value.trim();
+  const expires = expInput.value;
+  const reason = reasonInput.value.trim();
+  if (!kw || !expires) { setStatus('Enter keyword and expiry date.'); return; }
+  data.temporalRules.push({ keyword: kw.toLowerCase(), expires, reason });
+  if (!data.keywords.includes(kw.toLowerCase())) data.keywords.push(kw.toLowerCase());
+  kwInput.value = '';
+  expInput.value = '';
+  reasonInput.value = '';
+  save();
+  renderTemporalRules();
+  setStatus(`Temporal rule added: "${kw}" expires ${expires}`);
+}
+
+// ===== FEED HEALTH DASHBOARD =====
+async function refreshFeedHealth() {
+  const dashEl = document.getElementById('feedHealthDashboard');
+  if (!dashEl) return;
+  dashEl.innerHTML = '<span style="color: var(--muted);">Loading...</span>';
+
+  // Get current feed stats from content script
+  try {
+    const tabs = await chrome.tabs.query({ url: 'https://www.youtube.com/*', active: true });
+    if (!tabs.length) {
+      dashEl.innerHTML = '<span style="color: var(--danger);">No active YouTube tab.</span>';
+      return;
+    }
+    const result = await chrome.scripting.executeScript({
+      target: { tabId: tabs[0].id },
+      func: () => {
+        const cards = document.querySelectorAll('ytd-rich-item-renderer, ytd-video-renderer, ytd-grid-video-renderer, ytd-compact-video-renderer');
+        let total = 0, hidden = 0, subbed = 0, hiddenByChannel = 0, hiddenByKeyword = 0, hiddenByAI = 0;
+        cards.forEach(card => {
+          total++;
+          if (card.dataset.hiddenByLocalBlacklist === 'true') {
+            hidden++;
+            const reason = card.dataset.hiddenReason || '';
+            if (reason.startsWith('channel:')) hiddenByChannel++;
+            else if (reason.startsWith('keyword')) hiddenByKeyword++;
+            else if (reason.startsWith('auto-dub') || reason.startsWith('AI')) hiddenByAI++;
+          }
+          // Check if subscribed (simplified - check for subscribed badge)
+          const subBadge = card.querySelector('ytd-badge-supported-renderer[aria-label*="subscribed" i], yt-icon[aria-label*="subscribed" i]');
+          if (subBadge) subbed++;
+        });
+        return { total, hidden, subbed, hiddenByChannel, hiddenByKeyword, hiddenByAI, purity: total > 0 ? Math.round((subbed / total) * 100) : 0 };
+      }
+    });
+    if (result && result[0] && result[0].result) {
+      const stats = result[0].result;
+      const logEntry = {
+        ts: Date.now(),
+        hiddenByChannel: stats.hiddenByChannel,
+        hiddenByKeyword: stats.hiddenByKeyword,
+        hiddenByAI: stats.hiddenByAI,
+        totalVisible: stats.total,
+        purity: stats.purity
+      };
+      data.feedHealthLog.unshift(logEntry);
+      if (data.feedHealthLog.length > 100) data.feedHealthLog.pop();
+      await save();
+
+      // Render dashboard
+      const weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+      const weekLogs = data.feedHealthLog.filter(l => l.ts > weekAgo);
+      const avgPurity = weekLogs.length ? Math.round(weekLogs.reduce((a, b) => a + b.purity, 0) / weekLogs.length) : stats.purity;
+
+      // Top matching rules from hit counters
+      const hits = await new Promise(resolve => {
+        chrome.runtime.sendMessage({ type: 'GET_KEYWORD_HITS' }, res => resolve(res?.ok ? (res.hits || {}) : {}));
+      });
+      const topRules = Object.entries(hits)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 5)
+        .map(([kw, h]) => `<code>${kw}</code>: ${h} hit${h !== 1 ? 's' : ''}`)
+        .join(' • ');
+
+      dashEl.innerHTML = `
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; margin-bottom: 12px;">
+          <div style="padding: 8px; background: var(--card); border: 1px solid var(--border); border-radius: 6px;">
+            <div style="font-size: 10px; color: var(--muted);">Total Cards</div>
+            <div style="font-size: 18px; font-weight: 700;">${stats.total}</div>
+          </div>
+          <div style="padding: 8px; background: var(--card); border: 1px solid var(--border); border-radius: 6px;">
+            <div style="font-size: 10px; color: var(--muted);">Hidden</div>
+            <div style="font-size: 18px; font-weight: 700; color: var(--danger);">${stats.hidden}</div>
+          </div>
+          <div style="padding: 8px; background: var(--card); border: 1px solid var(--border); border-radius: 6px;">
+            <div style="font-size: 10px; color: var(--muted);">Subscribed Purity</div>
+            <div style="font-size: 18px; font-weight: 700; color: ${stats.purity > 50 ? 'var(--success)' : 'var(--danger)'};">${stats.purity}%</div>
+          </div>
+          <div style="padding: 8px; background: var(--card); border: 1px solid var(--border); border-radius: 6px;">
+            <div style="font-size: 10px; color: var(--muted);">7-Day Avg Purity</div>
+            <div style="font-size: 18px; font-weight: 700; color: ${avgPurity > 50 ? 'var(--success)' : 'var(--danger)'};">${avgPurity}%</div>
+          </div>
+        </div>
+        <div style="margin-bottom: 8px;">
+          <strong>Hidden by:</strong>
+          <span style="margin-left: 8px;">Channel: <b>${stats.hiddenByChannel}</b></span>
+          <span style="margin-left: 8px;">Keyword: <b>${stats.hiddenByKeyword}</b></span>
+          <span style="margin-left: 8px;">AI/Auto-Dub: <b>${stats.hiddenByAI}</b></span>
+        </div>
+        <div style="margin-bottom: 8px;">
+          <strong>Top Matching Rules (all-time):</strong>
+          <div style="font-size: 11px; color: var(--muted); margin-top: 4px;">${topRules || 'No hits recorded yet'}</div>
+        </div>
+        <div style="font-size: 10px; color: var(--muted);">
+          Data from current page only. Open feed and click Refresh for latest.
+        </div>
+      `;
+    }
+  } catch (e) {
+    dashEl.innerHTML = `<span style="color: var(--danger);">Error: ${e.message}</span>`;
+  }
+}
+
+// ===== INIT ALL NEW FEATURES =====
+function initAdvancedFeatures() {
+  // Per-channel keyword exceptions
+  const addExcBtn = document.getElementById('addKeywordException');
+  if (addExcBtn) addExcBtn.addEventListener('click', addKeywordException);
+
+  // Community packs
+  const addPackBtn = document.getElementById('addCommunityPack');
+  if (addPackBtn) addPackBtn.addEventListener('click', addCommunityPack);
+
+  // Temporal rules
+  const addTempBtn = document.getElementById('addTemporalRule');
+  if (addTempBtn) addTempBtn.addEventListener('click', addTemporalRule);
+
+  // Feed health
+  const refreshHealthBtn = document.getElementById('refreshFeedHealth');
+  if (refreshHealthBtn) refreshHealthBtn.addEventListener('click', refreshFeedHealth);
+
+  // Initial renders
+  renderKeywordExceptions();
+  renderCommunityPacks();
+  renderTemporalRules();
+  mergeCommunityPacks();
+  autoFetchCommunityPacks();
+
+  // Load on Settings tab activation
+  const settingsTab = document.getElementById('settingsTab');
+  if (settingsTab && typeof MutationObserver !== 'undefined') {
+    const observer = new MutationObserver(() => {
+      if (settingsTab.classList.contains('active')) {
+        refreshFeedHealth();
+        observer.disconnect();
+      }
+    });
+    observer.observe(settingsTab, { attributes: true, attributeFilter: ['class'] });
+  }
 }
 
 document.addEventListener('DOMContentLoaded', init);

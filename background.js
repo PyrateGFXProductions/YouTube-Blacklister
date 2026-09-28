@@ -1103,7 +1103,46 @@ if (msg.type === 'CHECK_AI_STATUS') {
   }
 
   if (msg.type === 'AI_SUMMARIZE_TRANSCRIPT') {
-    summarizeTranscriptWithAi(msg.transcript, msg.title, msg.modelChoice, msg.customUrl, msg.opts).then(res => sendResponse(res)).catch((err) => { try { sendResponse({ ok: false, error: String((err && err.message) || err) }); } catch (_) {} });
-    return true;
-  }
-});
+      summarizeTranscriptWithAi(msg.transcript, msg.title, msg.modelChoice, msg.customUrl, msg.opts).then(res => sendResponse(res)).catch((err) => { try { sendResponse({ ok: false, error: String((err && err.message) || err) }); } catch (_) {} });
+      return true;
+    }
+
+    if (msg.type === 'INCREMENT_KEYWORD_HIT') {
+      const kw = String(msg.keyword || '').trim().toLowerCase();
+      if (!kw) { sendResponse({ ok: false, error: 'empty keyword' }); return true; }
+      chrome.storage.local.get(['nyt_keywordHits'], (res) => {
+        if (chrome.runtime?.lastError) { sendResponse({ ok: false, error: chrome.runtime.lastError.message }); return; }
+        const hits = (res && typeof res.nyt_keywordHits === 'object' && res.nyt_keywordHits !== null) ? res.nyt_keywordHits : {};
+        hits[kw] = (hits[kw] || 0) + 1;
+        chrome.storage.local.set({ nyt_keywordHits: hits }, () => {
+          sendResponse({ ok: !chrome.runtime?.lastError, hits: hits[kw] });
+        });
+      });
+      return true;
+    }
+
+    if (msg.type === 'GET_KEYWORD_HITS') {
+      chrome.storage.local.get(['nyt_keywordHits'], (res) => {
+        sendResponse({ ok: !chrome.runtime?.lastError, hits: (res && res.nyt_keywordHits) || {} });
+      });
+      return true;
+    }
+
+    if (msg.type === 'RESET_KEYWORD_HITS') {
+      const kw = msg.keyword ? String(msg.keyword).trim().toLowerCase() : null;
+      chrome.storage.local.get(['nyt_keywordHits'], (res) => {
+        if (chrome.runtime?.lastError) { sendResponse({ ok: false, error: chrome.runtime.lastError.message }); return; }
+        const hits = (res && typeof res.nyt_keywordHits === 'object' && res.nyt_keywordHits !== null) ? res.nyt_keywordHits : {};
+        if (kw) {
+          delete hits[kw];
+        } else {
+          // reset all
+          Object.keys(hits).forEach(k => delete hits[k]);
+        }
+        chrome.storage.local.set({ nyt_keywordHits: hits }, () => {
+          sendResponse({ ok: !chrome.runtime?.lastError });
+        });
+      });
+      return true;
+    }
+  });

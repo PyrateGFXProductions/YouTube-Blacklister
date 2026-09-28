@@ -104,31 +104,31 @@ console.log('FEED keyword rules (hiding is cheap/reversible; subscriptions immun
 check('9: unsubscribed + title keyword -> hidden',
   keywordRulesHidden({ title: 'Everything Wrong With Some Movie', channel: 'CinemaSins',
     keywords: ['movie'], subscribed: false, whitelisted: false }),
-  { hidden: true, reason: 'keyword in Everything Wrong With Some Movie' });
+  { hidden: true, reason: 'keyword in Everything Wrong With Some Movie', matchedKeyword: 'movie' });
 
 // 10. unsubscribed + channel-name regex -> hidden (existing behavior preserved)
 check('10: unsubscribed + /sins/i on channel-name -> hidden',
   keywordRulesHidden({ title: 'Title', channel: 'CinemaSins',
     keywords: ['/sins/i'], subscribed: false, whitelisted: false }),
-  { hidden: true, reason: 'keyword in CinemaSins' });
+  { hidden: true, reason: 'keyword in CinemaSins', matchedKeyword: '/sins/i' });
 
 // 11. subscribed -> keyword rules skip entirely
 check('11: subscribed + title keyword -> not hidden',
   keywordRulesHidden({ title: 'Everything Wrong With Some Movie', channel: 'CinemaSins',
     keywords: ['movie'], subscribed: true, whitelisted: false }),
-  { hidden: false, reason: null });
+  { hidden: false, reason: null, matchedKeyword: null });
 
 // 12. whitelisted -> keyword rules skip entirely
 check('12: whitelisted + title keyword -> not hidden',
   keywordRulesHidden({ title: 'Everything Wrong With Some Movie', channel: 'CinemaSins',
     keywords: ['movie'], subscribed: false, whitelisted: true }),
-  { hidden: false, reason: null });
+  { hidden: false, reason: null, matchedKeyword: null });
 
 // 13. no match -> not hidden
 check('13: no keyword match -> not hidden',
   keywordRulesHidden({ title: 'A Totally Fine Video', channel: 'SomeChannel',
     keywords: ['movie'], subscribed: false, whitelisted: false }),
-  { hidden: false, reason: null });
+  { hidden: false, reason: null, matchedKeyword: null });
 
 console.log('AUTO-DUB badge detection (badge text is the ONLY signal; titles never contain it):');
 // 14. badge text variants -> detected
@@ -145,22 +145,22 @@ console.log('KEYWORD rules now SEE badge text (so the user\'s "auto-dubbed" rule
 check('20: keyword "auto-dubbed" + card with Auto-dubbed badge -> hidden',
   keywordRulesHidden({ title: 'Everything Wrong With Dune', channel: 'CinemaSins',
     keywords: ['auto-dubbed'], subscribed: false, whitelisted: false, extraText: 'Auto-dubbed' }),
-  { hidden: true, reason: 'keyword in Auto-dubbed' });
+  { hidden: true, reason: 'keyword in Auto-dubbed', matchedKeyword: 'auto-dubbed' });
 // 21. regex /auto.?dubbed/i form
 check('21: regex /auto.?dubbed/i + badge -> hidden',
   keywordRulesHidden({ title: 'Everything Wrong With Dune', channel: 'CinemaSins',
     keywords: ['/auto.?dubbed/i'], subscribed: false, whitelisted: false, extraText: 'Auto-dubbed' }),
-  { hidden: true, reason: 'keyword in Auto-dubbed' });
+  { hidden: true, reason: 'keyword in Auto-dubbed', matchedKeyword: '/auto.?dubbed/i' });
 // 22. badge does NOT trip keywords on a subscribed channel (soft rules respect subscriptions)
 check('22: subscribed + badge + keyword -> NOT hidden (soft rule)',
   keywordRulesHidden({ title: 'Everything Wrong With Dune', channel: 'CinemaSins',
     keywords: ['auto-dubbed'], subscribed: true, whitelisted: false, extraText: 'Auto-dubbed' }),
-  { hidden: false, reason: null });
+  { hidden: false, reason: null, matchedKeyword: null });
 // 23. no badge -> no keyword hit
 check('23: no badge text -> not hidden',
   keywordRulesHidden({ title: 'Everything Wrong With Dune', channel: 'CinemaSins',
     keywords: ['auto-dubbed'], subscribed: false, whitelisted: false, extraText: '' }),
-  { hidden: false, reason: null });
+  { hidden: false, reason: null, matchedKeyword: null });
 
 console.log('AUTO-DUB MODE semantics (the "not even from watched channels" nuance):');
 // 24. TOTAL + subscribed + badge -> hidden  (THE USER CASE: Garage54ENG watched + subscribed, still hidden)

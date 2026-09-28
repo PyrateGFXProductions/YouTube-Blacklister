@@ -979,6 +979,34 @@
         </div>
         <p class="help-hint">Word-boundary aware: "cat" will not block "category". Regex supported with /pattern/flags.</p>
       </div>
+
+      <!-- Keyword Rule Tester -->
+      <div class="setting-group" id="keywordTesterSection" style="margin-top: 16px; padding: 12px; background: var(--card); border-radius: 8px; border: 1px solid var(--border);">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+          <span class="setting-title" style="font-size: 13px;">🧪 Keyword Rule Tester</span>
+          <span id="keywordTesterHint" style="font-size: 10px; color: var(--muted);">Paste YouTube titles (one per line) to test matches</span>
+        </div>
+        <textarea id="keywordTestInput" placeholder="Paste video titles here to test which rules would match..." style="width: 100%; min-height: 80px; padding: 8px; border: 1px solid var(--border); border-radius: 4px; font-family: monospace; font-size: 11px; resize: vertical; box-sizing: border-box;"></textarea>
+        <div style="display: flex; gap: 8px; margin-top: 8px;">
+          <button class="action-btn" id="runKeywordTest" style="flex: 1;">Test Rules</button>
+          <button class="action-btn" id="fetchVisibleTitles" style="flex: 1;">Fetch Visible Feed Titles</button>
+        </div>
+        <div id="keywordTestResults" style="margin-top: 10px; font-size: 11px; line-height: 1.5; max-height: 200px; overflow-y: auto;"></div>
+      </div>
+
+      <!-- Hit Counter & Dead Rule Cleanup -->
+      <div class="setting-group" id="hitCounterSection" style="margin-top: 16px; padding: 12px; background: var(--card); border-radius: 8px; border: 1px solid var(--border);">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+          <span class="setting-title" style="font-size: 13px;">📊 Rule Hit Counters</span>
+          <button class="action-btn" id="refreshHitCounters" style="font-size: 11px; padding: 4px 8px;">Refresh</button>
+        </div>
+        <div style="font-size: 11px; color: var(--muted); margin-bottom: 8px;">Rules with 0 hits are candidates for removal. Click a rule to reset its counter.</div>
+        <div id="hitCounterList" style="max-height: 200px; overflow-y: auto; font-size: 11px;"></div>
+        <div style="display: flex; gap: 8px; margin-top: 8px;">
+          <button class="action-btn" id="cleanupZeroHitRules" style="flex: 1; background: var(--danger);">Remove 0-Hit Rules</button>
+          <button class="action-btn" id="resetAllHitCounters" style="flex: 1;">Reset All Counters</button>
+        </div>
+      </div>
     </div>
 
     <!-- Tab 3: Whitelist -->
@@ -1252,6 +1280,51 @@
             <span class="slider"></span>
           </label>
         </div>
+      </div>
+
+      <!-- Feed Health Dashboard -->
+      <div class="setting-group" style="margin-top: 20px;">
+        <span class="setting-title" style="font-size: 14px;">📊 Feed Health Dashboard</span>
+        <p class="help-hint" style="margin-bottom: 12px;">Tracks what percentage of your feed is hidden by each rule type, top matching rules, and subscription purity trend.</p>
+        <button class="action-btn" id="refreshFeedHealth" style="margin-bottom: 12px;">Refresh Dashboard</button>
+        <div id="feedHealthDashboard" style="font-size: 12px; line-height: 1.6;"></div>
+      </div>
+
+      <!-- Per-Channel Keyword Exceptions -->
+      <div class="setting-group" style="margin-top: 20px;">
+        <span class="setting-title" style="font-size: 14px;">🎯 Per-Channel Keyword Exceptions</span>
+        <p class="help-hint" style="margin-bottom: 12px;">Allow specific channels to bypass global keyword rules. E.g., block "reaction" globally but allow @TrustedCritic.</p>
+        <div style="display: flex; gap: 8px; margin-bottom: 8px;">
+          <input type="text" id="exceptionKeyword" placeholder="Keyword (e.g. reaction)" style="flex: 1; padding: 6px 8px; border: 1px solid var(--border); border-radius: 4px; font-size: 12px;" />
+          <input type="text" id="exceptionChannel" placeholder="Channel (@handle or name)" style="flex: 1; padding: 6px 8px; border: 1px solid var(--border); border-radius: 4px; font-size: 12px;" />
+          <button class="action-btn" id="addKeywordException">Add Exception</button>
+        </div>
+        <div id="keywordExceptionsList" style="font-size: 11px; max-height: 150px; overflow-y: auto;"></div>
+      </div>
+
+      <!-- Community Blocklist Subscription -->
+      <div class="setting-group" style="margin-top: 20px;">
+        <span class="setting-title" style="font-size: 14px;">🌐 Community Blocklist Subscription</span>
+        <p class="help-hint" style="margin-bottom: 12px;">Subscribe to a curated JSON blocklist (auto-fetched weekly). Add a URL to a JSON file with { "keywords": [...], "channels": [...] }.</p>
+        <div style="display: flex; gap: 8px; margin-bottom: 8px;">
+          <input type="text" id="communityPackUrl" placeholder="https://raw.githubusercontent.com/.../slop-list.json" style="flex: 1; padding: 6px 8px; border: 1px solid var(--border); border-radius: 4px; font-size: 12px;" />
+          <input type="text" id="communityPackName" placeholder="Pack name (e.g. Community Slop)" style="flex: 1; padding: 6px 8px; border: 1px solid var(--border); border-radius: 4px; font-size: 12px;" />
+          <button class="action-btn" id="addCommunityPack">Add Pack</button>
+        </div>
+        <div id="communityPacksList" style="font-size: 11px;"></div>
+      </div>
+
+      <!-- Temporal/Seasonal Rules -->
+      <div class="setting-group" style="margin-top: 20px;">
+        <span class="setting-title" style="font-size: 14px;">📅 Temporal/Seasonal Rules</span>
+        <p class="help-hint" style="margin-bottom: 12px;">Rules that auto-expire on a date. Great for "year review", "holiday gift guide", "black friday", etc.</p>
+        <div style="display: flex; gap: 8px; margin-bottom: 8px;">
+          <input type="text" id="temporalKeyword" placeholder="Keyword or regex (e.g. year review)" style="flex: 1; padding: 6px 8px; border: 1px solid var(--border); border-radius: 4px; font-size: 12px;" />
+          <input type="date" id="temporalExpires" style="padding: 6px 8px; border: 1px solid var(--border); border-radius: 4px; font-size: 12px;" />
+          <input type="text" id="temporalReason" placeholder="Reason (optional)" style="flex: 1; padding: 6px 8px; border: 1px solid var(--border); border-radius: 4px; font-size: 12px;" />
+          <button class="action-btn" id="addTemporalRule">Add Rule</button>
+        </div>
+        <div id="temporalRulesList" style="font-size: 11px;"></div>
       </div>
 
       <div class="tools-grid">
