@@ -15,7 +15,17 @@ const STARTER_PACKS = {
   brainrot: ['prank', 'skibidi', 'in 24 hours', "you won't believe", 'shocking', 'exposed', 'reaction'],
   crypto: ['crypto', 'bitcoin', 'memecoin', '100x', 'passive income', 'dropshipping'],
   aislop: ['ai generated', 'faceless channel', 'text to speech', 'midjourney'],
-  drama: ['drama', 'canceled', 'apology video', 'responds to', 'clout']
+  drama: ['drama', 'canceled', 'apology video', 'responds to', 'clout'],
+
+  // --- NEW PACKS (added alongside original 4) ---
+  nonenglish: ['auto-dubbed', 'auto dub', 'dubbed', 'subtitled', 'foreign', 'non english', 'multi language', 'international', 'global version', 'translated', 'foreign language', 'non-english', 'dub', 'subtitle', 'global edition'],
+  sports: ['football', 'baseball', 'basketball', 'soccer', 'golf', 'hockey', 'volleyball', 'cup', 'match', 'tennis', 'espn', 'mlb', 'nfl', 'nba', 'fifa', 'uefa', 'highlights', 'touchdown', 'home run', 'super bowl', 'world cup'],
+  politics: ['trump', 'politics', 'cnn', 'elon musk', 'governor', 'president', 'mayor', 'breaking news', "america's most", 'america\'s best', "america's worst", 'fox news', 'msnbc', 'congress', 'senate', 'election', 'vote', 'campaign', 'rally', 'impeachment', 'indictment'],
+  listicles: ['top 5', 'top 10', 'top 100', 'best of', 'the best', 'the worst', 'best to worst', 'first look', 'first hands on', 'ultimate guide', 'walkthrough', 'walkaround', 'topgear', 'top gear', 'best kept secret', 'ranked', 'tier list', 'power ranking', 'definitive guide', 'complete guide'],
+  automotive: ['dashcam', 'dash cam', 'bad drivers', 'car talk', 'i drove', 'mpg test', 'walkaround', 'pricing', 'should you buy', 'do not buy', 'never finance', 'dealer', 'dealership', 'car wizard', 'customer states', 'mile update', 'reliability guide', 'daily driver', 'first look', 'test drive', 'review', 'buyers guide', 'buying guide'],
+  religious: ['catholic', 'islamic', 'jewish', 'christian', 'church', 'sermon', 'islam', 'hindu', 'hindi', 'church of', 'bible', 'quran', 'torah', 'pastor', 'preacher', 'ministry', 'gospel', 'prayer', 'worship', 'faith', 'belief', 'religion', 'spiritual', 'god', 'jesus', 'allah', 'prophet'],
+  gaming: ['minecraft', 'world of warcraft', 'warcraft', 'warhammer', 'ranked', 'games', 'gaming', 'gamers', 'let\'s play', 'playthrough', 'walkthrough', 'speedrun', 'tier list', 'meta', 'build guide', 'patch notes', 'update', 'dlc', 'expansion', 'season pass', 'battle pass', 'loot', 'grind', 'farm', 'raid', 'dungeon', 'boss fight', 'pvp', 'pve', 'mmorpg', 'rpg', 'fps', 'moba', 'battle royale'],
+  musicspam: ['music', 'music video', 'official music video', 'official video', 'official trailer', 'trailer', 'teaser', 'playlist', 'new music', 'new release', 'lyric video', 'audio', 'visualizer', 'mix', 'remix', 'cover', 'reaction', 'live performance', 'concert', 'tour', 'album', 'single', 'ep', 'vinyl', 'streaming', 'spotify', 'apple music']
 };
 
 const ALGORITHM_WISDOM = [
