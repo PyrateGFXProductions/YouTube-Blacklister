@@ -64,8 +64,8 @@ const MENU_BUTTON_SELECTORS = [
 ].join(', ');
 
 const DEBUG = false;
-function dbg(...args) { if (DEBUG) try { console.log('[NewToYouExt]', ...args); } catch (_) {} }
-function dbgWarn(...args) { if (DEBUG) try { console.warn('[NewToYouExt]', ...args); } catch (_) {} }
+function dbg(...args) { if (DEBUG) try { console.log('[NewToYouExt]', ...args); } catch (_) { } }
+function dbgWarn(...args) { if (DEBUG) try { console.warn('[NewToYouExt]', ...args); } catch (_) { } }
 
 // ------------------------------------------------------------------
 // SAFE RUNTIME & EXTENSION CONTEXT HELPERS
@@ -173,7 +173,7 @@ function loadSettings() {
           });
         // Persist the cleaned channels list back to storage if we removed anything
         if (settings.channels.length !== (Array.isArray(res.channels) ? res.channels.length : 0)) {
-          try { chrome.storage.local.set({ channels: settings.channels }); } catch (_) {}
+          try { chrome.storage.local.set({ channels: settings.channels }); } catch (_) { }
         }
         settings.keywords = Array.isArray(res.keywords) ? res.keywords : settings.keywords;
         settings.whitelistChannels = Array.isArray(res.whitelistChannels)
@@ -201,7 +201,7 @@ function loadSettings() {
 
         injectBlacklistStyles();
         refreshSubscriptionKeySet();
-        try { syncHuntMode(); } catch (_) {}
+        try { syncHuntMode(); } catch (_) { }
         resolve();
       });
     } catch (_) {
@@ -235,7 +235,7 @@ function saveSettings() {
       tldwEnabled: settings.tldwEnabled,
       huntMode: settings.huntMode
     });
-  } catch (_) {}
+  } catch (_) { }
 }
 
 function isHomePath() {
@@ -322,7 +322,7 @@ function injectBlacklistStyles() {
       }
       .nyt-quick-block-btn {
         position: absolute;
-        top: 8px;
+        top: 44px;
         left: 8px;
         z-index: 999;
         width: 28px;
@@ -344,7 +344,12 @@ function injectBlacklistStyles() {
       #thumbnail:has(.nyt-tldw-btn) .nyt-quick-block-btn,
       a#thumbnail:has(.nyt-tldw-btn) .nyt-quick-block-btn,
       .yt-lockup-view-model-wiz__thumbnail:has(.nyt-tldw-btn) .nyt-quick-block-btn,
-      yt-thumbnail-view-model:has(.nyt-tldw-btn) .nyt-quick-block-btn {
+      yt-thumbnail-view-model:has(.nyt-tldw-btn) .nyt-quick-block-btn,
+      ytd-thumbnail:has(.nyt-tldw-btn) .nyt-extract-kw-btn,
+      #thumbnail:has(.nyt-tldw-btn) .nyt-extract-kw-btn,
+      a#thumbnail:has(.nyt-tldw-btn) .nyt-extract-kw-btn,
+      .yt-lockup-view-model-wiz__thumbnail:has(.nyt-tldw-btn) .nyt-extract-kw-btn,
+      yt-thumbnail-view-model:has(.nyt-tldw-btn) .nyt-extract-kw-btn {
         top: 44px;
       }
       .nyt-quick-block-btn:hover {
@@ -357,13 +362,23 @@ function injectBlacklistStyles() {
       yt-lockup-view-model:hover .nyt-quick-block-btn,
       ytd-video-renderer:hover .nyt-quick-block-btn,
       ytd-compact-video-renderer:hover .nyt-quick-block-btn,
-      ytd-grid-video-renderer:hover .nyt-quick-block-btn {
+      ytd-grid-video-renderer:hover .nyt-quick-block-btn,
+      ytd-rich-item-renderer:hover .nyt-extract-kw-btn,
+      yt-lockup-view-model:hover .nyt-extract-kw-btn,
+      ytd-video-renderer:hover .nyt-extract-kw-btn,
+      ytd-compact-video-renderer:hover .nyt-extract-kw-btn,
+      ytd-grid-video-renderer:hover .nyt-extract-kw-btn,
+      ytd-rich-item-renderer:hover .nyt-tldw-btn,
+      yt-lockup-view-model:hover .nyt-tldw-btn,
+      ytd-video-renderer:hover .nyt-tldw-btn,
+      ytd-compact-video-renderer:hover .nyt-tldw-btn,
+      ytd-grid-video-renderer:hover .nyt-tldw-btn {
         opacity: 0.92;
       }
       .nyt-extract-kw-btn {
         position: absolute;
-        top: 40px;
-        left: 8px;
+        top: 44px;
+        left: 50px;
         z-index: 999;
         width: 28px;
         height: 28px;
@@ -379,6 +394,7 @@ function injectBlacklistStyles() {
         border: 1px solid rgba(255, 255, 255, 0.25);
         backdrop-filter: blur(4px);
         box-shadow: 0 2px 6px rgba(0,0,0,0.5);
+        transform: scale(1);
       }
       .nyt-extract-kw-btn:hover {
         background: #2b9fff !important;
@@ -396,7 +412,7 @@ function injectBlacklistStyles() {
       ${getAiFeatureCss()}
       ${extraRules}
     `;
-  } catch (_) {}
+  } catch (_) { }
 }
 
 // ------------------------------------------------------------------
@@ -699,7 +715,7 @@ function hasWordBoundaryKeyword(text, keyword) {
     if (pattern.length <= 200 && !isReDoSSuspect(pattern)) {
       try {
         return new RegExp(pattern, flags).test(text);
-      } catch (_) {}
+      } catch (_) { }
     }
   }
   try {
@@ -1216,7 +1232,7 @@ function cardAutoDubBadgeText(card) {
         const t = (el.textContent || '').trim();
         if (t && isAutoDubBadgeText(t)) found.add(t);
       });
-  } catch (_) {}
+  } catch (_) { }
   return Array.from(found).join(' \u23e9 ');
 }
 
@@ -1334,7 +1350,7 @@ function evaluateCard(card) {
     if (window.__blkDebug) console.log('[blkDebug] KEYWORD HIT:', kwDecision.reason);
     // Increment hit counter for the matched keyword
     if (kwDecision.matchedKeyword && typeof chrome !== 'undefined' && chrome.runtime) {
-      chrome.runtime.sendMessage({ type: 'INCREMENT_KEYWORD_HIT', keyword: kwDecision.matchedKeyword }).catch(() => {});
+      chrome.runtime.sendMessage({ type: 'INCREMENT_KEYWORD_HIT', keyword: kwDecision.matchedKeyword }).catch(() => { });
     }
     return { hidden: true, reason: kwDecision.reason, resolved: true };
   }
@@ -1346,30 +1362,30 @@ function evaluateCard(card) {
 // Debug helper: toggle with `window.__blkDebug = true` in the console on a YouTube tab.
 // Dumps stored settings and every visible feed card's extraction results.
 if (typeof window !== 'undefined') {
-  window.__blkInspect = function() {
-  const cards = document.querySelectorAll(VIDEO_CARD_SELECTORS);
-  const info = [];
-  for (let i = 0; i < cards.length; i++) {
-    const card = cards[i];
-    info.push({
-      tag: card.tagName,
-      title: getVideoTitle(card),
-      channel: getChannelName(card),
-      vid: getVideoId(card),
-      cardKeys: getCardChannelKeys(card),
-      hidden: card.dataset.hiddenByLocalBlacklist === 'true',
-      matched: evaluateCard(card)
-    });
-  }
-  return {
-    settings: {
-      keywords: settings.keywords,
-      channels: settings.channels,
-      whitelistChannels: settings.whitelistChannels
-    },
-    cards: info
+  window.__blkInspect = function () {
+    const cards = document.querySelectorAll(VIDEO_CARD_SELECTORS);
+    const info = [];
+    for (let i = 0; i < cards.length; i++) {
+      const card = cards[i];
+      info.push({
+        tag: card.tagName,
+        title: getVideoTitle(card),
+        channel: getChannelName(card),
+        vid: getVideoId(card),
+        cardKeys: getCardChannelKeys(card),
+        hidden: card.dataset.hiddenByLocalBlacklist === 'true',
+        matched: evaluateCard(card)
+      });
+    }
+    return {
+      settings: {
+        keywords: settings.keywords,
+        channels: settings.channels,
+        whitelistChannels: settings.whitelistChannels
+      },
+      cards: info
+    };
   };
-};
 }
 
 // ------------------------------------------------------------------
@@ -1470,12 +1486,12 @@ function checkCurrentWatchPageVideo() {
       try {
         const video = document.querySelector('video');
         if (video) video.pause();
-      } catch (_) {}
+      } catch (_) { }
 
       showToast(`Blacklisted video detected: ${channel || title || currentVid}`);
       redirectAwayFromWatchPage(700);
     }
-  } catch (_) {}
+  } catch (_) { }
 }
 
 // ------------------------------------------------------------------
@@ -1520,11 +1536,11 @@ function processFeed(force = false) {
   // Shorts: subscribed-only hybrid — hide reels from channels we don't subscribe to.
   // (Global blockShorts mode is handled entirely by CSS and takes precedence.)
   if (settings.shortsSubOnly && !settings.blockShorts) {
-    try { filterShortsToSubscriptions(); } catch (_) {}
+    try { filterShortsToSubscriptions(); } catch (_) { }
   } else if (!settings.blockShorts) {
     // shortsSubOnly just turned OFF (or subscriptions changed): stop leaving
     // earlier-hid shorts shelves permanently hidden.
-    try { unhideShorts(); } catch (_) {}
+    try { unhideShorts(); } catch (_) { }
   }
 
   // End-screen cards on watch page
@@ -1552,7 +1568,7 @@ function processFeed(force = false) {
       lastBadgeCount = totalHidden;
       safeSendRuntimeMessage({ type: 'UPDATE_BADGE', count: totalHidden });
     }
-  } catch (_) {}
+  } catch (_) { }
 
   // Gentle feed replenishment if visible cards drop below 4 on home feed
   if (isHomePath() && hiddenCount > 0) {
@@ -1648,7 +1664,7 @@ function runAiEvaluationBatch() {
               });
               chrome.storage.local.set({ aiLog: logs.slice(0, 30) }, () => { if (chrome.runtime?.lastError) return; });
             });
-          } catch (_) {}
+          } catch (_) { }
 
           showToast(`🤖 AI Intercepted: "${match.title.slice(0, 35)}..." (${ev.rationale || 'Filtered'})`, () => {
             unhideCardElement(match.card);
@@ -1849,7 +1865,7 @@ document.addEventListener('mouseover', (e) => {
         thumb.style.position = 'relative';
       }
       thumb.dataset.nytPosFixed = '1';
-    } catch (_) {}
+    } catch (_) { }
   }
 
   if (settings.enableQuickBlock !== false && !card.querySelector('.nyt-quick-block-btn')) {
@@ -1886,8 +1902,8 @@ document.addEventListener('mouseover', (e) => {
     kwBtn.setAttribute('title', 'Extract Keywords from Title (1-Click)');
     kwBtn.setAttribute('role', 'button');
     kwBtn.innerHTML = `
-      <svg height="16" viewBox="0 0 24 24" width="16" focusable="false" style="fill:currentColor;pointer-events:none;">
-        <path d="M12 17c1.65 0 3-1.35 3-3s-1.35-3-3-3-3 1.35-3 3 1.35 3 3 3zm7.99-8c.01.34.01.68 0 1.01 0 1.79-.73 3.42-1.9 4.59.01 0 .02.02.02.03 1.31-.79 2.19-2.19 2.19-3.75 0-1.26-.5-2.4-1.31-3.27l-1.5 1.5c.53.99.84 2.1.84 3.32zm0-2.52c-.03-.01-.05-.02-.08-.03 1.22-.19 2.16-1.24 2.16-2.48 0-1.38-1.12-2.5-2.5-2.5-1.24 0-2.29.94-2.48 2.16-.94-.47-2-.76-3.11-.76s-2.16.5-3.01 1.31l-4.23 4.23c-.48.48-.78 1.13-.78 1.82 0 .66.28 1.27.73 1.72l5.02 5.02c.94-.94 1.51-2.25 1.51-3.65 0-1.66-.87-3.13-2.16-3.99.01-.02.02-.04.02-.06-1.65-.42-2.87-1.92-2.87-3.69 0-2.21 1.79-4 4-4 1.77 0 3.27 1.22 3.69 2.87.02-.02.04-.05.06-.08z"/>
+      <svg xmlns="http://www.w3.org/2000/svg" height="20px" viewBox="0 -960 960 960" width="20px" style="fill:currentColor;pointer-events:none;">
+        <path d="M223.5-423.5Q200-447 200-480t23.5-56.5Q247-560 280-560t56.5 23.5Q360-513 360-480t-23.5 56.5Q313-400 280-400t-56.5-23.5ZM280-240q-100 0-170-70T40-480q0-100 70-170t170-70q67 0 121.5 33t86.5 87h352l120 120-180 180-80-60-80 60-85-60h-47q-32 54-86.5 87T280-240Zm0-80q56 0 98.5-34t56.5-86h125l58 41 82-61 71 55 75-75-40-40H435q-14-52-56.5-86T280-640q-66 0-113 47t-47 113q0 66 47 113t113 47Z"/>
       </svg>
     `;
 
@@ -1973,7 +1989,7 @@ function isMenuPopupVisible(popup) {
   try {
     const style = window.getComputedStyle(dd);
     if (style.display === 'none' || style.visibility === 'hidden') return false;
-  } catch (_) {}
+  } catch (_) { }
   return true;
 }
 
@@ -2144,7 +2160,7 @@ function closeOpenMenu() {
       if ('opened' in dd) dd.opened = false;
     });
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true }));
-  } catch (_) {}
+  } catch (_) { }
 }
 
 // Sticky quick-block: cards that kept re-appearing after being un-hidden must
@@ -2180,7 +2196,7 @@ function requestNativeServerFeedback() {
         return true;
       }
     }
-  } catch (_) {}
+  } catch (_) { }
   return false;
 }
 
@@ -2258,10 +2274,10 @@ function blacklistActiveChannel(targetCard) {
         try {
           const video = document.querySelector('video');
           if (video) video.pause();
-        } catch (_) {}
+        } catch (_) { }
         redirectAwayFromWatchPage(500);
       }
-    } catch (_) {}
+    } catch (_) { }
   }
 
   const serverFeedbackSent = requestNativeServerFeedback();
@@ -2382,14 +2398,14 @@ function heuristicDebaitTitle(title) {
 // Common filler/stop words to filter out when extracting candidate
 // blacklist keywords from a video title.
 const KW_STOP_WORDS = new Set([
-  'the','a','an','and','or','to','in','on','of','for','is','it','at','by',
-  'with','from','as','this','that','these','those','your','you','we','our',
-  'be','been','was','are','were','so','if','no','not','but','than','then',
-  'will','can','just','more','what','how','why','when','where','which','who',
-  'new','now','has','have','had','do','does','did','going','going','video',
-  'youtube','feat','ft','vs','vs.','and','or','the','this','that','these',
-  'those','very','really','still','ever','never','too','also','such','much',
-  'many','most','least','best','worst','better','worse','thing','things',
+  'the', 'a', 'an', 'and', 'or', 'to', 'in', 'on', 'of', 'for', 'is', 'it', 'at', 'by',
+  'with', 'from', 'as', 'this', 'that', 'these', 'those', 'your', 'you', 'we', 'our',
+  'be', 'been', 'was', 'are', 'were', 'so', 'if', 'no', 'not', 'but', 'than', 'then',
+  'will', 'can', 'just', 'more', 'what', 'how', 'why', 'when', 'where', 'which', 'who',
+  'new', 'now', 'has', 'have', 'had', 'do', 'does', 'did', 'going', 'going', 'video',
+  'youtube', 'feat', 'ft', 'vs', 'vs.', 'and', 'or', 'the', 'this', 'that', 'these',
+  'those', 'very', 'really', 'still', 'ever', 'never', 'too', 'also', 'such', 'much',
+  'many', 'most', 'least', 'best', 'worst', 'better', 'worse', 'thing', 'things',
 ]);
 
 // Extracts candidate keywords from the card's title text.
@@ -2603,7 +2619,7 @@ function batchDebait(candidates) {
       applyDebaitResults(candidates, res);
     });
     sent = true;
-  } catch (_) {}
+  } catch (_) { }
 
   if (!sent) {
     applyDebaitResults(candidates, null);
@@ -2770,7 +2786,7 @@ async function analyzeTldw(ctx) {
       captionsFound = true;
       transcript = await fetchTranscript(track.baseUrl);
     }
-  } catch (_) {}
+  } catch (_) { }
 
   let sent = false;
   try {
@@ -2789,18 +2805,18 @@ async function analyzeTldw(ctx) {
         if (ctx.host !== tldwModalHost) return;
         if (ctx.host.dataset.tldwFor !== String(ctx.vid || ctx.title || '')) return;
         renderTldwResult(ctx, res, { transcript, captionsFound });
-      } catch (_) {}
+      } catch (_) { }
     });
     sent = true;
-  } catch (_) {}
+  } catch (_) { }
 
   if (!sent) {
     try {
       if (ctx.host && ctx.host.isConnected && ctx.host === tldwModalHost &&
-          ctx.host.dataset.tldwFor === String(ctx.vid || ctx.title || '')) {
+        ctx.host.dataset.tldwFor === String(ctx.vid || ctx.title || '')) {
         renderTldwResult(ctx, null, { transcript, captionsFound });
       }
-    } catch (_) {}
+    } catch (_) { }
   }
 }
 
@@ -2864,7 +2880,7 @@ async function fetchTranscript(baseUrl) {
     try {
       const json = JSON.parse(text);
       return parseTimedtextJson(json);
-    } catch (_) {}
+    } catch (_) { }
     return parseTimedtextXml(text);
   } catch (_) {
     return '';
@@ -2998,7 +3014,7 @@ function resolveMenuVideoCardFallback() {
         if (card) return card;
       }
     }
-  } catch (_) {}
+  } catch (_) { }
   return null;
 }
 
@@ -3063,7 +3079,7 @@ document.addEventListener('click', (e) => {
       startMenuObserver();
       injectCustomMenuItem();
     }
-  } catch (_) {}
+  } catch (_) { }
 }, true);
 
 // ------------------------------------------------------------------
@@ -3107,8 +3123,8 @@ function start() {
             continue;
           }
           if (node.matches?.(VIDEO_CARD_SELECTORS) ||
-              node.closest?.(VIDEO_CARD_SELECTORS) ||
-              node.querySelector?.(VIDEO_CARD_SELECTORS)) {
+            node.closest?.(VIDEO_CARD_SELECTORS) ||
+            node.querySelector?.(VIDEO_CARD_SELECTORS)) {
             shouldProcess = true;
             break;
           }
@@ -3132,7 +3148,7 @@ function start() {
           refreshSubscriptionKeySet();
           syncHuntMode();
           processFeed(true);
-        } catch (_) {}
+        } catch (_) { }
       });
     }, { passive: true });
   });
@@ -3197,7 +3213,7 @@ function ensureHuntStyles() {
       .nyt-hunt-ring::after { top: 50%; left: -6px; height: 2px; width: 38px; margin-top: -1px; }
     `;
     (document.head || document.documentElement).appendChild(st);
-  } catch (_) {}
+  } catch (_) { }
 }
 
 function huntUpdateHud(note) {
@@ -3205,7 +3221,7 @@ function huntUpdateHud(note) {
     if (!huntHud) return;
     const acc = huntShots ? Math.round((huntHits / huntShots) * 100) : 100;
     huntHud.innerHTML = `🎯 HUNT <b>${huntScore}</b> pts &nbsp;•&nbsp; ${huntHits}/${huntShots} (${acc}%) &nbsp;•&nbsp; best <b>${huntBest}</b>${note ? `<br><span style="color:#ff8fa3;">${note}</span>` : ''}`;
-  } catch (_) {}
+  } catch (_) { }
 }
 
 function huntPersist() {
@@ -3214,7 +3230,7 @@ function huntPersist() {
     if (!huntTouched) return; // never write a zeroed/unchanged score over real progress
     if (huntScore > huntBest) huntBest = huntScore;
     chrome.storage.local.set({ nyt_huntScore: huntScore, nyt_huntBest: huntBest });
-  } catch (_) {}
+  } catch (_) { }
 }
 
 function huntAddPrey(card, thumb) {
@@ -3229,7 +3245,7 @@ function huntAddPrey(card, thumb) {
     el.textContent = '⛔';
     el.title = 'Shoot me! (+100, no blacklist)';
     const stopNav = (ev) => {
-      try { ev.preventDefault(); ev.stopPropagation(); ev.stopImmediatePropagation(); } catch (_) {}
+      try { ev.preventDefault(); ev.stopPropagation(); ev.stopImmediatePropagation(); } catch (_) { }
     };
     el.addEventListener('pointerdown', stopNav, true);
     el.addEventListener('mousedown', (ev) => { stopNav(ev); huntHit(el); }, true);
@@ -3239,7 +3255,7 @@ function huntAddPrey(card, thumb) {
     card._nytHuntPrey = el;
     document.body.appendChild(el);
     huntMovePreyEl(el, thumb);
-  } catch (_) {}
+  } catch (_) { }
 }
 
 function huntMovePreyEl(el, anchor) {
@@ -3256,7 +3272,7 @@ function huntMovePreyEl(el, anchor) {
     }
     el.style.left = `${x}px`;
     el.style.top = `${y}px`;
-  } catch (_) {}
+  } catch (_) { }
 }
 
 // The single card-thumbnail lookup. huntVisibleCards() used to duplicate this and
@@ -3293,7 +3309,7 @@ function huntRoamAll() {
         } else {
           el.classList.add('hidden');
         }
-      } catch (_) {}
+      } catch (_) { }
     });
     try {
       const hc = hoveredVideoCard;
@@ -3302,8 +3318,8 @@ function huntRoamAll() {
           huntAddPrey(hc, getCardThumbnail(hc));
         }
       }
-    } catch (_) {}
-  } catch (_) {}
+    } catch (_) { }
+  } catch (_) { }
 }
 
 function huntHit(el) {
@@ -3322,9 +3338,9 @@ function huntHit(el) {
           el.classList.remove('nyt-hunt-hit');
           huntMovePreyEl(el, el._nytHuntThumb);
         }
-      } catch (_) {}
+      } catch (_) { }
     }, 160);
-  } catch (_) {}
+  } catch (_) { }
 }
 
 function huntMiss() {
@@ -3335,7 +3351,7 @@ function huntMiss() {
     huntScore = Math.max(0, huntScore - 10);
     huntUpdateHud('miss −10');
     huntPersist();
-  } catch (_) {}
+  } catch (_) { }
 }
 
 function huntOnRingMove(ev) {
@@ -3343,7 +3359,7 @@ function huntOnRingMove(ev) {
     if (!huntRing) return;
     huntRing.style.left = `${ev.clientX}px`;
     huntRing.style.top = `${ev.clientY}px`;
-  } catch (_) {}
+  } catch (_) { }
 }
 
 function huntOnDown(ev) {
@@ -3352,7 +3368,7 @@ function huntOnDown(ev) {
     const t = ev.target;
     if (t && t.closest && (t.closest('.nyt-hunt-prey') || t.closest('.nyt-hunt-hud') || t.closest('.nyt-hunt-ring'))) return;
     huntMiss();
-  } catch (_) {}
+  } catch (_) { }
 }
 
 function huntStart() {
@@ -3360,7 +3376,7 @@ function huntStart() {
     if (huntActive) return;
     huntActive = true;
     ensureHuntStyles();
-    try { document.body.classList.add('nyt-hunting'); } catch (_) {}
+    try { document.body.classList.add('nyt-hunting'); } catch (_) { }
     try {
       if (isExtensionValid()) {
         chrome.storage.local.get(['nyt_huntScore', 'nyt_huntBest'], (res) => {
@@ -3368,10 +3384,10 @@ function huntStart() {
             huntScore = Number(res.nyt_huntScore) || 0;
             huntBest = Number(res.nyt_huntBest) || 0;
             huntUpdateHud('hunt is on — hover a card, shoot the ⛔');
-          } catch (_) {}
+          } catch (_) { }
         });
       }
-    } catch (_) {}
+    } catch (_) { }
     if (!huntHud) {
       huntHud = document.createElement('div');
       huntHud.className = 'nyt-hunt-hud';
@@ -3388,11 +3404,11 @@ function huntStart() {
     document.addEventListener('mousedown', huntOnDown, true);
     try {
       huntRing.style.display = 'block';
-    } catch (_) {}
+    } catch (_) { }
     huntRoamAll();
     if (huntTimer) clearInterval(huntTimer);
     huntTimer = setInterval(huntRoamAll, 550);
-  } catch (_) {}
+  } catch (_) { }
 }
 
 function huntStop() {
@@ -3401,23 +3417,23 @@ function huntStop() {
     if (huntTimer) { clearInterval(huntTimer); huntTimer = null; }
     document.removeEventListener('mousemove', huntOnRingMove, true);
     document.removeEventListener('mousedown', huntOnDown, true);
-    try { document.body.classList.remove('nyt-hunting'); } catch (_) {}
-    try { document.querySelectorAll('.nyt-hunt-prey').forEach((el) => { if (el._nytHuntCard) el._nytHuntCard._nytHuntPrey = null; if (el.parentNode) el.parentNode.removeChild(el); }); } catch (_) {}
-    try { if (huntHud && huntHud.parentNode) huntHud.parentNode.removeChild(huntHud); } catch (_) {}
-    try { if (huntRing && huntRing.parentNode) huntRing.parentNode.removeChild(huntRing); } catch (_) {}
+    try { document.body.classList.remove('nyt-hunting'); } catch (_) { }
+    try { document.querySelectorAll('.nyt-hunt-prey').forEach((el) => { if (el._nytHuntCard) el._nytHuntCard._nytHuntPrey = null; if (el.parentNode) el.parentNode.removeChild(el); }); } catch (_) { }
+    try { if (huntHud && huntHud.parentNode) huntHud.parentNode.removeChild(huntHud); } catch (_) { }
+    try { if (huntRing && huntRing.parentNode) huntRing.parentNode.removeChild(huntRing); } catch (_) { }
     huntHud = null;
     huntRing = null;
     // Only persist if this session actually changed the score — a fresh
     // start/stop with no hits or misses must NOT zero a stored high score.
     huntPersist();
-  } catch (_) {}
+  } catch (_) { }
 }
 
 function syncHuntMode() {
   try {
     if (settings.huntMode) huntStart();
     else huntStop();
-  } catch (_) {}
+  } catch (_) { }
 }
 
 // These are the only storage keys that change WHICH videos get hidden. Counter /
@@ -3439,7 +3455,7 @@ if (isExtensionValid() && chrome?.storage?.onChanged) {
         processFeed(true);
       });
     });
-  } catch (_) {}
+  } catch (_) { }
 }
 
 // Popup message listener
@@ -3450,7 +3466,7 @@ if (isExtensionValid() && chrome?.runtime?.onMessage) {
       if (!sender || sender.id !== EXT_ID) return;
       if (msg && typeof msg === 'object' && msg.type === 'RULES_UPDATED') {
         if (document.visibilityState === 'hidden') {
-          try { sendResponse({ ok: true }); } catch (_) {}
+          try { sendResponse({ ok: true }); } catch (_) { }
           return;
         }
         loadSettings().then(() => {
@@ -3458,38 +3474,38 @@ if (isExtensionValid() && chrome?.runtime?.onMessage) {
             delete card.dataset.lastSignature;
           });
           processFeed(true);
-          try { sendResponse({ ok: true }); } catch (_) {}
+          try { sendResponse({ ok: true }); } catch (_) { }
         });
         return true;
       }
       if (msg && typeof msg === 'object' && msg.type === 'GET_VISIBLE_FEED_ITEMS') {
         try {
           const items = collectVisibleFeedItems(15);
-          try { sendResponse({ ok: true, items }); } catch (_) {}
+          try { sendResponse({ ok: true, items }); } catch (_) { }
         } catch (_) {
-          try { sendResponse({ ok: true, items: [] }); } catch (__) {}
+          try { sendResponse({ ok: true, items: [] }); } catch (__) { }
         }
         return true;
       }
       if (msg && typeof msg === 'object' && msg.type === 'MEASURE_FEED_DIVERSITY') {
         try {
           const stats = measureFeedDiversity();
-          try { sendResponse({ ok: true, ...stats }); } catch (_) {}
+          try { sendResponse({ ok: true, ...stats }); } catch (_) { }
         } catch (_) {
-          try { sendResponse({ ok: false }); } catch (__) {}
+          try { sendResponse({ ok: false }); } catch (__) { }
         }
         return true;
       }
       if (msg && typeof msg === 'object' && msg.type === 'SCRAPE_SUBSCRIPTIONS') {
         scrapeSubscriptions()
-          .then(res => { try { sendResponse(res); } catch (_) {} })
+          .then(res => { try { sendResponse(res); } catch (_) { } })
           .catch(() => {
-            try { sendResponse({ ok: false, channels: [], count: 0 }); } catch (_) {}
+            try { sendResponse({ ok: false, channels: [], count: 0 }); } catch (_) { }
           });
         return true;
       }
     });
-  } catch (_) {}
+  } catch (_) { }
 }
 
 // ------------------------------------------------------------------
@@ -3563,7 +3579,7 @@ function initChipRescue() {
         chipsBar.style.setProperty('display', 'flex', 'important');
         chipsBar.style.setProperty('visibility', 'visible', 'important');
         showToast('YouTube hid the topic chips — restored.');
-      } catch (_) {}
+      } catch (_) { }
       return;
     }
 
@@ -3575,7 +3591,7 @@ function initChipRescue() {
       btn.title = 'YouTube failed to render the topic chips (known bug). Click to reload the page — the verified fix.';
       btn.onclick = () => {
         showToast('Restoring topic chips …');
-        try { window.location.reload(); } catch (_) {}
+        try { window.location.reload(); } catch (_) { }
       };
       document.body.appendChild(btn);
       chipRescueButton = btn;
@@ -3640,7 +3656,7 @@ function initNewToYouAuto() {
         target.querySelector('button, a') || target;
       clickable.click();
       showToast('Home switched to \'New to you\' — YouTube\'s less-seen discovery feed.');
-    } catch (_) {}
+    } catch (_) { }
   };
 
   newToYouTimer = setTimeout(() => check(0), 6000);
