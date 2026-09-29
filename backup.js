@@ -1,4 +1,4 @@
-// Backup & Restore page for Always New To You - YouTube Smart Blacklister v1.11.0
+// Backup & Restore page for Always New To You - YouTube Smart Blacklister v1.11.1
 //
 // WHY THIS PAGE EXISTS (and why export/import were broken in the popup):
 //  - Export used a detached <a download> + immediate URL.revokeObjectURL(), which
@@ -16,7 +16,8 @@ let data = {
   enableQuickBlock: true, triggerServerFeedback: false, totalBlocked: 0,
   aiAutonomous: false, aiSensitivity: 'balanced', aiModel: '', aiTastePrompt: '',
   aiSubscriptionProfile: '', aiLog: [], aiDebaitTitles: false, aiDebaitModel: '',
-  tldwEnabled: true, huntMode: false, chipRescue: false, newToYouAuto: false
+  tldwEnabled: true, huntMode: false, chipRescue: false, newToYouAuto: false,
+  keywordExceptions: {}, feedHealthLog: [], communityPacks: [], temporalRules: []
 };
 
 function load() {
@@ -26,7 +27,8 @@ function load() {
       'blockShorts','shortsSubOnly','blockCommunity','autoDubMode','enableQuickBlock',
       'triggerServerFeedback','nyt_totalBlocked','aiAutonomous','aiSensitivity',
       'aiModel','aiTastePrompt','aiSubscriptionProfile','aiLog',
-      'aiDebaitTitles','aiDebaitModel','tldwEnabled','huntMode','chipRescue','newToYouAuto'
+      'aiDebaitTitles','aiDebaitModel','tldwEnabled','huntMode','chipRescue','newToYouAuto',
+      'keywordExceptions','feedHealthLog','communityPacks','temporalRules'
     ], (res) => {
       data.channels = Array.isArray(res.channels) ? res.channels : [];
       data.keywords = Array.isArray(res.keywords) ? res.keywords : [];
@@ -51,6 +53,10 @@ function load() {
       data.huntMode = Boolean(res.huntMode);
       data.chipRescue = Boolean(res.chipRescue);
       data.newToYouAuto = Boolean(res.newToYouAuto);
+      data.keywordExceptions = (res.keywordExceptions && typeof res.keywordExceptions === 'object') ? res.keywordExceptions : {};
+      data.feedHealthLog = Array.isArray(res.feedHealthLog) ? res.feedHealthLog : [];
+      data.communityPacks = Array.isArray(res.communityPacks) ? res.communityPacks : [];
+      data.temporalRules = Array.isArray(res.temporalRules) ? res.temporalRules : [];
       resolve();
     });
   });
@@ -88,7 +94,11 @@ function saveToStorage(pinned) {
         aiTastePrompt: data.aiTastePrompt, aiDebaitTitles: data.aiDebaitTitles,
         aiDebaitModel: data.aiDebaitModel, tldwEnabled: data.tldwEnabled,
         huntMode: data.huntMode, chipRescue: data.chipRescue,
-        newToYouAuto: data.newToYouAuto
+        newToYouAuto: data.newToYouAuto,
+        keywordExceptions: data.keywordExceptions,
+        feedHealthLog: data.feedHealthLog,
+        communityPacks: data.communityPacks,
+        temporalRules: data.temporalRules
       };
       Object.keys(PRESERVED_KEYS).forEach((k) => {
         if (k in explicit) {
@@ -367,6 +377,23 @@ async function runImportFile(file) {
     if ('chipRescue' in s) data.chipRescue = Boolean(s.chipRescue);
     if ('newToYouAuto' in s) data.newToYouAuto = Boolean(s.newToYouAuto);
     if ('aiSubscriptionProfile' in s) pinned.aiSubscriptionProfile = data.aiSubscriptionProfile;
+  }
+
+  if (json.keywordExceptions && typeof json.keywordExceptions === 'object') {
+    data.keywordExceptions = json.keywordExceptions;
+    pinned.keywordExceptions = data.keywordExceptions;
+  }
+  if (Array.isArray(json.temporalRules)) {
+    data.temporalRules = json.temporalRules;
+    pinned.temporalRules = data.temporalRules;
+  }
+  if (Array.isArray(json.communityPacks)) {
+    data.communityPacks = json.communityPacks;
+    pinned.communityPacks = data.communityPacks;
+  }
+  if (Array.isArray(json.feedHealthLog)) {
+    data.feedHealthLog = json.feedHealthLog;
+    pinned.feedHealthLog = data.feedHealthLog;
   }
 
   const saveErr = await saveToStorage(pinned);

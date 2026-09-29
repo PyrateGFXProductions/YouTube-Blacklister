@@ -1,5 +1,5 @@
 /*
- * Always New To You - Smart Feed Blacklist (v1.11.0)
+ * Always New To You - Smart Feed Blacklist (v1.11.1)
  * ---------------------------------------------------------------
  * Core mechanisms:
  *
@@ -2489,6 +2489,7 @@ function extractKeywordsFromCard(card) {
 
     const updated = [...existing, ...newOnes];
     chrome.storage.local.set({ keywords: updated }, () => {
+      settings.keywords = updated;
       // Trigger a re-scan to apply the new keywords immediately
       if (typeof processFeed === 'function') {
         setTimeout(() => processFeed(true), 300);
@@ -2499,6 +2500,7 @@ function extractKeywordsFromCard(card) {
           chrome.storage.local.get(['keywords'], (r) => {
             const filtered = (r.keywords || []).filter(k => !newOnes.includes(k));
             chrome.storage.local.set({ keywords: filtered }, () => {
+              settings.keywords = filtered;
               if (typeof processFeed === 'function') {
                 setTimeout(() => processFeed(true), 300);
               }
@@ -3439,7 +3441,7 @@ function syncHuntMode() {
 // These are the only storage keys that change WHICH videos get hidden. Counter /
 // log / UI writes (nyt_totalBlocked bumps on every block, hunt score, aiLog, ...)
 // must NOT force a full feed re-evaluation on every open YouTube tab.
-const RULE_KEYS = ['channels', 'keywords', 'whitelistChannels', 'subsSnapshot', 'blockShorts', 'shortsSubOnly', 'blockCommunity', 'autoDubMode', 'chipRescue', 'newToYouAuto'];
+const RULE_KEYS = ['channels', 'keywords', 'whitelistChannels', 'subsSnapshot', 'blockShorts', 'shortsSubOnly', 'blockCommunity', 'autoDubMode', 'chipRescue', 'newToYouAuto', 'keywordExceptions', 'temporalRules'];
 
 // Storage sync across tabs & popup
 if (isExtensionValid() && chrome?.storage?.onChanged) {

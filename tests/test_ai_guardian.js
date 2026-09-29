@@ -128,6 +128,10 @@ const withThinking = '<thought>Let me ponder this for 30 seconds...</thought>{"k
 const parsed1 = bgContext.cleanJsonParse(withThinking);
 assert.deepEqual(parsed1, { keywords: ["tennis", "golf"], regex: ["/tennis/i"] });
 
+const withThinkTag = '<think>I should output {"keywords": ["formula 1"]} for the user.</think>{"keywords": ["formula 1"]}';
+const parsedThink = bgContext.cleanJsonParse(withThinkTag);
+assert.deepEqual(parsedThink, { keywords: ["formula 1"] });
+
 const withMarkdown = '```json\n{"keywords": ["cricket"]}\n```';
 const parsed2 = bgContext.cleanJsonParse(withMarkdown);
 assert.deepEqual(parsed2, { keywords: ["cricket"] });

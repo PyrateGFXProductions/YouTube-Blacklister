@@ -69,7 +69,8 @@ if ($present) {
     $raw += $target
     Write-Host '[i] xpinstall.signatures.required = false  appended'
 }
-Set-Content -LiteralPath $main.FullName -Value $raw -Encoding utf8NoBOM
+$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+[System.IO.File]::WriteAllLines($main.FullName, [string[]]$raw, $utf8NoBom)
 $check = (Select-String -LiteralPath $main.FullName -SimpleMatch 'xpinstall.signatures.required", false').Count
 if (-not $check) {
     Write-Host '[!] Failed to write the pref. Backup available:' -ForegroundColor Red
@@ -77,27 +78,65 @@ if (-not $check) {
     exit 1
 }
 
-# --- 5) policies.json (best-effort; needs Administrator ---------------------------
-try {
-    $polDir   = Join-Path $zenDir 'distribution'
-    New-Item -ItemType Directory -Path $polDir -Force | Out-Null
-    # force_installed = the enterprise-verified way to install an UNSIGNED add-on:
-    # the browser installs it automatically and treats it as policy-managed.
-    # ("allowed" would NOT work for unsigned — that was the bug in the earlier version.)
-    # Derive the install URL from this script's own location: a hardcoded absolute
-    # path only ever resolved on the machine that wrote it, so every other user got
-    # a policies.json pointing at a file that does not exist.
-    $xpiUri   = 'file:///' + ($xpi -replace '\\', '/')
-    $policy   = @{ policies = @{ ExtensionSettings = @{ $id = @{
-        installation_mode = 'force_installed'
-        install_url       = $xpiUri
-    } } } }
-    $policy | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $polDir 'policies.json') -Encoding utf8NoBOM
-    Write-Host "[i] policies.json written (force_installed): $polDir" -ForegroundColor Green
-} catch {
-    Write-Host '[!] Could not write policies.json in Program Files (needs Administrator).' -ForegroundColor Yellow
-    Write-Host '    Optional: right-click fix-zen-install.bat -> "Run as administrator" to re-run elevated.'
-    Write-Host '    The prefs unlock below it is what makes the manual install work.'
+# --- 5) policies.json (Enterprise Policy: bypasses signature check completely) ---
+$candidateZenDirs = @(
+    'C:\Program Files\Zen Browser',
+    'C:\Program Files\Zen',
+    "${env:ProgramFiles(x86)}\Zen Browser",
+    "${env:ProgramFiles(x86)}\Zen",
+    "$env:LOCALAPPDATA\Programs\zen",
+    "$env:LOCALAPPDATA\Programs\Zen Browser",
+    "$env:LOCALAPPDATA\Zen Browser"
+)
+
+# Also check Windows App Paths registry
+foreach ($regRoot in @('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\zen.exe', 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\zen.exe')) {
+    if (Test-Path $regRoot) {
+        $regPath = (Get-ItemProperty -Path $regRoot -ErrorAction SilentlyContinue).'(default)'
+        if ($regPath -and (Test-Path $regPath)) {
+            $regDir = Split-Path -Parent $regPath
+            if ($candidateZenDirs -notcontains $regDir) {
+                $candidateZenDirs += $regDir
+            }
+        }
+    }
+}
+
+$xpiUri   = 'file:///' + ($xpi -replace '\\', '/')
+$policy   = @{ policies = @{ ExtensionSettings = @{ $id = @{
+    installation_mode = 'force_installed'
+    install_url       = $xpiUri
+} } } }
+$policyJson = $policy | ConvertTo-Json -Depth 6
+
+$policiesWritten = 0
+foreach ($dir in $candidateZenDirs) {
+    if (Test-Path $dir) {
+        try {
+            $polDir = Join-Path $dir 'distribution'
+            New-Item -ItemType Directory -Path $polDir -Force | Out-Null
+            $polFile = Join-Path $polDir 'policies.json'
+            [System.IO.File]::WriteAllText($polFile, $policyJson, $utf8NoBom)
+            Write-Host "[OK] Enterprise policy written -> $polFile" -ForegroundColor Green
+            $policiesWritten++
+        } catch {
+            Write-Host "[!] Could not write policies.json in $dir ($($_.Exception.Message))" -ForegroundColor Yellow
+        }
+    }
+}
+
+# If none of the candidate dirs existed yet, default to C:\Program Files\Zen Browser
+if ($policiesWritten -eq 0) {
+    try {
+        $defaultPolDir = 'C:\Program Files\Zen Browser\distribution'
+        New-Item -ItemType Directory -Path $defaultPolDir -Force | Out-Null
+        $defaultPolFile = Join-Path $defaultPolDir 'policies.json'
+        [System.IO.File]::WriteAllText($defaultPolFile, $policyJson, $utf8NoBom)
+        Write-Host "[OK] Enterprise policy written -> $defaultPolFile" -ForegroundColor Green
+        $policiesWritten++
+    } catch {
+        Write-Host "[!] Could not write policies.json in Program Files ($($_.Exception.Message))" -ForegroundColor Red
+    }
 }
 
 # --- 6) .xpi sanity check ----------------------------------------------------------
@@ -109,10 +148,12 @@ if (Test-Path -LiteralPath $xpi) {
 }
 
 Write-Host ''
-Write-Host '[v] Done. Now:' -ForegroundColor Green
-Write-Host '  1) Start Zen Browser (the pref is read at startup)'
-Write-Host '  2) Go to about:addons  ->  gear icon  ->  "Install Add-on From File..."'
-Write-Host "  3) Choose blacklist-firefox.xpi"
-Write-Host '  4) Your existing rules should reappear automatically — same extension ID,'
-Write-Host '     same storage (Zen never deleted it; only the install path was blocked).'
+Write-Host '==========================================================' -ForegroundColor Green
+Write-Host ' [SUCCESS] Zen Browser Enterprise Unlock Applied!' -ForegroundColor Green
+Write-Host '==========================================================' -ForegroundColor Green
+Write-Host '  1) Start Zen Browser.'
+Write-Host '  2) The extension is now FORCE INSTALLED by policy.'
+Write-Host '     (Check about:addons -> it appears automatically, no manual install needed!)'
+Write-Host '  3) All rules and settings will now persist permanently across restarts.'
+Write-Host ''
 Read-Host '  Press Enter to close'

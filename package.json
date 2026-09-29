@@ -1,6 +1,6 @@
 {
   "name": "youtube-blacklister",
-  "version": "1.11.0",
+  "version": "1.11.1",
   "description": "Always New To You - Smart Feed Blacklist. A Manifest V3 browser extension that pins YouTube's 'New to You' feed and filters it with a local, server-invisible blacklist.",
   "main": "background.js",
   "directories": {

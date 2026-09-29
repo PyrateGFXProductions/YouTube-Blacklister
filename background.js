@@ -1,4 +1,4 @@
-// Background service worker for Always New To You - YouTube Blacklister v1.11.0
+// Background service worker for Always New To You - YouTube Blacklister v1.11.1
 // Manages badges, statistics, and the Autonomous AI Neural Slop Interceptor
 
 // The heuristic pattern tables live in ONE file, shared with the content script so
@@ -115,6 +115,7 @@ function cleanJsonParse(rawText) {
   // Strip common thought-block formats emitted by local LLM runtimes.
   // Uses global replace so multiple blocks are removed, not just the first.
   let text = rawText
+    .replace(/<think>[\s\S]*?<\/think>/gi, '')
     .replace(/<thought>[\s\S]*?<\/thought>/gi, '')
     .replace(/<\|thinking\|>[\s\S]*?<\|end\|think\|>/gi, '')
     .replace(/<｜｜DSML｜｜think>[\s\S]*?<｜｜DSML｜｜end｜｜think｜｜>/gi, '')
@@ -1060,17 +1061,19 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       }
     } catch (_) {}
     sendResponse({ ok: true });
-    return true;
+    return false;
   }
 
   if (msg.type === 'INCREMENT_BLOCKED') {
     const requested = Number(msg.inc);
     const inc = Number.isFinite(requested) ? Math.trunc(requested) : 1;
-    incrementBlockedTotal(inc).then((total) => sendResponse({ ok: total !== null, total }));
+    incrementBlockedTotal(inc)
+      .then((total) => sendResponse({ ok: total !== null, total }))
+      .catch((err) => { try { sendResponse({ ok: false, error: String((err && err.message) || err) }); } catch (_) {} });
     return true;
   }
 
-if (msg.type === 'CHECK_AI_STATUS') {
+  if (msg.type === 'CHECK_AI_STATUS') {
     checkAiStatus(msg.customUrl)
       .then(res => sendResponse(res))
       .catch((err) => { try { sendResponse({ ok: false, error: String((err && err.message) || err) }); } catch (_) {} });
@@ -1103,46 +1106,52 @@ if (msg.type === 'CHECK_AI_STATUS') {
   }
 
   if (msg.type === 'AI_SUMMARIZE_TRANSCRIPT') {
-      summarizeTranscriptWithAi(msg.transcript, msg.title, msg.modelChoice, msg.customUrl, msg.opts).then(res => sendResponse(res)).catch((err) => { try { sendResponse({ ok: false, error: String((err && err.message) || err) }); } catch (_) {} });
-      return true;
-    }
+    summarizeTranscriptWithAi(msg.transcript, msg.title, msg.modelChoice, msg.customUrl, msg.opts).then(res => sendResponse(res)).catch((err) => { try { sendResponse({ ok: false, error: String((err && err.message) || err) }); } catch (_) {} });
+    return true;
+  }
 
-    if (msg.type === 'INCREMENT_KEYWORD_HIT') {
-      const kw = String(msg.keyword || '').trim().toLowerCase();
-      if (!kw) { sendResponse({ ok: false, error: 'empty keyword' }); return true; }
-      chrome.storage.local.get(['nyt_keywordHits'], (res) => {
-        if (chrome.runtime?.lastError) { sendResponse({ ok: false, error: chrome.runtime.lastError.message }); return; }
-        const hits = (res && typeof res.nyt_keywordHits === 'object' && res.nyt_keywordHits !== null) ? res.nyt_keywordHits : {};
-        hits[kw] = (hits[kw] || 0) + 1;
-        chrome.storage.local.set({ nyt_keywordHits: hits }, () => {
-          sendResponse({ ok: !chrome.runtime?.lastError, hits: hits[kw] });
-        });
+  if (msg.type === 'INCREMENT_KEYWORD_HIT') {
+    const kw = String(msg.keyword || '').trim().toLowerCase();
+    if (!kw) { sendResponse({ ok: false, error: 'empty keyword' }); return false; }
+    chrome.storage.local.get(['nyt_keywordHits'], (res) => {
+      if (chrome.runtime?.lastError) { sendResponse({ ok: false, error: chrome.runtime.lastError.message }); return; }
+      const hits = (res && typeof res.nyt_keywordHits === 'object' && res.nyt_keywordHits !== null) ? res.nyt_keywordHits : {};
+      hits[kw] = (hits[kw] || 0) + 1;
+      chrome.storage.local.set({ nyt_keywordHits: hits }, () => {
+        sendResponse({ ok: !chrome.runtime?.lastError, hits: hits[kw] });
       });
-      return true;
-    }
+    });
+    return true;
+  }
 
-    if (msg.type === 'GET_KEYWORD_HITS') {
-      chrome.storage.local.get(['nyt_keywordHits'], (res) => {
-        sendResponse({ ok: !chrome.runtime?.lastError, hits: (res && res.nyt_keywordHits) || {} });
-      });
-      return true;
-    }
+  if (msg.type === 'GET_KEYWORD_HITS') {
+    chrome.storage.local.get(['nyt_keywordHits'], (res) => {
+      sendResponse({ ok: !chrome.runtime?.lastError, hits: (res && res.nyt_keywordHits) || {} });
+    });
+    return true;
+  }
 
-    if (msg.type === 'RESET_KEYWORD_HITS') {
-      const kw = msg.keyword ? String(msg.keyword).trim().toLowerCase() : null;
-      chrome.storage.local.get(['nyt_keywordHits'], (res) => {
-        if (chrome.runtime?.lastError) { sendResponse({ ok: false, error: chrome.runtime.lastError.message }); return; }
-        const hits = (res && typeof res.nyt_keywordHits === 'object' && res.nyt_keywordHits !== null) ? res.nyt_keywordHits : {};
-        if (kw) {
-          delete hits[kw];
-        } else {
-          // reset all
-          Object.keys(hits).forEach(k => delete hits[k]);
-        }
-        chrome.storage.local.set({ nyt_keywordHits: hits }, () => {
-          sendResponse({ ok: !chrome.runtime?.lastError });
-        });
+  if (msg.type === 'RESET_KEYWORD_HITS') {
+    const kw = msg.keyword ? String(msg.keyword).trim().toLowerCase() : null;
+    chrome.storage.local.get(['nyt_keywordHits'], (res) => {
+      if (chrome.runtime?.lastError) { sendResponse({ ok: false, error: chrome.runtime.lastError.message }); return; }
+      const hits = (res && typeof res.nyt_keywordHits === 'object' && res.nyt_keywordHits !== null) ? res.nyt_keywordHits : {};
+      if (kw) {
+        delete hits[kw];
+      } else {
+        // reset all
+        Object.keys(hits).forEach(k => delete hits[k]);
+      }
+      chrome.storage.local.set({ nyt_keywordHits: hits }, () => {
+        sendResponse({ ok: !chrome.runtime?.lastError });
       });
-      return true;
-    }
-  });
+    });
+    return true;
+  }
+
+  // Fallback for unhandled/unrecognized message types
+  try {
+    sendResponse({ ok: false, error: `unrecognized_message_type: ${msg.type}` });
+  } catch (_) {}
+  return false;
+});

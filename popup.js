@@ -2017,10 +2017,12 @@ async function runKeywordTest() {
   let html = '';
   titles.forEach(title => {
     const matches = keywords.filter(kw => testKeyword(title, kw));
+    const safeTitle = escapeHtml(title);
+    const safeMatches = matches.map(m => `<code>${escapeHtml(m)}</code>`).join(', ');
     html += `<div style="margin-bottom: 6px; padding: 6px; background: ${matches.length ? 'rgba(255,0,51,0.1)' : 'transparent'}; border-radius: 4px; border-left: 3px solid ${matches.length ? 'var(--accent)' : 'var(--border)'};">
-      <div style="font-weight: 600; color: ${matches.length ? 'var(--accent)' : 'var(--text)'};">${title}</div>`;
+      <div style="font-weight: 600; color: ${matches.length ? 'var(--accent)' : 'var(--text)'};">${safeTitle}</div>`;
     if (matches.length) {
-      html += `<div style="font-size: 10px; color: var(--muted); margin-top: 2px;">Matches: ${matches.map(m => `<code>${m}</code>`).join(', ')}</div>`;
+      html += `<div style="font-size: 10px; color: var(--muted); margin-top: 2px;">Matches: ${safeMatches}</div>`;
     }
     html += '</div>';
   });
@@ -2038,6 +2040,10 @@ async function fetchVisibleTitles() {
       return;
     }
     const tab = tabs[0];
+    if (!chrome?.scripting?.executeScript) {
+      input.value = 'Scripting API unavailable; please check extension permissions.';
+      return;
+    }
     const result = await chrome.scripting.executeScript({
       target: { tabId: tab.id },
       func: () => {
@@ -2094,8 +2100,9 @@ async function loadHitCounters() {
       let html = '';
       combined.forEach(({ kw, hits: h }) => {
         const isZero = h === 0;
-        html += `<div class="hit-counter-row" data-kw="${kw.replace(/"/g, '"')}" style="display: flex; justify-content: space-between; align-items: center; padding: 4px 8px; margin: 2px 0; background: ${isZero ? 'rgba(255,0,51,0.05)' : 'transparent'}; border-radius: 4px; border: 1px solid ${isZero ? 'rgba(255,0,51,0.2)' : 'var(--border)'};">
-          <code style="font-size: 11px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${kw}</code>
+        const safeKw = escapeHtml(kw);
+        html += `<div class="hit-counter-row" data-kw="${safeKw}" style="display: flex; justify-content: space-between; align-items: center; padding: 4px 8px; margin: 2px 0; background: ${isZero ? 'rgba(255,0,51,0.05)' : 'transparent'}; border-radius: 4px; border: 1px solid ${isZero ? 'rgba(255,0,51,0.2)' : 'var(--border)'};">
+          <code style="font-size: 11px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${safeKw}</code>
           <span style="font-weight: ${isZero ? '700' : '400'}; color: ${isZero ? 'var(--danger)' : 'var(--muted)'}; margin-left: 8px; min-width: 40px; text-align: right;">${h} hit${h !== 1 ? 's' : ''}</span>
           ${isZero ? '<span class="reset-hit-btn" title="Reset counter" style="cursor: pointer; margin-left: 8px; color: var(--muted); font-size: 12px;">↺</span>' : ''}
         </div>`;
@@ -2205,11 +2212,13 @@ function renderKeywordExceptions() {
   }
   let html = '';
   for (const [keyword, channels] of Object.entries(exc)) {
+    const safeKw = escapeHtml(keyword);
+    const safeChannels = Array.isArray(channels) ? channels.map(c => escapeHtml(c)).join(', ') : '';
     html += `<div style="display: flex; justify-content: space-between; align-items: center; padding: 4px 8px; margin: 2px 0; background: var(--card); border: 1px solid var(--border); border-radius: 4px;">
-      <code style="font-size: 11px;">${keyword}</code>
+      <code style="font-size: 11px;">${safeKw}</code>
       <span style="font-size: 10px; color: var(--muted); margin: 0 8px;">→</span>
-      <span style="font-size: 11px; flex: 1; text-align: right;">${channels.join(', ')}</span>
-      <button class="remove-exception" data-kw="${keyword}" style="margin-left: 8px; background: none; border: none; color: var(--danger); cursor: pointer; font-size: 14px;">✕</button>
+      <span style="font-size: 11px; flex: 1; text-align: right;">${safeChannels}</span>
+      <button class="remove-exception" data-kw="${safeKw}" style="margin-left: 8px; background: none; border: none; color: var(--danger); cursor: pointer; font-size: 14px;">✕</button>
     </div>`;
   }
   listEl.innerHTML = html;
@@ -2253,12 +2262,16 @@ async function renderCommunityPacks() {
   let html = '';
   for (let i = 0; i < packs.length; i++) {
     const p = packs[i];
+    const safeName = escapeHtml(p.name || 'Unnamed Pack');
+    const safeUrl = escapeHtml(p.url || '');
     const last = p.lastFetched ? new Date(p.lastFetched).toLocaleDateString() : 'never';
+    const kwCount = p.rules?.keywords?.length || 0;
+    const chCount = p.rules?.channels?.length || 0;
     html += `<div style="display: flex; justify-content: space-between; align-items: center; padding: 8px; margin: 4px 0; background: var(--card); border: 1px solid var(--border); border-radius: 4px;">
       <div style="flex: 1;">
-        <div style="font-weight: 600; font-size: 12px;">${p.name || 'Unnamed Pack'}</div>
-        <div style="font-size: 10px; color: var(--muted);">${p.url}</div>
-        <div style="font-size: 10px; color: var(--muted);">Rules: ${p.rules?.length || 0} | Last fetched: ${last} | ${p.enabled ? 'Enabled' : 'Disabled'}</div>
+        <div style="font-weight: 600; font-size: 12px;">${safeName}</div>
+        <div style="font-size: 10px; color: var(--muted);">${safeUrl}</div>
+        <div style="font-size: 10px; color: var(--muted);">Rules: ${kwCount} kw, ${chCount} ch | Last fetched: ${last} | ${p.enabled ? 'Enabled' : 'Disabled'}</div>
       </div>
       <div style="display: flex; gap: 4px;">
         <button class="toggle-pack" data-i="${i}" style="padding: 2px 8px; font-size: 10px; background: ${p.enabled ? 'var(--accent)' : 'var(--muted)'}; color: white; border: none; border-radius: 3px; cursor: pointer;">${p.enabled ? 'Disable' : 'Enable'}</button>
@@ -2271,8 +2284,16 @@ async function renderCommunityPacks() {
   listEl.querySelectorAll('.toggle-pack').forEach(btn => {
     btn.addEventListener('click', () => {
       const i = parseInt(btn.dataset.i);
-      data.communityPacks[i].enabled = !data.communityPacks[i].enabled;
+      const pack = data.communityPacks[i];
+      if (!pack) return;
+      pack.enabled = !pack.enabled;
+      if (!pack.enabled) {
+        unmergeCommunityPack(pack);
+      } else {
+        mergeCommunityPacks();
+      }
       save();
+      renderAll();
       renderCommunityPacks();
     });
   });
@@ -2280,14 +2301,19 @@ async function renderCommunityPacks() {
     btn.addEventListener('click', async () => {
       const i = parseInt(btn.dataset.i);
       await fetchCommunityPack(i);
+      mergeCommunityPacks();
+      save();
+      renderAll();
       renderCommunityPacks();
     });
   });
   listEl.querySelectorAll('.remove-pack').forEach(btn => {
     btn.addEventListener('click', () => {
       const i = parseInt(btn.dataset.i);
-      data.communityPacks.splice(i, 1);
+      const [removed] = data.communityPacks.splice(i, 1);
+      if (removed) unmergeCommunityPack(removed);
       save();
+      renderAll();
       renderCommunityPacks();
       setStatus('Community pack removed.');
     });
@@ -2301,11 +2327,23 @@ async function addCommunityPack() {
   const url = urlInput.value.trim();
   const name = nameInput.value.trim() || 'Community Pack';
   if (!url) { setStatus('Enter a URL.'); return; }
-  data.communityPacks.push({ url, name, enabled: true, lastFetched: null, rules: [] });
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      setStatus('Pack URL must use http: or https:');
+      return;
+    }
+  } catch (_) {
+    setStatus('Invalid URL.');
+    return;
+  }
+  data.communityPacks.push({ url, name, enabled: true, lastFetched: null, rules: { keywords: [], channels: [] } });
   urlInput.value = '';
   nameInput.value = '';
   save();
   await fetchCommunityPack(data.communityPacks.length - 1);
+  mergeCommunityPacks();
+  renderAll();
   renderCommunityPacks();
   setStatus(`Community pack added: ${name}`);
 }
@@ -2343,16 +2381,35 @@ async function autoFetchCommunityPacks() {
   }
 }
 
+// Unmerge community pack rules cleanly when a pack is removed or disabled
+function unmergeCommunityPack(pack) {
+  if (!pack || !pack.rules) return;
+  const otherPacks = (data.communityPacks || []).filter(p => p !== pack && p.enabled && p.rules);
+  const otherKeywords = new Set();
+  const otherChannels = new Set();
+  otherPacks.forEach(p => {
+    (p.rules.keywords || []).forEach(k => otherKeywords.add(k));
+    (p.rules.channels || []).forEach(c => otherChannels.add(c));
+  });
+
+  if (Array.isArray(pack.rules.keywords)) {
+    data.keywords = data.keywords.filter(k => !pack.rules.keywords.includes(k) || otherKeywords.has(k));
+  }
+  if (Array.isArray(pack.rules.channels)) {
+    data.channels = data.channels.filter(c => !pack.rules.channels.includes(c) || otherChannels.has(c));
+  }
+}
+
 // Merge community pack rules into active rules (run on load)
 function mergeCommunityPacks() {
   for (const p of (data.communityPacks || [])) {
     if (!p.enabled || !p.rules) continue;
-    if (p.rules.keywords) {
+    if (Array.isArray(p.rules.keywords)) {
       for (const kw of p.rules.keywords) {
         if (!data.keywords.includes(kw)) data.keywords.push(kw);
       }
     }
-    if (p.rules.channels) {
+    if (Array.isArray(p.rules.channels)) {
       for (const ch of p.rules.channels) {
         if (!data.channels.includes(ch)) data.channels.push(ch);
       }
@@ -2369,32 +2426,42 @@ function renderTemporalRules() {
     listEl.innerHTML = '<span style="color: var(--muted);">No temporal rules.</span>';
     return;
   }
-  // Auto-expire check
+  // Auto-expire check: end of day local time
   const now = new Date();
   let changed = false;
   for (let i = rules.length - 1; i >= 0; i--) {
-    if (new Date(rules[i].expires) <= now) {
-      // Remove expired keyword from active list
+    const expDate = new Date(rules[i].expires + 'T23:59:59');
+    if (!isNaN(expDate.getTime()) && expDate <= now) {
       const kw = rules[i].keyword;
-      data.keywords = data.keywords.filter(k => k !== kw);
+      const permBefore = Boolean(rules[i].permanentBefore);
       rules.splice(i, 1);
+      const stillHasTemporal = rules.some(r => r.keyword === kw);
+      if (!stillHasTemporal && !permBefore) {
+        data.keywords = data.keywords.filter(k => k !== kw);
+      }
       changed = true;
     }
   }
-  if (changed) save();
+  if (changed) {
+    save();
+    renderAll();
+  }
 
   let html = '';
   rules.forEach((r, i) => {
-    const exp = new Date(r.expires).toLocaleDateString();
-    const daysLeft = Math.ceil((new Date(r.expires) - now) / (1000 * 60 * 60 * 24));
+    const expDate = new Date(r.expires + 'T23:59:59');
+    const exp = !isNaN(expDate.getTime()) ? expDate.toLocaleDateString() : r.expires;
+    const daysLeft = !isNaN(expDate.getTime()) ? Math.ceil((expDate - now) / (1000 * 60 * 60 * 24)) : 0;
+    const safeKw = escapeHtml(r.keyword);
+    const safeReason = r.reason ? `<span style="font-size: 10px; color: var(--muted); margin-left: 8px;">(${escapeHtml(r.reason)})</span>` : '';
     html += `<div style="display: flex; justify-content: space-between; align-items: center; padding: 4px 8px; margin: 2px 0; background: var(--card); border: 1px solid var(--border); border-radius: 4px;">
       <div style="flex: 1;">
-        <code style="font-size: 11px;">${r.keyword}</code>
-        ${r.reason ? `<span style="font-size: 10px; color: var(--muted); margin-left: 8px;">(${r.reason})</span>` : ''}
+        <code style="font-size: 11px;">${safeKw}</code>
+        ${safeReason}
       </div>
       <div style="display: flex; align-items: center; gap: 8px;">
         <span style="font-size: 10px; color: ${daysLeft <= 3 ? 'var(--danger)' : 'var(--muted)'};">
-          Expires ${exp} (${daysLeft}d left)
+          Expires ${escapeHtml(exp)} (${daysLeft}d left)
         </span>
         <button class="remove-temporal" data-i="${i}" style="background: none; border: none; color: var(--danger); cursor: pointer; font-size: 14px;">✕</button>
       </div>
@@ -2404,8 +2471,15 @@ function renderTemporalRules() {
   listEl.querySelectorAll('.remove-temporal').forEach(btn => {
     btn.addEventListener('click', () => {
       const i = parseInt(btn.dataset.i);
-      data.temporalRules.splice(i, 1);
+      const [removed] = data.temporalRules.splice(i, 1);
+      if (removed && !removed.permanentBefore) {
+        const stillHas = data.temporalRules.some(r => r.keyword === removed.keyword);
+        if (!stillHas) {
+          data.keywords = data.keywords.filter(k => k !== removed.keyword);
+        }
+      }
       save();
+      renderAll();
       renderTemporalRules();
       setStatus('Temporal rule removed.');
     });
@@ -2421,12 +2495,15 @@ function addTemporalRule() {
   const expires = expInput.value;
   const reason = reasonInput.value.trim();
   if (!kw || !expires) { setStatus('Enter keyword and expiry date.'); return; }
-  data.temporalRules.push({ keyword: kw.toLowerCase(), expires, reason });
-  if (!data.keywords.includes(kw.toLowerCase())) data.keywords.push(kw.toLowerCase());
+  const normKw = kw.toLowerCase();
+  const alreadyPermanent = data.keywords.includes(normKw);
+  data.temporalRules.push({ keyword: normKw, expires, reason, permanentBefore: alreadyPermanent });
+  if (!alreadyPermanent) data.keywords.push(normKw);
   kwInput.value = '';
   expInput.value = '';
   reasonInput.value = '';
   save();
+  renderAll();
   renderTemporalRules();
   setStatus(`Temporal rule added: "${kw}" expires ${expires}`);
 }
@@ -2442,6 +2519,10 @@ async function refreshFeedHealth() {
     const tabs = await chrome.tabs.query({ url: 'https://www.youtube.com/*', active: true });
     if (!tabs.length) {
       dashEl.innerHTML = '<span style="color: var(--danger);">No active YouTube tab.</span>';
+      return;
+    }
+    if (!chrome?.scripting?.executeScript) {
+      dashEl.innerHTML = '<span style="color: var(--danger);">Scripting API unavailable.</span>';
       return;
     }
     const result = await chrome.scripting.executeScript({
@@ -2491,7 +2572,7 @@ async function refreshFeedHealth() {
       const topRules = Object.entries(hits)
         .sort((a, b) => b[1] - a[1])
         .slice(0, 5)
-        .map(([kw, h]) => `<code>${kw}</code>: ${h} hit${h !== 1 ? 's' : ''}`)
+        .map(([kw, h]) => `<code>${escapeHtml(kw)}</code>: ${h} hit${h !== 1 ? 's' : ''}`)
         .join(' • ');
 
       dashEl.innerHTML = `

@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.11.1] - 2026-09-28
+
+### Security
+- **Added missing `"scripting"` permission** (`manifest.json`, `manifest-firefox.json`): prevents `TypeError: Cannot read properties of undefined (reading 'executeScript')` when `fetchVisibleTitles()` or `refreshFeedHealth()` is executed in `popup.js`.
+- **Patched multiple `innerHTML` XSS sinks with `escapeHtml()`** (`popup.js`):
+  - `renderCommunityPacks`: `p.name` and `p.url` are safely escaped before injection.
+  - `renderTemporalRules`: `r.keyword` and `r.reason` are escaped.
+  - `renderKeywordExceptions`: `keyword` and channel list are escaped.
+  - `runKeywordTest`: user-input test titles and matching keyword badges are escaped.
+  - `loadHitCounters`: keyword text and `data-kw` attributes are escaped.
+  - `refreshFeedHealth`: rule names in the dashboard summary are escaped.
+- **Added URL scheme enforcement to `addCommunityPack`** (`popup.js`): requires `http:` or `https:`.
+- **Added Ollama `<think>...</think>` tag stripping in `cleanJsonParse`** (`background.js`): reasoning blocks from DeepSeek-R1 / Qwen 2.5/3.x are stripped before JSON boundary extraction, preventing parse failures on model output.
+
+### Fixed
+- **Uncaught rejection in `INCREMENT_BLOCKED`** (`background.js`): attached `.catch()` handler to `incrementBlockedTotal()` to prevent dropped message channels on storage errors.
+- **Exhaustive `onMessage` dispatcher** (`background.js`): added an explicit default handler returning `{ ok: false, error: 'unrecognized_message_type' }` to prevent hanging message ports.
+- **Indentation alignment** (`background.js`): fixed dedented `CHECK_AI_STATUS` block and aligned listener closing brace.
+- **Malformed HTML attribute quote** (`popup.html`): escaped inner quotes in `aria-label` on `toggleNewToYou`.
+- **Full backup & restore coverage** (`backup.js`): added `keywordExceptions`, `temporalRules`, `communityPacks`, and `feedHealthLog` to `data`, `load()`, `buildPayload()`, and `saveToStorage()` so backups capture all collections without loss.
+- **Instant tab reaction to rule changes** (`content.js`): added `'keywordExceptions'` and `'temporalRules'` to `RULE_KEYS` so adding/updating exceptions or temporal rules immediately updates active YouTube tabs.
+- **In-memory sync in `extractKeywordsFromCard`** (`content.js`): `settings.keywords` is immediately updated on extraction, allowing immediate re-scans to reflect changes without waiting for storage events.
+- **Clean community pack unmerging** (`popup.js`): disabling or removing a pack cleanly unmerges its rules from active keywords and channels instead of leaving user lists permanently contaminated.
+- **Temporal rule expiry precision & preservation** (`popup.js`): temporal expiry uses end-of-day local time and preserves pre-existing permanent keywords upon rule expiry.
+
+---
+
 ## [1.11.0] - 2026-09-27
 
 ### Security

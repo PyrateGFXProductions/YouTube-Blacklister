@@ -19,31 +19,23 @@ is exactly the "extension is not verified" block you hit.
 > storage. Updating = installing the new `.xpi` **over** the existing one (same `gecko.id`,
 > same storage).
 
-## Step 1 — One-Time Signature Unlock (required for any unsigned `.xpi`)
+## Step 1 — Run the Enterprise Unlock & Auto-Installer
 
-**Run `fix-zen-install.bat`** (double-click it) **with Zen Browser fully closed**. The script
-will:
+**Run `fix-zen-install.bat`** (double-click it) **with Zen Browser fully closed**.
 
-1. Abort safely if Zen is still running (Zen rewrites `prefs.js` on exit and would undo the change).
-2. Find your real profile at `%APPDATA%\zen\Profiles\...\prefs.js`.
-3. Back it up to `prefs.js.bak-<timestamp>`.
-4. Set `xpinstall.signatures.required = false` — this is what unlocks the unsigned install.
-5. Best-effort: write `distribution\policies.json` in `C:\Program Files\Zen Browser`
-   (needs Administrator — optional; skip it if it warns, it's a fallback, not the unlock).
+The script will:
+1. Automatically request Administrator elevation via Windows UAC.
+2. Abort safely if Zen is currently running (Zen must be closed before writing settings).
+3. Back up and unlock your profile's `prefs.js`.
+4. Write `distribution\policies.json` to Zen's installation folder with `installation_mode: force_installed`.
+   - **Why this works:** Mozilla/Gecko's Enterprise Policy engine explicitly disables signature verification for policy-installed extensions. This permanently unlocks the add-on without needing AMO store signing.
 
-Manual alternative: open `about:config`, search `xpinstall.signatures.required`, set it to
-`false`, then **restart Zen** (the pref is only read at startup).
+## Step 2 — Start Zen Browser
 
-## Step 2 — Install the Extension
-
-1. Close Zen completely, then run the unlock above, then **restart Zen**.
-2. Go to `about:addons` (or `Ctrl+Shift+A`).
-3. Click the **gear/settings icon** in the top-right.
-4. Select **"Install Add-on From File..."**.
-5. Choose `blacklist-firefox.xpi` from this folder.
-6. Confirm the permission prompt.
-7. Your existing rules reappear automatically — nothing was ever deleted, storage is intact
-   under the same `gecko.id`.
+1. Start **Zen Browser**.
+2. Open `about:addons` (or press `Ctrl+Shift+A`).
+3. You will see **"Always New To You - Smart Feed Blacklist"** already installed and active!
+4. Because it is installed via Enterprise Policy, **Zen will never delete its storage on close**, and all your blacklist keywords, channels, and settings persist across restarts.
 
 ## Step 3 — Pin the Extension Icon (if not visible)
 
