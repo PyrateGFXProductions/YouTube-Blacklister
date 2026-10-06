@@ -17,7 +17,11 @@ let data = {
   aiAutonomous: false, aiSensitivity: 'balanced', aiModel: '', aiTastePrompt: '',
   aiSubscriptionProfile: '', aiLog: [], aiDebaitTitles: false, aiDebaitModel: '',
   tldwEnabled: true, huntMode: false, chipRescue: false, newToYouAuto: false,
-  keywordExceptions: {}, feedHealthLog: [], communityPacks: [], temporalRules: []
+  extensionEnabled: true,
+  keywordExceptions: {}, feedHealthLog: [], communityPacks: [], temporalRules: [],
+  // Persisted AI verdicts (content.js: nyt_aiDecisions). They are user-visible block
+  // state — a restore that dropped them visibly un-hid every AI-blocked video.
+  aiDecisions: []
 };
 
 function load() {
@@ -28,7 +32,9 @@ function load() {
       'triggerServerFeedback','nyt_totalBlocked','aiAutonomous','aiSensitivity',
       'aiModel','aiTastePrompt','aiSubscriptionProfile','aiLog',
       'aiDebaitTitles','aiDebaitModel','tldwEnabled','huntMode','chipRescue','newToYouAuto',
-      'keywordExceptions','feedHealthLog','communityPacks','temporalRules'
+      'extensionEnabled',
+      'keywordExceptions','feedHealthLog','communityPacks','temporalRules',
+      'nyt_aiDecisions'
     ], (res) => {
       data.channels = Array.isArray(res.channels) ? res.channels : [];
       data.keywords = Array.isArray(res.keywords) ? res.keywords : [];
@@ -53,10 +59,12 @@ function load() {
       data.huntMode = Boolean(res.huntMode);
       data.chipRescue = Boolean(res.chipRescue);
       data.newToYouAuto = Boolean(res.newToYouAuto);
+      data.extensionEnabled = res.extensionEnabled !== false;
       data.keywordExceptions = (res.keywordExceptions && typeof res.keywordExceptions === 'object') ? res.keywordExceptions : {};
       data.feedHealthLog = Array.isArray(res.feedHealthLog) ? res.feedHealthLog : [];
       data.communityPacks = Array.isArray(res.communityPacks) ? res.communityPacks : [];
       data.temporalRules = Array.isArray(res.temporalRules) ? res.temporalRules : [];
+      data.aiDecisions = Array.isArray(res.nyt_aiDecisions) ? res.nyt_aiDecisions : [];
       resolve();
     });
   });
@@ -73,7 +81,12 @@ const PRESERVED_KEYS = {
   nyt_totalBlocked: ['totalBlocked', (v) => Number(v) || 0],
   aiLog: ['aiLog', (v) => (Array.isArray(v) ? v : [])],
   aiSubscriptionProfile: ['aiSubscriptionProfile', (v) => (typeof v === 'string' ? v : '')],
-  subsSnapshot: ['subsSnapshot', (v) => (Array.isArray(v) ? v : [])]
+  subsSnapshot: ['subsSnapshot', (v) => (Array.isArray(v) ? v : [])],
+  // AI verdicts are written continuously by the content script as the user browses.
+  // Re-reading them at write time (instead of writing this page's open-time copy)
+  // means an import can never silently resurrect videos the AI blocked meanwhile;
+  // an import that explicitly carries decisions passes them in `pinned` and wins.
+  nyt_aiDecisions: ['aiDecisions', (v) => (Array.isArray(v) ? v : [])]
 };
 
 function saveToStorage(pinned) {
@@ -95,6 +108,7 @@ function saveToStorage(pinned) {
         aiDebaitModel: data.aiDebaitModel, tldwEnabled: data.tldwEnabled,
         huntMode: data.huntMode, chipRescue: data.chipRescue,
         newToYouAuto: data.newToYouAuto,
+        extensionEnabled: data.extensionEnabled,
         keywordExceptions: data.keywordExceptions,
         feedHealthLog: data.feedHealthLog,
         communityPacks: data.communityPacks,
@@ -198,6 +212,12 @@ function buildPayload() {
     feedHealthLog: data.feedHealthLog,
     communityPacks: data.communityPacks,
     temporalRules: data.temporalRules,
+    aiDecisions: data.aiDecisions,
+    // Must stay in lockstep with the import path: every key the popup persists under
+    // `settings` has to be here, or a backup → wipe → import round-trip silently resets
+    // the missing ones to their defaults (which reads as "my settings changed themselves").
+    // The 18 keys below are the popup's full settings payload; a new toggle needs adding
+    // in BOTH places, and tests/backup-harness.js asserts the round-trip.
     settings: {
       blockShorts: data.blockShorts, shortsSubOnly: data.shortsSubOnly,
       blockCommunity: data.blockCommunity, autoDubMode: data.autoDubMode,
@@ -207,7 +227,7 @@ function buildPayload() {
       aiTastePrompt: data.aiTastePrompt, aiSubscriptionProfile: data.aiSubscriptionProfile,
       aiDebaitTitles: data.aiDebaitTitles, aiDebaitModel: data.aiDebaitModel,
       tldwEnabled: data.tldwEnabled, huntMode: data.huntMode, chipRescue: data.chipRescue,
-      newToYouAuto: data.newToYouAuto
+      newToYouAuto: data.newToYouAuto, extensionEnabled: data.extensionEnabled
     }
   };
 }
@@ -376,6 +396,7 @@ async function runImportFile(file) {
     if ('huntMode' in s) data.huntMode = Boolean(s.huntMode);
     if ('chipRescue' in s) data.chipRescue = Boolean(s.chipRescue);
     if ('newToYouAuto' in s) data.newToYouAuto = Boolean(s.newToYouAuto);
+    if ('extensionEnabled' in s) data.extensionEnabled = Boolean(s.extensionEnabled);
     if ('aiSubscriptionProfile' in s) pinned.aiSubscriptionProfile = data.aiSubscriptionProfile;
   }
 
@@ -394,6 +415,12 @@ async function runImportFile(file) {
   if (Array.isArray(json.feedHealthLog)) {
     data.feedHealthLog = json.feedHealthLog;
     pinned.feedHealthLog = data.feedHealthLog;
+  }
+  // AI verdicts: only pinned when the file actually carried some, so importing an
+  // older backup never wipes the decisions the user has accumulated since.
+  if (Array.isArray(json.aiDecisions) && json.aiDecisions.length) {
+    data.aiDecisions = json.aiDecisions;
+    pinned.nyt_aiDecisions = data.aiDecisions;
   }
 
   const saveErr = await saveToStorage(pinned);

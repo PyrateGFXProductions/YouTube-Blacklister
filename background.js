@@ -647,17 +647,49 @@ async function synthesizeSubscriptionRulesWithAi(channels, modelChoice, customUr
   return { ok: true, keywords, regex, rationale, profile, conflicts, isFallback };
 }
 
-// Evaluate candidate videos in batch
-async function evaluateBatchWithAi(videos, persona, sensitivity, modelChoice, customUrl, userKeywords, userChannels) {
+// Evaluate candidate videos in batch.
+//
+// `userWhitelist` is the user's protected-channel list, `userSubscribed` the channels the
+// user is subscribed to. BOTH are HARD constraints: a model that blocks a whitelisted or
+// subscribed channel has done more harm than a model that blocks nothing, and the content
+// script's own matcher lets the whitelist win over every blacklist rule. Keep that
+// invariant here too.
+//
+// The user's keyword/channel RULES are deliberately NOT part of the model prompt. They are
+// enforced exactly and deterministically on both sides (content.js evaluateCard() and the
+// offline path below). A model asked to "apply the rules" approximate-matches instead —
+// the reported "'10 Prehistoric Blades Made From Metal' matches the 'top 10' rule" block
+// hid videos the user wanted while the same list never fired on the promo titles it was
+// written for. The model's job is the part a regex cannot do: slop, clickbait, taste.
+async function evaluateBatchWithAi(videos, persona, sensitivity, modelChoice, customUrl, userKeywords, userChannels, userWhitelist, userSubscribed) {
   if (!Array.isArray(videos) || !videos.length) return { evaluations: [] };
 
   const sens = sensitivity || 'balanced';
 
-  // System prompt
+  const chList = Array.isArray(userChannels) ? userChannels.map(String) : [];
+  const kwList = Array.isArray(userKeywords) ? userKeywords.map(String) : [];
+  const wlList = Array.isArray(userWhitelist) ? userWhitelist.map(String) : [];
+  const subList = Array.isArray(userSubscribed) ? userSubscribed.map(String) : [];
+
+  // Every channel this user has chosen: whitelisted and subscribed. Used as the prompt's
+  // never-block list and as a hard filter on the model's answers below.
+  const neverBlock = wlList.concat(subList.filter(s => !wlList.some(w => w.toLowerCase() === s.toLowerCase())));
+
   const systemPrompt =
-    'You are an autonomous YouTube content curator. Evaluate each video against the user\'s taste persona. ' +
-    'Decide whether to block it (block: true if it is clickbait, low-effort slop, or clashes with their taste). ' +
-    'Respond ONLY with JSON: {"evaluations": [{"id": string, "block": boolean, "rationale": string}]}';
+    'You are an autonomous YouTube content curator for ONE user, filtering their ' +
+    'DISCOVERY feed. Decide, per video, whether it is low-value enough to hide. ' +
+    'The user\'s keyword and channel rules are enforced separately and EXACTLY by ' +
+    'deterministic matchers — do NOT apply, guess at, or impute them, and never block a ' +
+    'video because its title merely resembles a topic the user dislikes. ' +
+    'Hard constraints, in order: ' +
+    '(1) a video from a channel the user is subscribed to, or has whitelisted, is NEVER blocked; ' +
+    '(2) otherwise block only clear slop, clickbait, engagement bait or fake/algorithmic ' +
+    'content that plainly conflicts with the taste persona below; ' +
+    '(3) if you are not confident, answer block=false — a missed block costs the user ' +
+    'nothing, a wrong block hides a video they wanted. ' +
+    'Respond ONLY with JSON: {"evaluations": [{"id": string, "block": boolean, "rationale": string}]}. ' +
+    'Use the exact `id` values given and return one entry per video. ' +
+    '`block` must be a real JSON boolean, and each rationale must be one short sentence.';
 
   try {
     const res = await queryLocalLlm({
@@ -665,7 +697,12 @@ async function evaluateBatchWithAi(videos, persona, sensitivity, modelChoice, cu
         { role: 'system', content: systemPrompt },
         {
           role: 'user',
-          content: `User Taste Persona: ${persona || 'High signal, thoughtful, educational, anti-clickbait'}\nSensitivity: ${sens}\nVideos:\n${JSON.stringify(videos)}`
+          content: [
+            `User Taste Persona: ${persona || 'High signal, thoughtful, educational, anti-clickbait'}`,
+            `Sensitivity: ${sens}`,
+            `User's subscriptions + whitelist (NEVER block): ${JSON.stringify(neverBlock.slice(0, 200))}`,
+            `Videos: ${JSON.stringify(videos)}`
+          ].join('\n')
         }
       ],
       format: 'json',
@@ -677,7 +714,30 @@ async function evaluateBatchWithAi(videos, persona, sensitivity, modelChoice, cu
     if (res.ok && res.content) {
       const parsed = cleanJsonParse(res.content);
       if (parsed && Array.isArray(parsed.evaluations)) {
-        return { evaluations: parsed.evaluations };
+        // Validate before trusting. A hallucinated id maps onto no card (so the
+        // verdict is silently dropped), and a truthy-but-not-boolean `block` made
+        // every string — including "false" — count as a block.
+        const known = new Set(videos.map(v => String(v && v.id)));
+        const byId = new Map(videos.map(v => [String(v && v.id), v]));
+        const evaluations = [];
+        for (const raw of parsed.evaluations) {
+          if (!raw || typeof raw !== 'object') continue;
+          const id = String(raw.id == null ? '' : raw.id);
+          if (!known.has(id)) continue;
+          if (typeof raw.block !== 'boolean') continue;
+          // The whitelist / subscription hard stop applies to the MODEL's answer too:
+          // an instruction a model can ignore is not a constraint.
+          if (raw.block === true) {
+            const vid = byId.get(id) || {};
+            if (matchChannelIn(vid.channel, wlList) || matchChannelIn(vid.channel, subList)) continue;
+          }
+          evaluations.push({
+            id,
+            block: raw.block,
+            rationale: typeof raw.rationale === 'string' ? raw.rationale.slice(0, 200) : ''
+          });
+        }
+        if (evaluations.length) return { evaluations, isFallback: false, modelUsed: res.modelUsed || null };
       }
     }
   } catch (_) {}
@@ -694,9 +754,9 @@ async function evaluateBatchWithAi(videos, persona, sensitivity, modelChoice, cu
   const cryptoKeywords = CRYPTO_KEYWORDS.slice(0, 6); // subset used by interceptor heuristic
   const baitPats = CLICKBAIT_PATTERNS.slice(0, 7); // subset used by the interceptor heuristic
 
-  // Normalize the user's keyword + channel lists for the heuristic path.
-  const kwList = Array.isArray(userKeywords) ? userKeywords.map(String) : [];
-  const chList = Array.isArray(userChannels) ? userChannels.map(String) : [];
+  // kwList / chList / wlList were normalized at the top of this function — the
+  // model prompt and this offline path must read the SAME lists, or the fallback
+  // silently disagrees with the model about the user's own rules.
 
   function matchUserKeyword(text) {
     if (!text || !kwList.length) return null;
@@ -730,11 +790,11 @@ async function evaluateBatchWithAi(videos, persona, sensitivity, modelChoice, cu
     return null;
   }
 
-  function matchUserChannel(channelName) {
-    if (!channelName || !chList.length) return null;
+  function matchChannelIn(channelName, list) {
+    if (!channelName || !Array.isArray(list) || !list.length) return null;
     const norm = (channelName || '').toString().trim().toLowerCase().replace(/^@+/, '');
     if (!norm) return null;
-    for (const c of chList) {
+    for (const c of list) {
       const raw = (c || '').toString().trim();
       if (!raw) continue;
       const cNorm = raw.toLowerCase().replace(/^@+/, '');
@@ -748,23 +808,56 @@ async function evaluateBatchWithAi(videos, persona, sensitivity, modelChoice, cu
       // No substring fallback — prevents false positives where short stored
       // fragments (e.g. "sam") match full channel names (e.g. "Samsung").
       // Channel identity must be exact or via /channel/ or /@ handle extraction.
+      //
+      // Spelling-insensitive EQUALITY is allowed on top of that: the same creator can be
+      // stored as "Graham Hancock" and rendered as "@grahamhancock"/"grahamhancock" (the
+      // squashed form the subscription snapshot captures). Short cores never compare.
+      const normSq = squashChannelKey(cNorm || entityKey);
+      if (normSq && squashChannelKey(norm) === normSq) return raw;
     }
     return null;
   }
 
   const evaluations = videos.map(v => {
-    const t = (v.title || '').toLowerCase();
-    const ch = (v.channel || '').toLowerCase();
-    const combined = `${t} ${ch}`;
+    const title = v.title || '';
+    const badge = v.badge || '';
+    const channelName = v.channel || '';
+    // The same haystacks the content script's matcher evaluates, each tested
+    // SEPARATELY (never joined — a joined string lets a rule span the boundary).
+    // Matching the title alone missed rules the user had aimed at a channel name
+    // or at an "Auto-dubbed" badge.
+    const haystacks = [title, badge, channelName].filter(Boolean);
+    const combined = `${title} ${channelName}`.toLowerCase();
+
+    // 0. The whitelist is a HARD stop, exactly as in content.js evaluateCard(),
+    //    where whitelistChannels is tested before every blacklist rule. A fallback
+    //    that blocks a channel the user protected is worse than no fallback at all.
+    const wlHit = matchChannelIn(channelName, wlList);
+    if (wlHit) {
+      return { id: v.id, block: false, rationale: `Your whitelisted channel: “${wlHit}”` };
+    }
+
+    // 0b. The user's own SUBSCRIPTIONS are a hard stop too. The Guardian filters the
+    //     discovery feed, not the channels the user chose — the offline path exists to
+    //     stay useful, not to reproduce the "it blocked my subscriptions" complaint when
+    //     the local model is down.
+    const subHit = matchChannelIn(channelName, subList);
+    if (subHit) {
+      return { id: v.id, block: false, rationale: `Your subscription: “${subHit}”` };
+    }
 
     // 1. User's own keyword rules (highest-priority heuristic signal).
-    const matchedKw = matchUserKeyword(v.title || '');
+    let matchedKw = null;
+    for (const h of haystacks) {
+      matchedKw = matchUserKeyword(h);
+      if (matchedKw) break;
+    }
     if (matchedKw) {
       return { id: v.id, block: true, rationale: `Matched your keyword rule: “${matchedKw}”` };
     }
 
     // 2. User's own channel blacklist.
-    const matchedCh = matchUserChannel(v.channel || '');
+    const matchedCh = matchChannelIn(channelName, chList);
     if (matchedCh) {
       return { id: v.id, block: true, rationale: `Matched your channel block: “${matchedCh}”` };
     }
@@ -963,13 +1056,6 @@ async function roastFeedWithAi(items, modelChoice, customUrl) {
 // ------------------------------------------------------------------
 // 3) 1-CLICK TL;DW (Too Long; Didn't Watch) VIDEO INSPECTOR
 // ------------------------------------------------------------------
-function parseYouTubeDuration(iso) {
-  if (!iso) return 0;
-  const m = String(iso).match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
-  if (!m) return 0;
-  return (Number(m[1]) || 0) * 3600 + (Number(m[2]) || 0) * 60 + (Number(m[3]) || 0);
-}
-
 // Extract caption data from YT initial player response (ytInitialPlayerResponse)
 function extractCaptionsFromPlayerResponse(playerResponse) {
   try {
@@ -992,20 +1078,41 @@ function summarizeFeedbackFallback(transcript) {
 }
 
 async function summarizeTranscriptWithAi(transcript, title, modelChoice, customUrl, opts) {
+  const o = opts || {};
+  const description = String(o.description || '').trim();
+  const tags = Array.isArray(o.tags) ? o.tags.map(String).filter(Boolean) : [];
+  const note = String(o.note || '').trim();
+
   const systemPrompt =
     'You are the strict "TL;DW Inspector" — a forensic media literacy machine. ' +
     'Compare the video transcript against its title and flag clickbait dishonesty. ' +
     'Output ONLY valid JSON with this exact structure: ' +
-    '{"clickbaitVerdict": string (end with TRUE CLICKBAIT / PARTIAL TRUTH / NOT CLICKBAIT), "takeaways": string[3], "confidence": string}. ' +
-    'takeaways: exactly 3 terse bullet points of actual substance from the transcript.';
+    '{"clickbaitVerdict": string (end with TRUE CLICKBAIT / PARTIAL TRUTH / NOT CLICKBAIT), "takeaways": string[3], "confidence": string, "keywords": string[]}. ' +
+    'takeaways: exactly 3 terse bullet points of actual substance. ' +
+    'keywords: 0-4 short (1-4 word) lowercase phrases that a title of similar videos would ' +
+    'visibly contain — the rules a feed filter could match on later. Never include a phrase the ' +
+    'user already has. ' +
+    // The thin-input case the user actually hits: no captions, or captions that say
+    // almost nothing. "Too thin to tell" is a non-answer when the description and the
+    // creator's own tags are right there.
+    'If the transcript is thin or absent, base the verdict on the title, the video description, ' +
+    'the creator tags and the user\'s own description of the video instead — never reply that there ' +
+    'is nothing to judge when any of those are present.';
 
   const clip = (transcript || '').slice(0, 14000);
+  const userLines = [
+    `Video Title: ${title || '(none)'}`,
+    tags.length ? `Creator Tags: ${tags.slice(0, 25).join(', ')}` : '',
+    note ? `User's Description: ${note.slice(0, 800)}` : '',
+    description ? `Video Description: ${description.slice(0, 2000)}` : '',
+    clip ? `Transcript:\n${clip}` : 'Transcript: (unavailable)'
+  ].filter(Boolean);
 
   try {
     const res = await queryLocalLlm({
       messages: [
         { role: 'system', content: systemPrompt },
-        { role: 'user', content: `Video Title: ${title}\n\nTranscript:\n${clip}` }
+        { role: 'user', content: userLines.join('\n\n') }
       ],
       format: 'json',
       model: modelChoice,
@@ -1018,12 +1125,18 @@ async function summarizeTranscriptWithAi(transcript, title, modelChoice, customU
       if (parsed) {
         const takeaways = Array.isArray(parsed.takeaways) ? parsed.takeaways.slice(0, 3) : [];
         if (parsed.clickbaitVerdict || takeaways.length) {
-          const durationSec = opts ? opts.durationSec || 0 : 0;
+          const durationSec = o.durationSec || 0;
           const timeSaved = durationSec > 0 ? Math.round(durationSec / 60) : Math.floor((transcript || '').split(/\s+/).length / 150);
           return {
             ok: true,
             clickbaitVerdict: parsed.clickbaitVerdict || 'Inconclusive verdict.',
             takeaways,
+            keywords: sanitizeKeywordList(
+              parsed.keywords, o.keywords, 4,
+              // Same feed-specificity guard as every other extraction path (see
+              // sanitizeKeywordList). Omitting the corpus here disabled it silently.
+              Array.isArray(o.otherTitles) ? o.otherTitles : []
+            ),
             timeSaved,
             isFallback: false
           };
@@ -1032,7 +1145,164 @@ async function summarizeTranscriptWithAi(transcript, title, modelChoice, customU
     }
   } catch (_) {}
 
-  return { ok: true, ...summarizeFeedbackFallback(transcript), isFallback: true };
+  return { ok: true, ...summarizeFeedbackFallback(transcript), keywords: [], isFallback: true };
+}
+
+// ------------------------------------------------------------------
+// KEYWORD SUGGESTION (the keyword blocker's AI layer)
+// ------------------------------------------------------------------
+// Turns a video's text signals — title, channel, description, creator tags,
+// transcript, and the user's own one-line description — into candidate blacklist
+// keyword rules.
+//
+// A candidate is only worth storing if it will MATCH later: keyword rules are
+// compared whole-word, case-insensitively, against each feed card's title, badge
+// text and channel name (content.js hasWordBoundaryKeyword / keywordRulesHidden).
+// So the model is asked for short, title-shaped phrases, and every suggestion is
+// normalized and de-duplicated against the rules the user already has — a
+// description like "low-effort crypto MLM reaction channel" is useless verbatim,
+// because that sentence never appears in a title.
+const KW_SUGGEST_LIMIT = 5;
+const KW_SUGGEST_MAX_WORDS = 4;
+
+// Normalizes, validates and de-duplicates a candidate rule list. Used by BOTH the
+// model path and the offline path so the two can never disagree about what counts
+// as a storable rule.
+//
+// This is the last gate before a rule reaches the user's blacklist, so it is where the
+// generic-word discipline is enforced for the model path: a soft model that returns
+// "day" or "first day" (the exact junk the heuristic used to produce) gets rejected
+// here, and so does any rule that already matches several other cards on screen —
+// `otherTitles` is the visible feed, and a rule matching it is a false-positive
+// generator no matter which engine proposed it.
+function sanitizeKeywordList(raw, existing, limit, otherTitles) {
+  const out = [];
+  const seen = new Set((Array.isArray(existing) ? existing : [])
+    .map(k => String(k == null ? '' : k).trim().toLowerCase())
+    .filter(Boolean));
+  const cap = Math.max(1, Number(limit) || KW_SUGGEST_LIMIT);
+  const corpus = Array.isArray(otherTitles) ? otherTitles : [];
+  const hitsLimit = nytKwFeedHitsLimit(corpus);
+  for (const item of (Array.isArray(raw) ? raw : [])) {
+    if (typeof item !== 'string') continue;
+    const kw = item.trim().toLowerCase().replace(/\s+/g, ' ')
+      .replace(/^["'`]+/, '').replace(/["'`.,;:!?]+$/, '');
+    if (kw.length < 3 || kw.length > 48) continue;
+    if (kw.split(' ').length > KW_SUGGEST_MAX_WORDS) continue;
+    if (nytKwIsGenericRule(kw)) continue;
+    if (nytKwFeedHits(kw, corpus) >= hitsLimit) continue;
+    if (seen.has(kw)) continue;
+    seen.add(kw);
+    out.push(kw);
+    if (out.length >= cap) break;
+  }
+  return out;
+}
+
+async function suggestKeywordsWithAi(input) {
+  const src = input || {};
+  const title = String(src.title || '').trim();
+  const channel = String(src.channel || '').trim();
+  const description = String(src.description || '').trim();
+  const transcript = String(src.transcript || '').trim();
+  const note = String(src.note || '').trim();
+  const tags = Array.isArray(src.tags) ? src.tags.map(String).filter(Boolean) : [];
+  const existing = Array.isArray(src.keywords) ? src.keywords : [];
+
+  // The other cards on screen right now, handed over by the content script. Used to
+  // refuse rules that are just common phrases in this feed (see sanitizeKeywordList).
+  const otherTitles = Array.isArray(src.otherTitles) ? src.otherTitles.slice(0, 60).map(String) : [];
+
+  // Offline candidates first: the user's own description and the creator's tags
+  // are the highest-signal text available, and they need no round trip.
+  //
+  // The sources stay SEPARATE and are weighted by the ranker. Joining them into one
+  // string (as this used to) fuses the title's last words with the tags' first words
+  // into phrases no video contains, which is how dead rules got into the blacklist.
+  const heuristic = sanitizeKeywordList(
+    rankKeywordCandidates({
+      title,
+      note,
+      tags,
+      description: description.slice(0, 6000),
+      transcript: transcript.slice(0, 6000)
+    }, 12, otherTitles),
+    existing,
+    KW_SUGGEST_LIMIT,
+    otherTitles
+  );
+
+  const systemPrompt =
+    'You extract blacklist KEYWORD RULES for a YouTube feed filter. Without the user\'s two ' +
+    'hard rules an extraction is worthless, so obey both: (1) a rule is matched WORD-FOR-WORD ' +
+    '(case-insensitive) against the TITLE, the badge text and the CHANNEL NAME of future videos, ' +
+    'so it must be a short phrase a real title would visibly contain — never a sentence, never a ' +
+    'description of the channel; (2) it must be specific enough not to match unrelated videos. ' +
+    'READ THE WHOLE TITLE: the subject is very often not in the first words ("The Day We Got Out ' +
+    'Of Prison" is about prison, not about a day). Rank candidates by how much of the topic they ' +
+    'carry, never by where they sit in the title. The creator tags are the strongest evidence of ' +
+    'what the video is actually about; use them. Given the video and the user\'s description of ' +
+    'what they want gone, return 1-5 rules, each 1-4 words, lowercase. Never return a rule the ' +
+    'user already has. Never return a word that matches a large share of YouTube — no filler ' +
+    '("the", "new", "video", "channel", "content"), no generic nouns or time words ("day", ' +
+    '"first", "last", "life", "time", "world", "people", "story", "way"), and no bare topic so ' +
+    'broad it would catch unrelated videos ("ai", "music", "news"). Prefer the distinctive ' +
+    'subject words the video itself uses. ' +
+    'Respond ONLY with JSON: {"keywords": string[], "rationale": string}.';
+
+  const contextLines = [
+    `Video title: ${title || '(none)'}`,
+    channel ? `Channel: ${channel}` : '',
+    tags.length ? `Creator tags: ${tags.slice(0, 25).join(', ')}` : '',
+    otherTitles.length
+      ? `Other videos on screen RIGHT NOW (never propose a rule that already matches several of these — that would block unrelated videos): ${otherTitles.slice(0, 15).join(' | ')}`
+      : '',
+    note ? `User's own description of what to block: ${note.slice(0, 600)}` : '',
+    description ? `Video description: ${description.slice(0, 1200)}` : '',
+    transcript ? `Transcript excerpt: ${transcript.slice(0, 2000)}` : '',
+    existing.length ? `Rules the user already has (never repeat): ${existing.slice(0, 100).join(', ')}` : ''
+  ].filter(Boolean);
+
+  try {
+    const res = await queryLocalLlm({
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: contextLines.join('\n') }
+      ],
+      format: 'json',
+      model: src.modelChoice,
+      customUrl: src.customUrl,
+      timeoutMs: 25000
+    });
+
+    if (res.ok && res.content) {
+      const parsed = cleanJsonParse(res.content);
+      const keywords = sanitizeKeywordList(parsed && parsed.keywords, existing, KW_SUGGEST_LIMIT, otherTitles);
+      // A model that returns nothing usable must not suppress the offline
+      // candidates — fall through to them rather than reporting an empty result.
+      if (keywords.length) {
+        return {
+          ok: true,
+          keywords,
+          rationale: (parsed && typeof parsed.rationale === 'string')
+            ? parsed.rationale.slice(0, 300)
+            : 'Suggested by the local model.',
+          isFallback: false,
+          modelUsed: res.modelUsed || null
+        };
+      }
+    }
+  } catch (_) { }
+
+  return {
+    ok: heuristic.length > 0,
+    keywords: heuristic,
+    rationale: heuristic.length
+      ? 'Derived from the video\'s own title, description and tags (offline).'
+      : 'Nothing keyword-worthy in the available text — add a short description of the video.',
+    isFallback: true,
+    modelUsed: null
+  };
 }
 
 // Runtime messaging
@@ -1091,7 +1361,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 
   if (msg.type === 'AI_EVALUATE_BATCH') {
-    evaluateBatchWithAi(msg.videos, msg.persona, msg.sensitivity, msg.modelChoice, msg.customUrl, msg.keywords, msg.channels).then(res => sendResponse(res)).catch((err) => { try { sendResponse({ ok: false, error: String((err && err.message) || err) }); } catch (_) {} });
+    evaluateBatchWithAi(msg.videos, msg.persona, msg.sensitivity, msg.modelChoice, msg.customUrl, msg.keywords, msg.channels, msg.whitelist, msg.subscribed).then(res => sendResponse(res)).catch((err) => { try { sendResponse({ ok: false, error: String((err && err.message) || err) }); } catch (_) {} });
     return true;
   }
 
@@ -1107,6 +1377,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
   if (msg.type === 'AI_SUMMARIZE_TRANSCRIPT') {
     summarizeTranscriptWithAi(msg.transcript, msg.title, msg.modelChoice, msg.customUrl, msg.opts).then(res => sendResponse(res)).catch((err) => { try { sendResponse({ ok: false, error: String((err && err.message) || err) }); } catch (_) {} });
+    return true;
+  }
+
+  if (msg.type === 'AI_SUGGEST_KEYWORDS') {
+    suggestKeywordsWithAi(msg).then(res => sendResponse(res)).catch((err) => { try { sendResponse({ ok: false, keywords: [], error: String((err && err.message) || err) }); } catch (_) {} });
     return true;
   }
 

@@ -27,7 +27,15 @@ const TABLE_NAMES = [
   'CLICKBAIT_PATTERNS', 'SENSATIONAL_ADJECTIVES', 'OUTRAGE_WORDS', 'PARASOCIAL_WORDS',
   'DESPERATION_WORDS', 'SPORTS_KEYWORDS', 'CRYPTO_KEYWORDS', 'AI_SLOP_KEYWORDS',
   'BRAINROT_KEYWORDS', 'DRAMA_KEYWORDS', 'SLOP_REGEX', 'DEBait_CLEANERS',
-  'FALLBACK_KEYWORDS', 'FALLBACK_REGEX', 'NOISE_PATTERNS'
+  'FALLBACK_KEYWORDS', 'FALLBACK_REGEX', 'NOISE_PATTERNS',
+  // The keyword-extraction tables. These were the LAST copy-paste holdout: content.js
+  // carried its own KW_STOP_WORDS and its own positional extractor while background.js
+  // used the shared one, so the same video produced different rules depending on which
+  // engine answered — and the content-script copy (missing 'day', 'got', 'out') is what
+  // filled the blacklist with junk. Pinning them here keeps that from coming back.
+  'NYT_KW_STOP_WORDS', 'NYT_KW_WEAK_ALONE', 'NYT_KW_FRAME_WORDS', 'NYT_KW_SOURCE_WEIGHTS', 'NYT_KW_PHRASE_BONUS',
+  'NYT_CHANNEL_SQUASH_MIN',
+  'NYT_KW_MAX_PHRASE_WORDS', 'NYT_KW_FEED_MIN_CORPUS', 'NYT_KW_FEED_DF_RATIO', 'NYT_KW_FEED_MIN_HITS'
 ];
 
 let checks = 0;

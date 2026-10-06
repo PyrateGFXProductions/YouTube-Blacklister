@@ -55,7 +55,14 @@ function makeEl(tagName) {
       add(...c) { c.forEach(x => this._s.add(x)); },
       remove(...c) { c.forEach(x => this._s.delete(x)); },
       contains(c) { return this._s.has(c); },
-      toggle(c) { this._s.has(c) ? this._s.delete(c) : this._s.add(c); }
+      // Faithful to the real DOM: toggle(name, force) is a SET when force is given.
+      // A one-argument stub silently flips when the caller said "remove", which makes
+      // a correct two-arg call look like it added the class.
+      toggle(c, force) {
+        if (force === undefined) { this._s.has(c) ? this._s.delete(c) : this._s.add(c); }
+        else if (force) { this._s.add(c); }
+        else { this._s.delete(c); }
+      }
     },
     addEventListener(type, fn) { (el._listeners[type] = el._listeners[type] || []).push(fn); },
     removeEventListener() {},
@@ -94,10 +101,33 @@ const chipEls = ['scholar', 'engineer', 'antislop', 'creative'].map((persona, i)
 const tabBtns = [0, 1, 2].map(() => makeEl('button'));
 const tabPanes = [0, 1, 2].map(() => makeEl('div'));
 
+// The master on/off switch exists TWICE on purpose: in the popup header (always
+// visible, on every tab) and at the top of Settings. popup.js drives both through
+// document.querySelectorAll('input[data-master-toggle]'), so this shim has to be
+// able to answer that selector. Returning [] made correctly-wired switches look
+// unwired — the bug was in the stub, not in the popup.
+const masterSettingsEl = getById('toggleExtensionEnabled');
+masterSettingsEl.tagName = 'INPUT';   // it is <input type="checkbox"> in popup.html
+masterSettingsEl.dataset.masterToggle = '';
+const masterHeaderEl = makeEl('input');
+masterHeaderEl.id = 'toggleExtensionEnabledHeader';
+masterHeaderEl.dataset.masterToggle = '';
+
+const allEls = [masterHeaderEl, masterSettingsEl];
+// data-master-toggle -> dataset key "masterToggle": strip the data- prefix, then
+// camelCase what is left (the prefix is NOT part of the dataset key).
+const camelAttr = (a) => a.replace(/^data-/, '').replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+
 function queryAll(sel) {
   if (sel === '.ai-chip') return chipEls;
   if (sel === '.tab-btn') return tabBtns;
   if (sel === '.tab-pane') return tabPanes;
+  const attr = /^([a-z]+)\[([a-z-]+)\]$/i.exec(sel);
+  if (attr) {
+    const tag = attr[1].toUpperCase();
+    const key = camelAttr(attr[2]);
+    return allEls.filter((el) => el.tagName === tag && key in el.dataset);
+  }
   return [];
 }
 
@@ -118,6 +148,10 @@ const documentStub = {
 const resolveEmpty = () => Promise.resolve({});
 const resolveList = () => Promise.resolve([]);
 
+// Captured so a check can assert what save() actually PERSISTED, not merely that
+// clicking a control did not throw.
+let lastSet = null;
+
 const chromeStub = {
   runtime: {
     lastError: null,
@@ -130,7 +164,7 @@ const chromeStub = {
   storage: {
     local: {
       get(_keys, cb) { if (cb) cb({}); return Promise.resolve({}); },
-      set(_o, cb) { if (cb) cb(); return Promise.resolve(); }
+      set(_o, cb) { lastSet = _o; if (cb) cb(); return Promise.resolve(); }
     },
     onChanged: { addListener() {} }
   },
@@ -205,6 +239,65 @@ ok(typeof sandbox.init === 'function', 'init() must be defined in the popup scop
 
   // 5. No console.error from the real code paths.
   ok(errors.length === 0, `popup.js logged errors during init: ${errors.join(' | ')}`);
+
+  // 5b. The "Clear Blocks" control. Stored Guardian verdicts are a first-class rule in
+  //     the card evaluator, so without a control that removes them a verdict the user no
+  //     longer wants hides that video forever — the reported over-blocking with no way
+  //     out. Assert the click path really writes BOTH keys empty (an `undefined` value is
+  //     dropped from a storage payload, which would make the clear a silent no-op).
+  const clearBtn = getById('clearAiDecisionsBtn');
+  ok(Array.isArray(clearBtn._listeners.click) && clearBtn._listeners.click.length === 1,
+    'the Guardian log must expose a Clear Blocks button with exactly one click handler');
+  sandbox.confirm = () => true;
+  lastSet = null;
+  clearBtn._listeners.click[0]();
+  await new Promise((r) => setImmediate(r));
+  ok(lastSet && Array.isArray(lastSet.nyt_aiDecisions) && lastSet.nyt_aiDecisions.length === 0,
+    `Clear Blocks must write an empty nyt_aiDecisions (got ${JSON.stringify(lastSet && lastSet.nyt_aiDecisions)})`);
+  ok(lastSet && Array.isArray(lastSet.aiLog) && lastSet.aiLog.length === 0,
+    `Clear Blocks must clear the log too (got ${JSON.stringify(lastSet && lastSet.aiLog)})`);
+  // Declining the confirm must NOT write anything.
+  sandbox.confirm = () => false;
+  lastSet = null;
+  clearBtn._listeners.click[0]();
+  await new Promise((r) => setImmediate(r));
+  ok(lastSet === null, 'declining the confirmation must not clear anything');
+
+  // 6. The MASTER SWITCHES, end to end: the controls the user flips must persist
+  //    the key the content script reads AND reveal the paused banner on every tab.
+  //    Both instances must be wired and must never drift apart.
+  const master = getById('toggleExtensionEnabled');
+  ok(typeof master.onchange === 'function', 'the master switch must have an onchange handler');
+  ok(typeof masterHeaderEl.onchange === 'function',
+    'the HEADER master switch must have an onchange handler — it is the always-visible one');
+  ok(master.checked === true && masterHeaderEl.checked === true,
+    'both master switches must start ON for an install with no stored key');
+  ok(!documentStub.body.classList.contains('nyt-paused'),
+    'an enabled extension must not show the paused banner');
+
+  // Flip the HEADER switch — the main-UI control — and require Settings to follow.
+  masterHeaderEl.checked = false;
+  masterHeaderEl.onchange();
+  await new Promise((r) => setTimeout(r, 0));   // let save() await the storage write
+  ok(lastSet && lastSet.extensionEnabled === false,
+    `switching off must persist extensionEnabled:false, got ${JSON.stringify(lastSet && lastSet.extensionEnabled)}`);
+  ok(documentStub.body.classList.contains('nyt-paused'),
+    'switching off must reveal the paused banner');
+  ok(master.checked === false,
+    'flipping the header switch must keep the Settings switch in sync (one state, two controls)');
+
+  const resume = getById('pauseBannerResume');
+  ok(Array.isArray(resume._listeners.click) && resume._listeners.click.length === 1,
+    'the paused banner must have a click handler that turns the extension back on');
+  resume._listeners.click[0]();
+  await new Promise((r) => setTimeout(r, 0));
+  ok(lastSet && lastSet.extensionEnabled === true,
+    `the banner resume button must persist extensionEnabled:true, got ${JSON.stringify(lastSet && lastSet.extensionEnabled)}`);
+  ok(master.checked === true && masterHeaderEl.checked === true && !documentStub.body.classList.contains('nyt-paused'),
+    'resuming must re-check BOTH master switches and hide the paused banner');
+
+  ok(errors.length === 0,
+    `popup.js logged errors during the master-switch checks: ${errors.join(' | ')}`);
 
   console.log(`\nAll ${checks} popup.js smoke checks passed. ✅`);
 })().catch((e) => {

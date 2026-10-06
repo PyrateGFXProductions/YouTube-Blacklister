@@ -1,18 +1,25 @@
 <#
   fix-zen-install.ps1 — unblock unsigned add-on installs in Zen Browser
 
-  Zen (like release Firefox) refuses to install an unsigned .xpi unless the build
-  is told not to enforce signature verification. Zen is an unbranded-style build,
-  so flipping xpinstall.signatures.required in the REAL profile prefs.js unlocks it.
+  Zen is a RELEASE-BRANDED Gecko build: it refuses unsigned .xpi files and does NOT honour
+  the xpinstall.signatures.required override. Mozilla permits that override only in Firefox
+  ESR, Developer Edition, Nightly and unbranded builds, and Zen's own maintainers confirm the
+  preference does nothing there (zen-browser/desktop discussion #8961).
+
+  So the pref written here (as user.js, the durable location) is EXPECTED TO BE IGNORED. The
+  operative step is the Enterprise Policy below — and whether the policy engine waives the
+  signature check is NOT guaranteed either. The only guaranteed permanent install is an
+  AMO-signed XPI: see ZEN-INSTALL.md (Route A).
 
   What this does:
     1. Aborts if Zen is running (Zen rewrites prefs.js on exit and would undo us).
-    2. Locates the main profile prefs.js under %APPDATA%\zen\Profiles.
-    3. Backs it up to prefs.js.bak-<timestamp>.
-    4. Sets  user_pref("xpinstall.signatures.required", false);
-    5. Best-effort: writes distribution\policies.json in "C:\Program Files\Zen Browser"
-       (needs Administrator — optional; step 4 is the actual unlock).
-    6. Re-checks the written pref and reports the .xpi to install.
+    2. Locates the main profile under %APPDATA%\zen\Profiles.
+    3. Backs its prefs.js up to prefs.js.bak-<timestamp>.
+    4. Writes user_pref("xpinstall.signatures.required", false) to user.js for the record
+       (expected to be ignored by Zen — see above).
+    5. Writes distribution\policies.json in "C:\Program Files\Zen Browser" and prints how to
+       VERIFY it (about:policies / about:addons).
+    6. Reports the .xpi to install, and re-apply-after-update guidance.
 
   Usage:
     .\fix-zen-install.bat            (double-click, or)
@@ -55,30 +62,24 @@ $backup = "$($main.FullName).bak-$stamp"
 Copy-Item -LiteralPath $main.FullName -Destination $backup
 Write-Host "[i] Backup saved: $backup" -ForegroundColor Green
 
-# --- 4) Set xpinstall.signatures.required = false --------------------------------
-$target  = 'user_pref("xpinstall.signatures.required", false);'
-$raw     = Get-Content -LiteralPath $main.FullName
-$present = ($raw | Where-Object { $_ -match '^user_pref\("xpinstall\.signatures\.required"' }).Count -gt 0
-if ($present) {
-    $raw = $raw | ForEach-Object {
-        if ($_ -match '^user_pref\("xpinstall\.signatures\.required"') { $target } else { $_ }
-    }
-    Write-Host '[i] xpinstall.signatures.required  ->  updated to false'
-} else {
-    $raw += ''
-    $raw += $target
-    Write-Host '[i] xpinstall.signatures.required = false  appended'
+# --- 4) Record xpinstall.signatures.required = false (EXPECTED TO BE IGNORED by Zen) --------
+# user.js is the durable location: Gecko re-applies it on every startup, whereas prefs.js is
+# rewritten by the browser itself. Zen is a release-branded build and is expected to ignore
+# this override entirely (see the header) — it is written so the script's effect is explicit
+# rather than implied.
+$target   = 'user_pref("xpinstall.signatures.required", false);'
+$userJs   = Join-Path (Split-Path -Parent $main.FullName) 'user.js'
+$keep     = @()
+if (Test-Path -LiteralPath $userJs) {
+    $keep = @(Get-Content -LiteralPath $userJs | Where-Object { $_ -notmatch '^user_pref\("xpinstall\.signatures\.required"' })
 }
+$outLines = @($keep) + @('', $target)
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-[System.IO.File]::WriteAllLines($main.FullName, [string[]]$raw, $utf8NoBom)
-$check = (Select-String -LiteralPath $main.FullName -SimpleMatch 'xpinstall.signatures.required", false').Count
-if (-not $check) {
-    Write-Host '[!] Failed to write the pref. Backup available:' -ForegroundColor Red
-    Write-Host "    $backup"
-    exit 1
-}
+[System.IO.File]::WriteAllLines($userJs, [string[]]$outLines, $utf8NoBom)
+Write-Host "[i] user.js updated: $userJs" -ForegroundColor Yellow
+Write-Host '    (this pref is expected to be IGNORED by Zen - the policy below is the operative step)' -ForegroundColor DarkGray
 
-# --- 5) policies.json (Enterprise Policy: bypasses signature check completely) ---
+# --- 5) policies.json (Enterprise Policy: asks Zen to install the XPI by itself) ------------
 $candidateZenDirs = @(
     'C:\Program Files\Zen Browser',
     'C:\Program Files\Zen',
@@ -149,11 +150,16 @@ if (Test-Path -LiteralPath $xpi) {
 
 Write-Host ''
 Write-Host '==========================================================' -ForegroundColor Green
-Write-Host ' [SUCCESS] Zen Browser Enterprise Unlock Applied!' -ForegroundColor Green
+Write-Host ' Policy written - VERIFY before trusting it:' -ForegroundColor Green
 Write-Host '==========================================================' -ForegroundColor Green
 Write-Host '  1) Start Zen Browser.'
-Write-Host '  2) The extension is now FORCE INSTALLED by policy.'
-Write-Host '     (Check about:addons -> it appears automatically, no manual install needed!)'
-Write-Host '  3) All rules and settings will now persist permanently across restarts.'
+Write-Host '  2) Open about:policies and confirm the ExtensionSettings entry is listed.'
+Write-Host '     (An EMPTY page means the file was not read - check the path and the JSON.)'
+Write-Host '  3) Open about:addons. If the extension did NOT install by itself, this route'
+Write-Host '     cannot waive the signature check on this build. Use an AMO-signed XPI'
+Write-Host '     (Route A in ZEN-INSTALL.md) - that route always works.'
+Write-Host '  4) NOTE: a Zen update replaces the install folder and DELETES'
+Write-Host '     distribution\policies.json. Re-run this script after each update, or'
+Write-Host '     move to a signed XPI once and never think about it again.'
 Write-Host ''
 Read-Host '  Press Enter to close'

@@ -23,7 +23,10 @@
     body {
       width: 460px;
       min-height: 560px;
-      max-height: 640px;
+      /* Chrome and Firefox cap an extension popup at 600px tall. This was 640px,
+         so the footer rendered at y=640 — outside the popup — and the flex
+         algorithm took the difference out of the tab bar. */
+      max-height: 600px;
       background: var(--bg);
       color: var(--text);
       font-family: var(--font);
@@ -72,10 +75,12 @@
       background: #141414;
       border-bottom: 1px solid var(--border);
       padding: 0 4px;
-      overflow-x: auto;
-      scrollbar-width: none;
+      /* flex-wrap above is what handles a narrow popup. This used to be
+         overflow-x:auto, which zeroes a flex item's automatic minimum size — so
+         a tall pane (AI Guardian, Settings) let the flex algorithm crush this
+         bar to ~9px and cover the labels. */
+      flex: 0 0 auto;
     }
-    nav.tabs::-webkit-scrollbar { display: none; }
     .tab-btn {
       flex: 1 1 auto;
       white-space: nowrap;
@@ -110,7 +115,11 @@
 
     /* Main Tab Content */
     main {
-      flex: 1;
+      /* min-height:0 makes this the ONLY scroll container in the popup. Without
+         it the flex algorithm has to find the overflow somewhere else, and what
+         it finds is the tab bar. */
+      flex: 1 1 auto;
+      min-height: 0;
       overflow-y: auto;
       padding: 12px 16px;
       display: flex;
@@ -222,9 +231,15 @@
       flex-direction: column;
       gap: 6px;
     }
-    .input-row { display: flex; gap: 6px; }
+    /* Wrap + min-width:0: a text input has an intrinsic minimum width (its default
+       `size`), so `flex: 1` alone cannot shrink it. That is why a multi-input row
+       (Settings → exceptions / community packs / temporal rules) ran off the 460px
+       popup instead of wrapping its button onto the next line. */
+    .input-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+    .input-row > .action-btn { flex: 0 0 auto; }
     .input-row input, .input-row textarea {
-      flex: 1;
+      flex: 1 1 140px;
+      min-width: 0;
       background: var(--surface);
       border: 1px solid var(--border);
       color: var(--text);
@@ -276,6 +291,10 @@
     }
     .setting-item {
       display: flex;
+      /* Wrapping is what makes `.setting-desc.small { flex-basis: 100% }` actually
+         work: without it the caption cannot break to its own line, so its long
+         text (the Off/Smart/Total legend) punched through the popup's right edge. */
+      flex-wrap: wrap;
       align-items: center;
       justify-content: space-between;
       gap: 12px;
@@ -284,6 +303,9 @@
       display: flex;
       flex-direction: column;
       gap: 2px;
+      /* Shrinkable, so long descriptions wrap instead of widening the row. */
+      flex: 1 1 220px;
+      min-width: 0;
     }
     .setting-title {
       font-size: 12px;
@@ -292,6 +314,8 @@
     .setting-desc {
       font-size: 11px;
       color: var(--muted);
+      min-width: 0;
+      overflow-wrap: anywhere;
     }
 
     /* Switch toggle */
@@ -324,6 +348,55 @@
     }
     input:checked + .slider { background-color: var(--accent); }
     input:checked + .slider:before { transform: translateX(16px); }
+
+    /* Master switch (pause). Green = running, amber = paused; the banner below uses
+       the same amber so the state is readable at a glance from either place. */
+    .master-item {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px;
+      background: var(--surface-hover);
+    }
+    #toggleExtensionEnabled:checked + .slider { background-color: var(--green); }
+
+    /* The same master switch, mirrored into the header so it is on the MAIN UI at
+       all times — visible on every tab — instead of only inside Settings. Both
+       inputs carry data-master-toggle and are kept in sync by applyMasterUi(). */
+    #toggleExtensionEnabledHeader:checked + .slider { background-color: var(--green); }
+    .header-actions { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; }
+    .header-switch { width: 40px; height: 22px; }
+
+    /* Paused banner. Shown on EVERY tab (body.nyt-paused) so the paused state is
+       never a mystery, and it is the shortest way back on: one click, no tab hunt. */
+    .pause-banner {
+      display: none;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      background: rgba(255, 180, 0, 0.12);
+      border-bottom: 1px solid rgba(255, 180, 0, 0.35);
+      color: #ffd27a;
+      font-size: 11.5px;
+      line-height: 1.3;
+    }
+    body.nyt-paused .pause-banner { display: flex; }
+    .pause-banner-text { flex: 1 1 auto; min-width: 0; }
+    .pause-banner-btn {
+      flex: 0 0 auto;
+      background: var(--green);
+      color: #fff;
+      border: none;
+      border-radius: 12px;
+      padding: 4px 10px;
+      font-size: 11px;
+      font-weight: 700;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .pause-banner-btn:hover { filter: brightness(1.12); }
+    /* While paused the header badge is counting nothing — mute it so "0 Blocked"
+       never reads as a broken counter. */
+    body.nyt-paused .header-badge { opacity: 0.45; }
 
     /* Auto-dub Mode — segmented radio buttons */
     .auto-dub-modes {
@@ -879,7 +952,17 @@
       <h1>YouTube Blacklister</h1>
       <span class="header-badge" id="totalBlockedBadge">0 Blocked</span>
     </div>
-    <span class="link" role="button" tabindex="0" id="openYoutube">Open YouTube ↗</span>
+    <div class="header-actions">
+      <!-- Master on/off on the MAIN UI: always reachable, on every tab. Mirrors
+           Settings → ⏻ Extension Enabled (both are data-master-toggle).
+           Deliberately a switch, not a button: state is visible without a click,
+           and it cannot be hit by accident the way a destructive button can. -->
+      <label class="switch header-switch" title="Master on/off — same switch as Settings → ⏻ Extension Enabled">
+        <input type="checkbox" id="toggleExtensionEnabledHeader" data-master-toggle aria-label="Extension enabled" checked />
+        <span class="slider"></span>
+      </label>
+      <span class="link" role="button" tabindex="0" id="openYoutube">Open YouTube ↗</span>
+    </div>
   </header>
 
   <!-- Level & Impact Metrics -->
@@ -919,6 +1002,13 @@
     <button class="tab-btn" data-tab="aiTab">🧠 AI Guardian</button>
     <button class="tab-btn" data-tab="settingsTab">Settings</button>
   </nav>
+
+  <!-- Paused notice: visible on every tab so the extension's state is never a
+       mystery. The button is the one-click way back on. -->
+  <div class="pause-banner" id="pauseBanner" role="status">
+    <span class="pause-banner-text">⏸ <b>Paused</b> — no rules, buttons or AI features are running. Your lists are untouched.</span>
+    <button class="pause-banner-btn" id="pauseBannerResume" type="button">Turn back on</button>
+  </div>
 
   <!-- Main Content Areas -->
   <main>
@@ -1146,16 +1236,31 @@
 
       <!-- Live AI Interception Audit Log -->
       <div class="setting-group" style="gap: 6px;">
-        <span class="setting-title" style="font-size: 11px;">📜 Recent Autonomous Interceptions:</span>
+        <div class="setting-item" style="justify-content: space-between;">
+          <span class="setting-title" style="font-size: 11px;">📜 Recent Autonomous Interceptions:</span>
+          <button class="action-btn danger" id="clearAiDecisionsBtn" style="padding: 3px 8px; font-size: 10px;">🗑️ Clear Blocks</button>
+        </div>
         <div class="ai-log-list" id="aiInterceptLog">
           <div class="empty-state" style="padding: 14px;">No autonomous blocks yet. Enable Autonomous Guardian to see live intercepts.</div>
         </div>
+        <span class="setting-desc small" style="font-size: 10px;">Clearing removes every stored Guardian verdict (both the blocks AND the "allowed" undos) and un-hides those videos immediately. The log above is cleared with it.</span>
       </div>
     </div>
 
     <!-- Tab 5: Settings & Tools -->
     <div class="tab-pane" id="settingsTab">
       <div class="setting-group">
+        <div class="setting-item master-item">
+          <div class="setting-label">
+            <span class="setting-title">⏻ Extension Enabled</span>
+            <span class="setting-desc">Master switch. Turn off to pause everything instantly — blacklist rules, hover buttons, the 3-dot menu row, AI features — without losing a single rule. Turn it back on and everything resumes.</span>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="toggleExtensionEnabled" data-master-toggle aria-label="Extension Enabled" checked />
+            <span class="slider"></span>
+          </label>
+        </div>
+
         <div class="setting-item">
           <div class="setting-label">
             <span class="setting-title">1-Click Thumbnail Button</span>
@@ -1294,9 +1399,9 @@
       <div class="setting-group" style="margin-top: 20px;">
         <span class="setting-title" style="font-size: 14px;">🎯 Per-Channel Keyword Exceptions</span>
         <p class="help-hint" style="margin-bottom: 12px;">Allow specific channels to bypass global keyword rules. E.g., block "reaction" globally but allow @TrustedCritic.</p>
-        <div style="display: flex; gap: 8px; margin-bottom: 8px;">
-          <input type="text" id="exceptionKeyword" placeholder="Keyword (e.g. reaction)" style="flex: 1; padding: 6px 8px; border: 1px solid var(--border); border-radius: 4px; font-size: 12px;" />
-          <input type="text" id="exceptionChannel" placeholder="Channel (@handle or name)" style="flex: 1; padding: 6px 8px; border: 1px solid var(--border); border-radius: 4px; font-size: 12px;" />
+        <div class="input-row" style="margin-bottom: 8px;">
+          <input type="text" id="exceptionKeyword" placeholder="Keyword (e.g. reaction)" />
+          <input type="text" id="exceptionChannel" placeholder="Channel (@handle or name)" />
           <button class="action-btn" id="addKeywordException">Add Exception</button>
         </div>
         <div id="keywordExceptionsList" style="font-size: 11px; max-height: 150px; overflow-y: auto;"></div>
@@ -1306,9 +1411,9 @@
       <div class="setting-group" style="margin-top: 20px;">
         <span class="setting-title" style="font-size: 14px;">🌐 Community Blocklist Subscription</span>
         <p class="help-hint" style="margin-bottom: 12px;">Subscribe to a curated JSON blocklist (auto-fetched weekly). Add a URL to a JSON file with { "keywords": [...], "channels": [...] }.</p>
-        <div style="display: flex; gap: 8px; margin-bottom: 8px;">
-          <input type="text" id="communityPackUrl" placeholder="https://raw.githubusercontent.com/.../slop-list.json" style="flex: 1; padding: 6px 8px; border: 1px solid var(--border); border-radius: 4px; font-size: 12px;" />
-          <input type="text" id="communityPackName" placeholder="Pack name (e.g. Community Slop)" style="flex: 1; padding: 6px 8px; border: 1px solid var(--border); border-radius: 4px; font-size: 12px;" />
+        <div class="input-row" style="margin-bottom: 8px;">
+          <input type="text" id="communityPackUrl" placeholder="https://raw.githubusercontent.com/.../slop-list.json" />
+          <input type="text" id="communityPackName" placeholder="Pack name (e.g. Community Slop)" />
           <button class="action-btn" id="addCommunityPack">Add Pack</button>
         </div>
         <div id="communityPacksList" style="font-size: 11px;"></div>
@@ -1318,10 +1423,10 @@
       <div class="setting-group" style="margin-top: 20px;">
         <span class="setting-title" style="font-size: 14px;">📅 Temporal/Seasonal Rules</span>
         <p class="help-hint" style="margin-bottom: 12px;">Rules that auto-expire on a date. Great for "year review", "holiday gift guide", "black friday", etc.</p>
-        <div style="display: flex; gap: 8px; margin-bottom: 8px;">
-          <input type="text" id="temporalKeyword" placeholder="Keyword or regex (e.g. year review)" style="flex: 1; padding: 6px 8px; border: 1px solid var(--border); border-radius: 4px; font-size: 12px;" />
-          <input type="date" id="temporalExpires" style="padding: 6px 8px; border: 1px solid var(--border); border-radius: 4px; font-size: 12px;" />
-          <input type="text" id="temporalReason" placeholder="Reason (optional)" style="flex: 1; padding: 6px 8px; border: 1px solid var(--border); border-radius: 4px; font-size: 12px;" />
+        <div class="input-row" style="margin-bottom: 8px;">
+          <input type="text" id="temporalKeyword" placeholder="Keyword or regex (e.g. year review)" />
+          <input type="date" id="temporalExpires" />
+          <input type="text" id="temporalReason" placeholder="Reason (optional)" />
           <button class="action-btn" id="addTemporalRule">Add Rule</button>
         </div>
         <div id="temporalRulesList" style="font-size: 11px;"></div>
@@ -1348,7 +1453,9 @@
     <div class="footer-left">
       <span id="statusMsg">Ready</span>
       <span class="footer-dot">•</span>
-      <span id="versionText">v1.11.1</span>
+      <!-- Version is set at runtime from chrome.runtime.getManifest().version in init();
+           the literal below is only a pre-init placeholder and must not be maintained. -->
+      <span id="versionText">v…</span>
     </div>
     <div class="footer-right">
       <button class="kofi-link" id="kofiFooterBtn" title="Support developer on Ko-fi">

@@ -7,7 +7,7 @@
     "test": "tests"
   },
   "scripts": {
-    "test": "node tests/shared-tables-harness.js && node tests/popup-smoke-harness.js && node tests/debait-recycle-harness.js && node tests/backup-harness.js && node tests/shorts-blacklist-harness.js && node tests/watch-block-harness.js && node tests/test_ai_guardian.js",
+    "test": "node tests/shared-tables-harness.js && node tests/popup-smoke-harness.js && node tests/debait-recycle-harness.js && node tests/backup-harness.js && node tests/shorts-blacklist-harness.js && node tests/watch-block-harness.js && node tests/blocking-invariants-harness.js && node tests/blocking-and-keyword-audit-harness.js && node tests/master-switch-harness.js && node tests/keyword-extraction-harness.js && node tests/ai-guardian-gates-harness.js && node tests/test_ai_guardian.js",
     "test:live": "node tests/test_live_ollama.js",
     "package": "powershell -NoProfile -ExecutionPolicy Bypass -File ./package-extension.ps1"
   },

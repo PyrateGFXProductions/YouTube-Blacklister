@@ -50,6 +50,42 @@ const ok = (cond, msg) => { if (cond) { pass++; console.log('  PASS ' + msg); } 
   ok(saved.huntMode === true, 'replace: settings applied (huntMode)');
   ok(JSON.stringify(B.data.channels) === JSON.stringify(saved.channels), 'in-memory data == what was persisted');
 
+  // ---------- EVERY feature toggle must survive the round trip -------------------
+  // The reported symptom behind this check: a backup → wipe → import round trip reset
+  // settings the user had changed, which reads as "my settings keep changing themselves".
+  // A key the popup persists but the exporter forgets is silently lost; a key the
+  // exporter writes but the importer ignores is silently dropped on restore.
+  const FEATURE_TOGGLES = [
+    'blockShorts', 'shortsSubOnly', 'blockCommunity', 'autoDubMode', 'enableQuickBlock',
+    'triggerServerFeedback', 'aiAutonomous', 'aiSensitivity', 'aiModel', 'aiTastePrompt',
+    'aiDebaitTitles', 'aiDebaitModel', 'tldwEnabled', 'huntMode', 'chipRescue',
+    'newToYouAuto', 'extensionEnabled'
+  ];
+  const payloadSettings = JSON.parse(backupText).settings || {};
+  const missingFromExport = FEATURE_TOGGLES.filter(k => !(k in payloadSettings));
+  ok(missingFromExport.length === 0,
+    'export carries every feature toggle (missing: ' + JSON.stringify(missingFromExport) + ')');
+
+  // Now the other direction: set every toggle to a NON-default value, export, wipe the
+  // in-memory model, import, and assert each value came back. Only checking "the key is
+  // present" would pass for a key exported with the wrong value or ignored on import.
+  const nonDefaults = {
+    blockShorts: true, shortsSubOnly: true, blockCommunity: true, autoDubMode: 'total',
+    enableQuickBlock: false, triggerServerFeedback: true, aiAutonomous: true,
+    aiSensitivity: 'ruthless', aiModel: 'test-model:tag', aiTastePrompt: 'no slop',
+    aiDebaitTitles: true, aiDebaitModel: 'debaiter:tag', tldwEnabled: false,
+    huntMode: true, chipRescue: false, newToYouAuto: false, extensionEnabled: false
+  };
+  Object.assign(B.data, nonDefaults);
+  const toggleText = JSON.stringify(B.buildPayload(), null, 2);
+  for (const k of FEATURE_TOGGLES) delete B.data[k];
+  document.getElementById = (id) => id === 'replaceRules' ? { checked: true } : null;
+  const toggleOk = await B.doImportFile({ text: async () => toggleText });
+  const wrong = FEATURE_TOGGLES.filter(k => B.data[k] !== nonDefaults[k]);
+  ok(toggleOk === true && wrong.length === 0,
+    'every feature toggle round-trips through export+import with its value intact (wrong: ' +
+    JSON.stringify(wrong.map(k => k + ': ' + JSON.stringify(B.data[k]) + ' != ' + JSON.stringify(nonDefaults[k]))) + ')');
+
   // ---------- IMPORT MERGE: old rules SURVIVE, backup added on top ---------------
   document.getElementById = (id) => id === 'replaceRules' ? { checked: false } : null;
   B.data.channels = ['@oldchannel'];

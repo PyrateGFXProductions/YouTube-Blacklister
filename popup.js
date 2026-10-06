@@ -298,6 +298,9 @@ let data = {
   huntMode: false,
   chipRescue: false,
   newToYouAuto: false,
+  // MASTER SWITCH. false = the extension is paused everywhere (content script
+  // restores everything it hid and stops acting). Absent key = enabled.
+  extensionEnabled: true,
 
   // --- NEW FEATURES ---
   keywordExceptions: {},      // { keyword: [whitelistedChannel1, whitelistedChannel2] }
@@ -335,6 +338,7 @@ function load() {
       'huntMode',
       'chipRescue',
       'newToYouAuto',
+      'extensionEnabled',
       'keywordExceptions',
       'feedHealthLog',
       'communityPacks',
@@ -367,6 +371,7 @@ function load() {
       data.huntMode = Boolean(res.huntMode);
       data.chipRescue = Boolean(res.chipRescue);
       data.newToYouAuto = Boolean(res.newToYouAuto);
+      data.extensionEnabled = res.extensionEnabled !== false;
       data.keywordExceptions = res.keywordExceptions && typeof res.keywordExceptions === 'object' ? res.keywordExceptions : {};
       data.feedHealthLog = Array.isArray(res.feedHealthLog) ? res.feedHealthLog : [];
       data.communityPacks = Array.isArray(res.communityPacks) ? res.communityPacks : [];
@@ -403,6 +408,7 @@ async function save() {
     huntMode: data.huntMode,
     chipRescue: data.chipRescue,
     newToYouAuto: data.newToYouAuto,
+    extensionEnabled: data.extensionEnabled,
     keywordExceptions: data.keywordExceptions,
     feedHealthLog: data.feedHealthLog,
     communityPacks: data.communityPacks,
@@ -918,6 +924,52 @@ function initToggles() {
     newToYouToggle.checked = Boolean(data.newToYouAuto);
     newToYouToggle.onchange = () => { data.newToYouAuto = newToYouToggle.checked; save(); };
   }
+
+  // MASTER SWITCHES (header + Settings). Both inputs carry data-master-toggle, so
+  // one handler drives them and they cannot drift apart. Writes `extensionEnabled`
+  // through the same save() bus as every other toggle, so the content scripts pick
+  // it up from storage and from the RULES_UPDATED broadcast save() sends to every
+  // open YouTube tab.
+  const masterToggles = Array.from(document.querySelectorAll('input[data-master-toggle]'));
+  const setMasterEnabled = (on) => {
+    data.extensionEnabled = on;
+    applyMasterUi();
+    save();
+    setStatus(on
+      ? 'Extension enabled — your rules are being applied again.'
+      : 'Extension paused — nothing is being hidden or blocked.');
+  };
+  masterToggles.forEach((toggle) => {
+    toggle.onchange = () => setMasterEnabled(toggle.checked);
+  });
+
+  // The banner's one-click way back on. Keeps the master checkbox in sync because
+  // both paths go through the same two setters (data + applyMasterUi).
+  const resumeBtn = document.getElementById('pauseBannerResume');
+  if (resumeBtn) {
+    resumeBtn.addEventListener('click', () => {
+      data.extensionEnabled = true;
+      applyMasterUi();
+      save();
+      setStatus('Extension enabled — your rules are being applied again.');
+    });
+  }
+}
+
+// Reflect the master switch in the popup chrome. The paused banner sits OUTSIDE the
+// tab panes, so it is driven by a body class rather than per-pane markup — which is
+// also what makes it visible on every tab at once.
+function applyMasterUi() {
+  const on = data.extensionEnabled !== false;
+  try { document.body.classList.toggle('nyt-paused', !on); } catch (_) {}
+  // Every master switch (header + Settings) reflects the state, so whichever one
+  // the user is looking at tells the truth — including on first paint.
+  document.querySelectorAll('input[data-master-toggle]').forEach((toggle) => {
+    toggle.checked = on;
+    toggle.title = on
+      ? 'Extension active. Turn off to pause everything.'
+      : 'Extension paused. Turn on to resume.';
+  });
 }
 
 // ------------------------------------------------------------------
@@ -1599,6 +1651,10 @@ async function init() {
     try { versionEl.textContent = 'v' + chrome.runtime.getManifest().version; } catch (_) {}
   }
 
+  // Reflect the master switch on the FIRST paint: the paused banner must be there
+  // immediately, not only once initToggles() has run further down.
+  applyMasterUi();
+
   // Tab switching
   document.querySelectorAll('.tab-btn').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -1941,6 +1997,34 @@ function initAiGuardian() {
       renderAiLog();
     });
   } catch (_) {}
+
+  // "Clear Blocks": the ONLY way to drop Guardian verdicts that are already stored.
+  // A stored block is a first-class rule in the card evaluator, so verdicts the user
+  // no longer wants (the reported over-blocking) would otherwise keep hiding those
+  // videos forever, with no UI able to remove them. Clears both `nyt_aiDecisions`
+  // and the log, then tells open tabs to re-read so the un-hide happens at once.
+  const clearAiBtn = document.getElementById('clearAiDecisionsBtn');
+  if (clearAiBtn) {
+    clearAiBtn.addEventListener('click', async () => {
+      if (!confirm('Clear ALL stored Guardian decisions?\n\nThis removes every autonomous block AND every "allowed" undo, and un-hides those videos. Your keyword/channel rules are untouched.')) return;
+      try {
+        // Must not leave `undefined` in a storage payload — a key set to undefined is
+        // dropped, which would make the clear a silent no-op for that key.
+        await chrome.storage.local.set({ nyt_aiDecisions: [], aiLog: [] });
+        data.aiLog = [];
+        renderAiLog();
+        setStatus('Guardian decisions cleared — those videos are no longer hidden.');
+        try {
+          const tabs = await chrome.tabs.query({ url: 'https://www.youtube.com/*' });
+          await Promise.allSettled((tabs || [])
+            .filter((t) => t && t.id != null)
+            .map((t) => chrome.tabs.sendMessage(t.id, { type: 'RULES_UPDATED' }).catch(() => {})));
+        } catch (_) {}
+      } catch (_) {
+        setStatus('Could not clear Guardian decisions.');
+      }
+    });
+  }
 }
 
 function renderAiLog() {
@@ -2320,6 +2404,40 @@ async function renderCommunityPacks() {
   });
 }
 
+// Community pack URLs are FETCHED, so the field is a network capability the user pastes
+// into. Two rules, enforced at add time AND at fetch time (a stored pack may predate this
+// check, or a backup may have been hand-edited):
+//   1. https only — a pack list must not be fetched over plaintext.
+//   2. an allowlisted host. Without it the extension will fetch ANY address the field is
+//      given, including `http://127.0.0.1:PORT/...` — a port scan / request-forgery probe
+//      driven from the extension's own privileged context. Packs are public rule lists,
+//      so restricting them to the code-hosting hosts that serve them costs nothing.
+const PACK_URL_HOSTS = new Set([
+  'raw.githubusercontent.com',
+  'gist.githubusercontent.com',
+  'githubusercontent.com',
+  'objects.githubusercontent.com',
+  'github.com',
+  'codeload.github.com'
+]);
+
+function isAllowedPackUrl(raw) {
+  let parsed;
+  try {
+    parsed = new URL(String(raw || '').trim());
+  } catch (_) {
+    return { ok: false, why: 'Invalid URL.' };
+  }
+  if (parsed.protocol !== 'https:') {
+    return { ok: false, why: 'Pack URL must be https:// (plaintext http is not allowed).' };
+  }
+  const host = String(parsed.hostname || '').toLowerCase();
+  if (!PACK_URL_HOSTS.has(host)) {
+    return { ok: false, why: `Pack URL host not allowed: ${host}. Use a public rule list on GitHub (raw.githubusercontent.com or gist.githubusercontent.com).` };
+  }
+  return { ok: true, why: '' };
+}
+
 async function addCommunityPack() {
   const urlInput = document.getElementById('communityPackUrl');
   const nameInput = document.getElementById('communityPackName');
@@ -2327,16 +2445,8 @@ async function addCommunityPack() {
   const url = urlInput.value.trim();
   const name = nameInput.value.trim() || 'Community Pack';
   if (!url) { setStatus('Enter a URL.'); return; }
-  try {
-    const parsed = new URL(url);
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-      setStatus('Pack URL must use http: or https:');
-      return;
-    }
-  } catch (_) {
-    setStatus('Invalid URL.');
-    return;
-  }
+  const verdict = isAllowedPackUrl(url);
+  if (!verdict.ok) { setStatus(verdict.why); return; }
   data.communityPacks.push({ url, name, enabled: true, lastFetched: null, rules: { keywords: [], channels: [] } });
   urlInput.value = '';
   nameInput.value = '';
@@ -2351,8 +2461,16 @@ async function addCommunityPack() {
 async function fetchCommunityPack(index) {
   const pack = data.communityPacks[index];
   if (!pack) return;
+  // Re-check on every fetch: this is the path the weekly auto-fetch also runs through,
+  // and the pack may have been stored before the host allowlist existed.
+  const verdict = isAllowedPackUrl(pack.url);
+  if (!verdict.ok) {
+    pack.enabled = false;
+    setStatus(`Pack disabled — ${verdict.why}`);
+    return;
+  }
   try {
-    const res = await fetch(pack.url);
+    const res = await fetch(pack.url, { credentials: 'omit', referrerPolicy: 'no-referrer' });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const json = await res.json();
     pack.rules = {

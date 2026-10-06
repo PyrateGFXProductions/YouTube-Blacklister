@@ -35,6 +35,7 @@
   - [6. Feed Diversity Meter & Subscription Scanner](#6-feed-diversity-meter--subscription-scanner)
   - [7. Interactive Feed Hunt Mode](#7-interactive-feed-hunt-mode)
   - [8. Atomic Backup, Restore & Migration](#8-atomic-backup-restore--migration)
+  - [9. Instant Master Pause Switch](#9-instant-master-pause-switch)
 - [Browser Compatibility Matrix](#browser-compatibility-matrix)
 - [Installation Guide](#installation-guide)
   - [Chromium Family (Chrome, Edge, Brave, Opera, Vivaldi)](#chromium-family-chrome-edge-brave-opera-vivaldi)
@@ -108,6 +109,7 @@ The extension operates across three isolated environments coordinated by Chrome/
 
 ### 2. Multi-Tier Keyword & Regex Evaluator
 - **Word-Boundary Precision**: Plain-text terms are strictly bounded (`\b`). Adding `cat` intercepts "cute cat video" while safely preserving "category", "education", or "scatter".
+- **Relevance-Ranked Keyword Extraction**: The 🔑 key icon proposes rules from the words that *describe* the video — never the first, middle or last three words of the title. Candidates are scored by where they came from (the creator's own tags outrank the description, which outranks the transcript) and by how specific they are to the video you are looking at compared with the rest of the cards on your screen. Every proposed phrase is checked to appear verbatim in the source text, filler words (`day`, `first`, `last`) can never become a rule on their own, and anything that already matches several other visible cards is refused as too generic for your feed. The toast tells you what was skipped and why; Undo is one click.
 - **Raw Regular Expressions**: Full JavaScript `/pattern/flags` support. Block repetitive serial content like `/(?:ep|episode)\s*\d+/i` or challenge spam like `/(?:in|within)\s*(?:24|48)\s*hours/i`.
 - **Pre-Curated Starter Packs**: Built-in, one-click community rulesets for instant protection against:
   - 🧠 **Anti-Brainrot** (Skibidi, Grimace, content-farm syndicates)
@@ -161,6 +163,14 @@ Turn mindless doomscrolling into an active attention exercise. When enabled, a r
 - **Lossless JSON Schema**: Exports and restores channels, handles, keyword exceptions, temporal rules, community packs, feed health logs, and granular preferences.
 - **Replace vs. Merge Strategies**: Safely merge external community files into your existing list without overwriting your personal whitelist or custom rules.
 
+### 9. Instant Master Pause Switch
+Some days you want YouTube untouched. **Settings → ⏻ Extension Enabled** is a single master switch that suspends the entire extension without deleting anything.
+
+- **Full teardown, not a hidden filter**: pausing restores every card the rules hid, repairs collapsed grid slots, removes the injected stylesheet (which is what greys out Shorts shelves and community posts), puts AI-rewritten titles back, and clears the per-tab badge. The feed returns to exactly what YouTube served.
+- **Fully inert**: no hover quick-block button, no 3-dot menu row, no "B" shortcut, no watch-page redirect, and no AI/debait work while paused — a paused extension does not evaluate a single card.
+- **Impossible to miss**: a paused banner appears on every tab in the popup with a one-click "Turn back on" button.
+- **Lossless and instant**: every rule, whitelist entry and preference is preserved and re-applied the moment you switch it back on. The switch itself survives backup/restore.
+
 ---
 
 ## Browser Compatibility Matrix
@@ -174,7 +184,7 @@ Always New To You is built natively against WebExtensions standards and compiled
 | **Brave Browser** | Chromium / Blink | `dist/chromium/` | `chrome.storage.local` | 🟢 Supported |
 | **Opera / Vivaldi** | Chromium / Blink | `dist/chromium/` | `chrome.storage.local` | 🟢 Supported |
 | **Mozilla Firefox** | Gecko / SpiderMonkey | `dist/firefox/` (`.xpi`) | `browser.storage.local` | 🟢 Supported |
-| **Zen Browser** | Gecko (Firefox Fork) | `blacklist-firefox.xpi` | `browser.storage.local` | 🟢 Supported (via Policy) |
+| **Zen Browser** | Gecko (Firefox Fork) | signed `blacklist-firefox.xpi` | `browser.storage.local` | 🟢 Supported (signed XPI) |
 | **LibreWolf** | Gecko (Firefox Fork) | `dist/firefox/` (`.xpi`) | `browser.storage.local` | 🟢 Supported |
 
 ---
@@ -205,33 +215,33 @@ Always New To You is built natively against WebExtensions standards and compiled
 > [!IMPORTANT]
 > **Zen Browser & Firefox Notice:** Firefox and Zen enforce strict add-on signature verification. Loading the repository directly via `about:debugging` creates a temporary instance whose `chrome.storage.local` is **deleted when the browser closes**. Use the permanent installation methods below to ensure your rules persist forever.
 
-#### Method 1: Zen Browser Enterprise Policy Unlock (Recommended)
-Zen Browser automatically bypasses signature verification for extensions managed through its Enterprise Policy engine:
+#### Method 1: Signed XPI (Recommended — works on every Firefox-family build)
+Zen is a **release-branded** Gecko build, so it enforces add-on signing *regardless* of the
+`xpinstall.signatures.required` preference — Mozilla permits that override only in Firefox
+ESR, Developer Edition, Nightly and unbranded builds, and Zen's maintainers confirm the
+preference has no effect there. The reliable route is to have the XPI **signed by AMO as an
+unlisted ("self-distributed") add-on**: free, automatic, and *not* published in the store.
 
-1. Close Zen Browser completely.
-2. In Administrator PowerShell (`Win + X` &rarr; *Terminal (Admin)*), run:
-   ```powershell
-   $polDir = "C:\Program Files\Zen Browser\distribution"
-   New-Item -ItemType Directory -Path $polDir -Force | Out-Null
-   @'
-   {
-     "policies": {
-       "ExtensionSettings": {
-         "youtubeblacklister@pyrategfx.productions": {
-           "installation_mode": "force_installed",
-           "install_url": "file:///C:/Users/Administrator/YouTube-Blacklister/blacklist-firefox.xpi"
-         }
-       }
-     }
-   }
-   '@ | Set-Content (Join-Path $polDir "policies.json") -Encoding UTF8
-   ```
-3. Launch Zen Browser. The extension will be automatically installed and active, retaining all storage permanently.
+1. Run `.\package-extension.ps1` to produce a current `blacklist-firefox.xpi`.
+2. Upload it at <https://addons.mozilla.org/developers/addon/submit/distribution> and choose
+   **On your own site** (unlisted); AMO returns a signed `.xpi`.
+   *CLI equivalent:* `npx web-ext sign --source-dir .\zen-unpacked --artifacts-dir .\signed --channel unlisted` with `WEB_EXT_API_KEY` / `WEB_EXT_API_SECRET` set.
+3. In `about:addons` &rarr; gear ⚙️ &rarr; **Install Add-on From File...** &rarr; select the signed `.xpi`.
 
-#### Method 2: Standard Firefox Packaged Install
+It installs permanently, keeps its stable `gecko.id` (so your rules persist), and keeps
+working after a Zen update. Full detail: `ZEN-INSTALL.md`.
+
+#### Method 2: Local enterprise policy (experimental — not guaranteed)
+Writing `C:\Program Files\Zen Browser\distribution\policies.json` makes Zen's policy engine
+install the XPI it names. Whether it **also waives the signature check** is not documented by
+Mozilla for `force_installed` and is not verified here — treat it as an experiment. Verify in
+`about:policies` (your entry should be listed) and `about:addons`. Note that **Zen's updater
+replaces the install directory, deleting this file on every update**, so it needs re-applying.
+
+#### Method 3: Standard Firefox packaged install (requires a signed XPI)
 1. Run `.\package-extension.ps1` to produce the clean `blacklist-firefox.xpi` artifact.
 2. Navigate to `about:addons` &rarr; Click the gear icon ⚙️ &rarr; **Install Add-on From File...**.
-3. Select `blacklist-firefox.xpi`.
+3. Select `blacklist-firefox.xpi` (an unsigned XPI will be refused — sign it via Method 1 first).
 
 ---
 

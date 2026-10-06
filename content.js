@@ -120,7 +120,13 @@ let settings = {
   tldwEnabled: true,
   huntMode: false,
   chipRescue: false,
-  newToYouAuto: false
+  newToYouAuto: false,
+
+  // MASTER SWITCH. false = the extension is PAUSED: no rule hides a card, no hover
+  // control is injected, no 3-dot menu row, no AI/debait work, and everything a rule
+  // already hid is restored. Absent key means enabled, so existing installs keep
+  // working unchanged.
+  extensionEnabled: true
 };
 
 let activeMenuVideoCard = null;
@@ -128,6 +134,182 @@ let lastSeedTime = 0;
 let lastBadgeCount = -1;
 let processTimer = null;
 let menuObserver = null;
+
+// ------------------------------------------------------------------
+// PERSISTED AI GUARDIAN DECISIONS
+// ------------------------------------------------------------------
+// The AI Guardian's verdict must OUTLIVE the DOM node that carried it.
+//
+// The old implementation recorded an interception only as an inline style plus
+// `data-hidden-by-ai` on the card. Two consequences, both reported as bugs:
+//   * on the very next processFeed() pass, evaluateCard() knew nothing about the
+//     AI block, took the `else` branch and called unhideCardElement() — so every
+//     AI interception was undone the moment the feed was re-scanned, and
+//   * because the card was also stamped `data-ai-evaluated = <video id>`, the
+//     video was never re-evaluated, so it stayed visible for good; and a page
+//     refresh dropped the decision entirely.
+//
+// Decisions now live in `chrome.storage.local.nyt_aiDecisions`, keyed by video id
+// (falling back to a normalized-title key when the card exposes no id), so they
+// survive YouTube's card recycling, SPA navigation and a full reload.
+//
+// An entry's `state` is 'blocked' or 'allowed'. A blocked entry hides the card on
+// every pass and on every surface; an 'allowed' entry means the user explicitly
+// undid an AI block and the model must not re-block that video this session.
+const AI_DECISION_STORAGE_KEY = 'nyt_aiDecisions';
+const AI_DECISION_CAP = 500;
+
+let aiDecisionEntries = [];
+let aiBlockedKeys = new Set();
+let aiHandledKeys = new Set();
+
+// Stable identity for an AI decision. Video id first (YouTube recycles DOM nodes
+// and rewrites titles, so neither the element nor the title text is a safe key on
+// its own), then a title-derived fallback for cards that expose no id.
+function aiDecisionKey(vid, title) {
+  const v = String(vid || '').trim().toLowerCase();
+  if (v) return v;
+  const t = String(title || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  return t ? 't:' + t : '';
+}
+
+function applyAiDecisions(list) {
+  const arr = Array.isArray(list) ? list.filter(e => e && typeof e === 'object') : [];
+  aiDecisionEntries = arr;
+  const blocked = new Set();
+  const handled = new Set();
+  for (const e of arr) {
+    const key = String(e.key || aiDecisionKey(e.id, e.title) || '');
+    if (!key) continue;
+    handled.add(key);
+    if (e.state !== 'allowed') blocked.add(key);
+  }
+  aiBlockedKeys = blocked;
+  aiHandledKeys = handled;
+}
+
+// Read-modify-write, so two tabs (or a tab and the popup) recording decisions at
+// the same moment can never lose each other's entry — the failure mode of a blind
+// whole-object write.
+//
+// The in-memory view is updated FIRST. A hide decision must be visible to the very
+// next processFeed() pass, and that pass can run before the async storage
+// round-trip finishes; without the optimistic update the matcher would not know
+// about the block yet and would unhide the card it was just told to hide.
+function persistAiDecisions(add, removeKeys) {
+  const drop = new Set((removeKeys || []).map(k => String(k || '')));
+  let optimistic = aiDecisionEntries.filter(e => e && !drop.has(String(e.key || '')));
+  for (const entry of (add || [])) {
+    if (!entry || !entry.key) continue;
+    optimistic = optimistic.filter(e => String(e.key || '') !== String(entry.key));
+    optimistic.unshift(entry);
+  }
+  applyAiDecisions(optimistic.slice(0, AI_DECISION_CAP));
+
+  if (!isExtensionValid()) return;
+  try {
+    chrome.storage.local.get([AI_DECISION_STORAGE_KEY], (res) => {
+      if (chrome.runtime?.lastError) return;
+      const current = Array.isArray(res && res[AI_DECISION_STORAGE_KEY]) ? res[AI_DECISION_STORAGE_KEY] : [];
+      let next = current.filter(e => e && !drop.has(String(e.key || '')));
+      for (const entry of (add || [])) {
+        if (!entry || !entry.key) continue;
+        next = next.filter(e => String(e.key || '') !== String(entry.key));
+        next.unshift(entry);
+      }
+      next = next.slice(0, AI_DECISION_CAP);
+      chrome.storage.local.set({ [AI_DECISION_STORAGE_KEY]: next }, () => {
+        if (chrome.runtime?.lastError) return;
+        applyAiDecisions(next);
+      });
+    });
+  } catch (_) { }
+}
+
+// Is there a live AI block for this video right now?
+function isAiBlocked(vid, title) {
+  const key = aiDecisionKey(vid, title);
+  return Boolean(key) && aiBlockedKeys.has(key);
+}
+
+// Has the AI already ruled on this video (blocked or user-allowed)?
+function isAiHandled(vid, title) {
+  const key = aiDecisionKey(vid, title);
+  return Boolean(key) && aiHandledKeys.has(key);
+}
+
+// ------------------------------------------------------------------
+// TEMPORAL RULE EXPIRY (auto-expiring rules)
+// ------------------------------------------------------------------
+// A temporal rule is { keyword, expires: 'YYYY-MM-DD', reason, permanentBefore? }. The popup
+// prunes them when its Settings tab renders — too late for a YouTube tab that is simply open:
+// the content script loaded settings.temporalRules but never read it, so the keyword stayed
+// ACTIVE and went on hiding videos after its own expiry date (the "it is still blocking
+// something I only meant to block until Christmas" report). Expiry now runs on every settings
+// load, in the context that actually does the hiding.
+//
+// Semantics mirror the popup's: a rule is live through the END of its stated day (local time),
+// a keyword still covered by another live temporal rule survives, and a keyword that was
+// already permanent before the timer was set (permanentBefore) is never removed.
+function temporalExpiresMs(rule) {
+  if (!rule || typeof rule !== 'object') return NaN;
+  return Date.parse(String(rule.expires || '') + 'T23:59:59');
+}
+
+function isTemporalRuleExpired(rule, now) {
+  const t = temporalExpiresMs(rule);
+  return !isNaN(t) && t <= now;
+}
+
+function expireTemporalRules() {
+  const rules = Array.isArray(settings.temporalRules) ? settings.temporalRules : [];
+  if (!rules.length) return;
+  const now = Date.now();
+  if (!rules.some((r) => isTemporalRuleExpired(r, now))) return;
+
+  const live = rules.filter((r) => !isTemporalRuleExpired(r, now));
+
+  // Which keywords may leave the active list: expired, no longer covered by a live rule, and
+  // not one the user already had before the timer was set.
+  const drop = new Set();
+  for (const r of rules) {
+    if (!isTemporalRuleExpired(r, now)) continue;
+    const kw = String((r && r.keyword) || '');
+    if (!kw || r.permanentBefore) continue;
+    if (live.some((x) => String((x && x.keyword) || '') === kw)) continue;
+    drop.add(kw);
+  }
+
+  // In memory FIRST: the re-scan that follows this load must not hide with a lapsed rule.
+  settings.temporalRules = live;
+  if (drop.size) {
+    settings.keywords = (Array.isArray(settings.keywords) ? settings.keywords : [])
+      .filter((k) => !drop.has(String(k)));
+  }
+
+  // Then persist, so the popup and every other open tab agree without waiting for a render.
+  // Read-modify-write, never a blind whole-object write — this tab does not own `keywords`.
+  if (!isExtensionValid()) return;
+  try {
+    chrome.storage.local.get(['keywords', 'temporalRules'], (cur) => {
+      if (chrome.runtime?.lastError) return;
+      const out = {};
+      if (Array.isArray(cur && cur.temporalRules)) {
+        out.temporalRules = cur.temporalRules.filter((r) => !isTemporalRuleExpired(r, now));
+      }
+      if (drop.size && Array.isArray(cur && cur.keywords)) {
+        out.keywords = cur.keywords.filter((k) => !drop.has(String(k)));
+      }
+      if (!Object.keys(out).length) return;
+      try {
+        chrome.storage.local.set(out, () => {
+          if (chrome.runtime?.lastError) return;
+          if (Array.isArray(out.keywords)) settings.keywords = out.keywords;
+        });
+      } catch (_) { }
+    });
+  } catch (_) { }
+}
 
 function loadSettings() {
   return new Promise((resolve) => {
@@ -155,16 +337,21 @@ function loadSettings() {
         'huntMode',
         'chipRescue',
         'newToYouAuto',
+        'extensionEnabled',
         'keywordExceptions',
-        'temporalRules'
+        'temporalRules',
+        AI_DECISION_STORAGE_KEY
       ], (res) => {
         if (chrome.runtime?.lastError) { resolve(); return; }
         settings.channels = (Array.isArray(res.channels) ? res.channels : settings.channels)
           .filter(c => {
             const raw = String(c || '').trim();
             if (!raw) return false;
-            // Reject time-ago strings, view counts, and fragments leaked by old buggy code
-            if (isViewCountOrTimeText(raw)) return false;
+            // Reject time-ago strings, view counts, and fragments leaked by old buggy code.
+            // A channel NAME is not a metadata row, so isChannelNameText() re-admits the two
+            // name-shaped cases the row classifier rejects ("1900", "Live") — otherwise a rule
+            // the user saved for such a channel was DELETED here on every load.
+            if (!isChannelNameText(raw)) return false;
             // Reject entries that are just digits + letters (like "3w ago" that slipped through as "3w")
             if (/^\d+[smhdwy]$/i.test(raw)) return false;
             // Channel names can legitimately be short ("DJ", "AI") or numeric ("1900"), so
@@ -196,10 +383,20 @@ function loadSettings() {
         settings.huntMode = Boolean(res.huntMode);
         settings.chipRescue = Boolean(res.chipRescue);
         settings.newToYouAuto = Boolean(res.newToYouAuto);
+        settings.extensionEnabled = res.extensionEnabled !== false;
         settings.keywordExceptions = res.keywordExceptions && typeof res.keywordExceptions === 'object' ? res.keywordExceptions : {};
         settings.temporalRules = Array.isArray(res.temporalRules) ? res.temporalRules : [];
+        // Expire lapsed temporal rules HERE, in the context that does the hiding — the popup
+        // only prunes them when its Settings tab renders (see expireTemporalRules).
+        expireTemporalRules();
+        applyAiDecisions(res[AI_DECISION_STORAGE_KEY]);
 
-        injectBlacklistStyles();
+        // The master switch is applied FIRST, because the stylesheet itself is a
+        // hiding mechanism (shorts shelves and community posts are hidden by pure
+        // CSS). While paused we tear it down and restore every card instead of
+        // re-arming rules the user just asked us to stop enforcing.
+        if (settings.extensionEnabled) injectBlacklistStyles();
+        else restoreHiddenByRules();
         refreshSubscriptionKeySet();
         try { syncHuntMode(); } catch (_) { }
         resolve();
@@ -210,33 +407,13 @@ function loadSettings() {
   });
 }
 
-function saveSettings() {
-  if (!isExtensionValid()) return;
-  try {
-    chrome.storage.local.set({
-      channels: settings.channels,
-      keywords: settings.keywords,
-      whitelistChannels: settings.whitelistChannels,
-      blockShorts: settings.blockShorts,
-      shortsSubOnly: settings.shortsSubOnly,
-      blockCommunity: settings.blockCommunity,
-      autoDubMode: settings.autoDubMode,
-      chipRescue: settings.chipRescue,
-      newToYouAuto: settings.newToYouAuto,
-      enableQuickBlock: settings.enableQuickBlock,
-      triggerServerFeedback: settings.triggerServerFeedback,
-      aiAutonomous: settings.aiAutonomous,
-      aiSensitivity: settings.aiSensitivity,
-      aiModel: settings.aiModel,
-      aiTastePrompt: settings.aiTastePrompt,
-      aiSubscriptionProfile: settings.aiSubscriptionProfile,
-      aiDebaitTitles: settings.aiDebaitTitles,
-      aiDebaitModel: settings.aiDebaitModel,
-      tldwEnabled: settings.tldwEnabled,
-      huntMode: settings.huntMode
-    });
-  } catch (_) { }
-}
+// NOTE: the content script has no whole-settings writer on purpose. It used to
+// have saveSettings(), a blind chrome.storage.local.set() of the ENTIRE settings
+// object from this tab's memory; a quick-block in a background tab (which
+// deliberately skips settings reloads) therefore reverted every rule the popup had
+// just written. The content script only ever owns the `channels` and
+// `nyt_aiDecisions` keys, and both now go through read-modify-write helpers
+// (persistChannels / persistAiDecisions) that merge instead of replace.
 
 function isHomePath() {
   const p = window.location.pathname;
@@ -621,6 +798,79 @@ function getAiFeatureCss() {
         margin-top: 14px;
         flex-wrap: wrap;
       }
+      /* Keyword lab — a field for the user's own description of the video plus the
+         rules it produced. Sits next to the Blacklist Channel button because it is
+         the same job: "I know what this is, help me block it." */
+      .nyt-tldw-kwlab {
+        margin-top: 14px;
+        border-top: 1px solid rgba(255, 255, 255, 0.1);
+        padding-top: 12px;
+      }
+      .nyt-tldw-kwlab-label {
+        font-size: 11px;
+        color: #9aa3b2;
+        font-weight: 700;
+        letter-spacing: 0.3px;
+        text-transform: uppercase;
+        margin-bottom: 7px;
+      }
+      .nyt-tldw-kwrow {
+        display: flex;
+        gap: 8px;
+        align-items: stretch;
+      }
+      .nyt-tldw-kwinput {
+        flex: 1 1 auto;
+        min-width: 0;
+        background: rgba(255, 255, 255, 0.06);
+        border: 1px solid rgba(255, 255, 255, 0.16);
+        border-radius: 8px;
+        padding: 8px 10px;
+        color: #f1f1f1;
+        font-size: 12px;
+        font-family: Roboto, Arial, sans-serif;
+        outline: none;
+      }
+      .nyt-tldw-kwinput::placeholder { color: #7d8695; }
+      .nyt-tldw-kwinput:focus { border-color: rgba(123, 226, 255, 0.6); }
+      .nyt-tldw-kwsuggest {
+        background: #2ba0ff;
+        color: #fff;
+        white-space: nowrap;
+        flex: 0 0 auto;
+      }
+      .nyt-tldw-kwchips {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin-top: 9px;
+      }
+      .nyt-tldw-kwchip {
+        background: rgba(94, 168, 255, 0.16);
+        border: 1px dashed rgba(94, 168, 255, 0.6);
+        color: #bcd8ff;
+        border-radius: 14px;
+        padding: 4px 11px;
+        font-size: 11.5px;
+        font-weight: 600;
+        cursor: pointer;
+        font-family: Roboto, Arial, sans-serif;
+        transition: background 0.15s, color 0.15s;
+      }
+      .nyt-tldw-kwchip:hover { background: rgba(94, 168, 255, 0.34); color: #fff; }
+      .nyt-tldw-kwchip.added {
+        background: rgba(43, 166, 64, 0.22);
+        border-style: solid;
+        border-color: rgba(43, 166, 64, 0.7);
+        color: #7ee29a;
+        cursor: default;
+      }
+      .nyt-tldw-kwnote {
+        font-size: 11px;
+        color: #9aa3b2;
+        margin-top: 7px;
+        line-height: 1.4;
+      }
       .nyt-tldw-action {
         border: none;
         border-radius: 8px;
@@ -698,6 +948,26 @@ function isViewCountOrTimeText(text) {
   return false;
 }
 
+// Is this text usable as a CHANNEL IDENTITY (a display name, a handle, a slug)?
+//
+// isViewCountOrTimeText() answers "is this metadata ROW a view count or a timestamp?" — a
+// question where a bare number and the bare word "live" are genuinely ambiguous (a compact
+// row can render "1900" for the views and "LIVE" for a badge). A channel NAME is not a row:
+// "1900" and "Live" are real channels, and asking the row question here did two bad things —
+// it made those channels unblockable, and worse, it DELETED a saved rule for them on every
+// load ("I blocked it and it came back", with the entry silently gone from the list).
+//
+// So the row classifier stays strict, and identity decisions go through this wrapper, which
+// only re-admits the two genuinely name-shaped cases.
+function isChannelNameText(text) {
+  if (!text) return false;
+  const s = String(text).trim();
+  if (!s) return false;
+  if (!isViewCountOrTimeText(s)) return true;
+  if (/^\d+(\.\d+)?$/.test(s)) return true;   // "1900", "24" — a numeric channel name
+  return /^live$/i.test(s);                   // a channel called "Live"
+}
+
 // Catastrophic-backtracking signatures: a group containing a nested quantifier OR an
 // alternation, itself quantified from outside — e.g. (a+)+, (a|aa)+$, (ab|a)*. Checked
 // before any user/imported regex runs.
@@ -721,6 +991,11 @@ function hasWordBoundaryKeyword(text, keyword) {
   try {
     const cleanKw = cleanChannelText(keyword);
     const cleanT = cleanChannelText(text);
+    // A keyword that normalizes away must NEVER match. cleanChannelText() strips YouTube's
+    // "verified" word and its badge glyphs (✔ / ✓ / •), so a rule like `verified`, a
+    // whitespace-only rule, or a pasted badge character reduces the pattern below to `\b\b`
+    // — an expression that matches EVERY title. One such rule blanked the entire feed.
+    if (!cleanKw) return false;
     if (cleanKw.length > 200) return cleanT.includes(cleanKw.toLowerCase());
     // \b is ASCII-word only: it can NEVER match keywords that start or end
     // with a non-word character, and it is a no-op after those characters.
@@ -777,13 +1052,13 @@ function extractChannelNamesFromByline(text) {
     const beforeMore = clean.replace(/(?:,\s*|\s+)\s*(?:and|&)\s+\d+\s+more$/i, '');
     const parts = beforeMore.split(/\s*,\s*|\s+(?:and|&)\s+/i)
       .map(p => cleanChannelText(p))
-      .filter(p => p.length > 2 && !isViewCountOrTimeText(p));
+      .filter(p => p.length > 2 && isChannelNameText(p));
     if (parts[0]) names.add(parts[0]);
     for (const p of parts) { if (p && !names.has(p)) names.add(p); }
   } else {
     // Not an "X and N more" overlay — the clean text is the channel name itself.
     // But still skip it if it looks like view-count/time text.
-    if (!isViewCountOrTimeText(clean)) names.add(clean);
+    if (isChannelNameText(clean)) names.add(clean);
   }
 
   return Array.from(names);
@@ -845,7 +1120,7 @@ function getChannelName(card) {
 
   for (const el of candidates) {
     const t = cleanChannelText(el.textContent);
-    if (t && !isViewCountOrTimeText(t)) {
+    if (t && isChannelNameText(t)) {
       const decomp = extractChannelNamesFromByline(t);
       // decomp[0] is the MAIN channel ("X" in "X and N more"); it is the
       // primary display name. Never return decomp[1] — that's a collaborator.
@@ -853,16 +1128,16 @@ function getChannelName(card) {
     }
     const title = el.getAttribute('title') || el.getAttribute('aria-label') || '';
     const cleaned = cleanChannelText(title.replace(/^go to channel\s+/i, ''));
-    if (cleaned && !isViewCountOrTimeText(cleaned)) return cleaned;
+    if (cleaned && isChannelNameText(cleaned)) return cleaned;
   }
 
   const anyChannelAnchor = card.querySelector?.('a[href*="/@"], a[href*="/channel/"], a[href*="/c/"], a[href*="/user/"]');
   if (anyChannelAnchor) {
     const t = cleanChannelText(anyChannelAnchor.textContent);
-    if (t && !isViewCountOrTimeText(t)) return t;
+    if (t && isChannelNameText(t)) return t;
     const title = anyChannelAnchor.getAttribute('title') || anyChannelAnchor.getAttribute('aria-label') || '';
     const cleaned = cleanChannelText(title.replace(/^go to channel\s+/i, ''));
-    if (cleaned && !isViewCountOrTimeText(cleaned)) return cleaned;
+    if (cleaned && isChannelNameText(cleaned)) return cleaned;
   }
 
   return '';
@@ -884,7 +1159,7 @@ function getCardChannelKeys(card) {
 
   for (const c of rawCandidates) {
     const t = cleanChannelText(c.textContent);
-    if (t && !isViewCountOrTimeText(t)) {
+    if (t && isChannelNameText(t)) {
       // Skip YouTube's multi-collaborator overlay text ("X and N more") —
       // extractChannelNamesFromByline handles decomposition; the full overlay
       // string is NOT a valid channel key.
@@ -892,21 +1167,21 @@ function getCardChannelKeys(card) {
         const decomp = extractChannelNamesFromByline(t);
         for (const d of decomp) {
           const norm = normalizeChannel(d);
-          if (norm && norm.length > 2 && !isViewCountOrTimeText(norm)) keys.add(norm);
+          if (norm && norm.length > 2 && isChannelNameText(norm)) keys.add(norm);
         }
       } else {
         keys.add(normalizeChannel(t));
         const decomp = extractChannelNamesFromByline(t);
         for (const d of decomp) {
           const norm = normalizeChannel(d);
-          if (norm && norm.length > 2 && !isViewCountOrTimeText(norm)) keys.add(norm);
+          if (norm && norm.length > 2 && isChannelNameText(norm)) keys.add(norm);
         }
       }
     }
   }
 
   const name = getChannelName(card);
-  if (name && !isViewCountOrTimeText(name)) {
+  if (name && isChannelNameText(name)) {
     // Don't add the full "X and N more" overlay as a key — only its decomposed parts
     if (!/^(?:.+?)\s+(?:and|&)\s+\d+\s+more$/i.test(name)) {
       keys.add(normalizeChannel(name));
@@ -914,7 +1189,7 @@ function getCardChannelKeys(card) {
     const decomp = extractChannelNamesFromByline(name);
     for (const d of decomp) {
       const norm = normalizeChannel(d);
-      if (norm && norm.length > 2 && !isViewCountOrTimeText(norm)) keys.add(norm);
+      if (norm && norm.length > 2 && isChannelNameText(norm)) keys.add(norm);
     }
   }
 
@@ -950,25 +1225,113 @@ function getCardChannelKeys(card) {
       const title = a.getAttribute('title') || a.getAttribute('aria-label') || '';
       if (title) {
         const cleaned = cleanChannelText(title.replace(/^go to channel\s+/i, ''));
-        if (cleaned && !isViewCountOrTimeText(cleaned)) {
+        if (cleaned && isChannelNameText(cleaned)) {
           if (!/^(?:.+?)\s+(?:and|&)\s+\d+\s+more$/i.test(cleaned)) {
             keys.add(normalizeChannel(cleaned));
           }
           const decomp = extractChannelNamesFromByline(cleaned);
           for (const d of decomp) {
             const norm = normalizeChannel(d);
-            if (norm && norm.length > 2 && !isViewCountOrTimeText(norm)) keys.add(norm);
+            if (norm && norm.length > 2 && isChannelNameText(norm)) keys.add(norm);
           }
         }
       }
       const anchorText = cleanChannelText(a.textContent);
-      if (anchorText && !isViewCountOrTimeText(anchorText)) {
+      if (anchorText && isChannelNameText(anchorText)) {
         keys.add(normalizeChannel(anchorText));
       }
     }
   }
 
   return Array.from(keys);
+}
+
+// Durable channel identities as they appear in a channel link's href.
+const CHANNEL_ENTITY_RE = /^\/(@[^/?#]+|channel\/[^/?#]+|c\/[^/?#]+|user\/[^/?#]+)/;
+
+// High-CONFIDENCE channel identities — the subset of a card's keys that is safe to
+// persist as a permanent channel block.
+//
+// getCardChannelKeys() is deliberately generous, because it has to match whatever a
+// given layout happened to render (and is also compared against the user's typed
+// rules). It therefore carries noise: video ids, view counts, time-ago strings and
+// name fragments produced by splitting a multi-collaborator byline. Persisting all
+// of it once poisoned the blocklist with entries like "3w ago" and "sam".
+//
+// Storing ONLY the display name is the opposite failure: a channel blocked from a
+// home-feed card does not fire on a surface that renders the handle or the channel
+// id instead — which is exactly the "I blocked it and it came back" report. So a
+// block persists the display name AND the channel's own handle/ID/slug, scoped to
+// the card's own channel affordances so a collaboration guest is never blocked by
+// accident.
+function getChannelEntityKeys(card) {
+  const keys = new Set();
+  if (!card) return [];
+
+  const name = getChannelName(card);
+  const nameNorm = name && isChannelNameText(name) ? normalizeChannel(name) : '';
+  if (nameNorm) keys.add(nameNorm);
+
+  if (!card.querySelectorAll) return Array.from(keys);
+
+  const scoped = card.querySelectorAll(
+    '#owner a[href*="/@"], #owner a[href*="/channel/"], ' +
+    'ytd-video-owner-renderer a[href*="/@"], ytd-video-owner-renderer a[href*="/channel/"], ' +
+    '#channel-name a[href*="/@"], ytd-channel-name a[href*="/@"], ' +
+    'yt-content-metadata-view-model a[href*="/@"], yt-content-metadata-view-model a[href*="/channel/"], ' +
+    'yt-content-metadata-view-model a[href*="/c/"], yt-content-metadata-view-model a[href*="/user/"]'
+  );
+
+  for (const a of scoped) {
+    const href = a.getAttribute ? (a.getAttribute('href') || '') : '';
+    const m = href.match(CHANNEL_ENTITY_RE);
+    if (!m) continue;
+    // If the link carries visible text it must agree with the displayed channel
+    // name; a mismatch means this is not the primary channel identity.
+    const text = cleanChannelText(a.textContent);
+    if (text && nameNorm && isChannelNameText(text) && normalizeChannel(text) !== nameNorm) continue;
+    const raw = m[1];
+    const norm = raw.startsWith('@')
+      ? normalizeChannel(raw.slice(1))
+      : normalizeChannel(raw.split('/')[1] || '');
+    if (norm) keys.add(norm);
+  }
+
+  return Array.from(keys);
+}
+
+// Merge/remove channel entries with a read-modify-write, instead of the blind
+// whole-object write this used to do.
+//
+// blacklistActiveChannel() called saveSettings(), which pushed the content
+// script's ENTIRE in-memory settings object (keywords, whitelist, toggles, …) back
+// to storage. Any tab holding slightly stale settings — and the storage listener
+// deliberately no-ops while a tab is hidden — therefore reverted rules the popup
+// had just written. Only the `channels` key belongs to the content script.
+function persistChannels(addKeys, removeKeys) {
+  const add = (Array.isArray(addKeys) ? addKeys : []).filter(Boolean);
+  const drop = new Set((Array.isArray(removeKeys) ? removeKeys : []).map(k => String(k || '')));
+  if (!add.length && !drop.size) return;
+
+  // Optimistic in-memory update: the re-scan that follows the block must see it.
+  const optimistic = (Array.isArray(settings.channels) ? settings.channels.slice() : [])
+    .filter(k => !drop.has(String(k)));
+  for (const k of add) if (!optimistic.includes(k)) optimistic.push(k);
+  settings.channels = optimistic;
+
+  if (!isExtensionValid()) return;
+  try {
+    chrome.storage.local.get(['channels'], (res) => {
+      if (chrome.runtime?.lastError) return;
+      let current = Array.isArray(res && res.channels) ? res.channels.slice() : [];
+      current = current.filter(k => !drop.has(String(k)));
+      for (const k of add) if (!current.includes(k)) current.push(k);
+      chrome.storage.local.set({ channels: current }, () => {
+        if (chrome.runtime?.lastError) return;
+        settings.channels = current;
+      });
+    });
+  } catch (_) { }
 }
 
 function channelMatches(card, list) {
@@ -987,6 +1350,16 @@ function channelMatches(card, list) {
     const noAt = rawNorm.replace(/^@/, '');
     for (const k of cardKeys) {
       if (k.replace(/^@/, '') === noAt) return true;
+    }
+
+    // Same creator, different spelling: "Graham Hancock" (byline) vs "grahamhancock"
+    // (the squashed form a captured subscription snapshot stores). Equality of the
+    // alphanumeric core only, and only for cores long enough to be unambiguous.
+    const sq = squashChannelKey(rawNorm || entityKey);
+    if (sq) {
+      for (const k of cardKeys) {
+        if (squashChannelKey(k) === sq) return true;
+      }
     }
     return false;
   });
@@ -1007,17 +1380,21 @@ function buildSubscriptionKeySet() {
   for (let i = 0; i < channels.length; i++) {
     const ch = channels[i];
     if (!ch || typeof ch !== 'object') continue;
-    if (ch.name) {
-      const n = normalizeChannel(ch.name);
+    // Each identity is stored normalized AND squashed: the snapshot may hold a display
+    // name ("Graham Hancock") while a card renders the handle ("@grahamhancock") or the
+    // squashed form YouTube uses in some surfaces — see squashChannelKey().
+    const add = (v) => {
+      if (!v) return;
+      const n = normalizeChannel(v);
       if (n) set.add(n);
-    }
-    if (ch.handle) {
-      const h = normalizeChannel(ch.handle);
-      if (h) set.add(h);
-    }
+      const sq = squashChannelKey(v);
+      if (sq) set.add(sq);
+    };
+    if (ch.name) add(ch.name);
+    if (ch.handle) add(ch.handle);
     if (ch.url) {
       const ek = extractEntityKey(ch.url);
-      if (ek) set.add(ek.toLowerCase());
+      if (ek) add(ek);
     }
   }
   return set;
@@ -1042,8 +1419,34 @@ function cardIsSubscribed(card) {
   if (!keys.length) return false;
   for (let i = 0; i < keys.length; i++) {
     if (set.has(normalizeChannel(keys[i]))) return true;
+    // Spelling-insensitive form ("Graham Hancock" vs "grahamhancock") — without it the
+    // exemption silently missed channels whose snapshot entry is stored squashed, which is
+    // how keyword rules and 'smart' auto-dub ended up hiding videos from channels the user
+    // is subscribed to.
+    const sq = squashChannelKey(keys[i]);
+    if (sq && set.has(sq)) return true;
   }
   return false;
+}
+
+// The subscription snapshot as readable names/handles. Used for the AI Guardian's
+// never-block list (the prompt wants names, the matcher wants identities) and for the
+// popup's protected-channel reporting.
+function subscriptionDisplayNames() {
+  const out = [];
+  const seen = new Set();
+  const list = Array.isArray(settings.subsSnapshot) ? settings.subsSnapshot : [];
+  for (let i = 0; i < list.length; i++) {
+    const ch = list[i];
+    if (!ch || typeof ch !== 'object') continue;
+    const n = String(ch.name || ch.handle || '').trim();
+    if (!n) continue;
+    const k = n.toLowerCase();
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(n);
+  }
+  return out;
 }
 
 // ------------------------------------------------------------------
@@ -1139,6 +1542,35 @@ function measureFeedDiversity() {
 // ------------------------------------------------------------------
 // CARD EVALUATION & REVERSIBLE HIDING
 // ------------------------------------------------------------------
+// Grid slots that merely CONTAIN a card (as opposed to being one). Collapsing one
+// is an association, not a decision, so it needs its own marker: the shared
+// data-hidden-by-local-blacklist flag is set by every hider (channel, keyword, AI,
+// shorts) and can never distinguish "this slot holds something hidden" from "this
+// slot is itself supposed to be hidden".
+const GRID_SLOT_SELECTOR =
+  'ytd-rich-item-renderer, ytd-video-renderer, ytd-compact-video-renderer, ytd-grid-video-renderer, ytd-reel-item-renderer, ytd-playlist-video-renderer';
+const COLLAPSED_SLOT_FLAG = 'nytCollapsedSlot';
+
+function clearHiddenStyles(el) {
+  el.style.removeProperty('display');
+  el.style.removeProperty('visibility');
+  el.style.removeProperty('height');
+  el.style.removeProperty('min-height');
+  el.style.removeProperty('margin');
+  el.style.removeProperty('padding');
+  el.style.removeProperty('overflow');
+}
+
+function collapseSlot(el) {
+  el.dataset.hiddenByLocalBlacklist = 'true';
+  el.dataset[COLLAPSED_SLOT_FLAG] = '1';
+  el.style.setProperty('display', 'none', 'important');
+  el.style.setProperty('height', '0px', 'important');
+  el.style.setProperty('min-height', '0px', 'important');
+  el.style.setProperty('margin', '0px', 'important');
+  el.style.setProperty('padding', '0px', 'important');
+}
+
 function hideCardElement(card) {
   if (!card) return;
 
@@ -1152,57 +1584,144 @@ function hideCardElement(card) {
   card.style.setProperty('overflow', 'hidden', 'important');
 
   // If card is inside a grid slot (e.g. ytd-rich-item-renderer), collapse that grid slot
-  const outer = card.parentElement ? card.parentElement.closest(
-    'ytd-rich-item-renderer, ytd-video-renderer, ytd-compact-video-renderer, ytd-grid-video-renderer, ytd-reel-item-renderer, ytd-playlist-video-renderer'
-  ) : null;
+  const outer = card.parentElement ? card.parentElement.closest(GRID_SLOT_SELECTOR) : null;
 
   if (outer && outer !== card) {
-    outer.dataset.hiddenByLocalBlacklist = 'true';
-    outer.style.setProperty('display', 'none', 'important');
-    outer.style.setProperty('height', '0px', 'important');
-    outer.style.setProperty('min-height', '0px', 'important');
-    outer.style.setProperty('margin', '0px', 'important');
-    outer.style.setProperty('padding', '0px', 'important');
+    collapseSlot(outer);
   }
 }
 
 function unhideCardElement(card) {
   if (!card) return;
-  if (card.dataset.hiddenByLocalBlacklist !== 'true') return;
 
-  delete card.dataset.hiddenByLocalBlacklist;
-  card.style.removeProperty('display');
-  card.style.removeProperty('visibility');
-  card.style.removeProperty('height');
-  card.style.removeProperty('min-height');
-  card.style.removeProperty('margin');
-  card.style.removeProperty('padding');
-  card.style.removeProperty('overflow');
+  // The slot must be restored even when the CARD node no longer carries the
+  // marker. YouTube recycles and re-renders the inner card while the slot element
+  // survives, so the old early-return (which bailed out unless THIS node was
+  // flagged) left the slot collapsed at display:none !important for the life of
+  // the page — a permanent blank hole in the grid.
+  const outer = card.parentElement ? card.parentElement.closest(GRID_SLOT_SELECTOR) : null;
 
-  const outer = card.parentElement ? card.parentElement.closest(
-    'ytd-rich-item-renderer, ytd-video-renderer, ytd-compact-video-renderer, ytd-grid-video-renderer, ytd-reel-item-renderer, ytd-playlist-video-renderer'
-  ) : null;
-
-  if (outer && outer !== card) {
-    delete outer.dataset.hiddenByLocalBlacklist;
-    outer.style.removeProperty('display');
-    outer.style.removeProperty('height');
-    outer.style.removeProperty('min-height');
-    outer.style.removeProperty('margin');
-    outer.style.removeProperty('padding');
+  if (card.dataset.hiddenByLocalBlacklist === 'true' && card.dataset[COLLAPSED_SLOT_FLAG] !== '1') {
+    delete card.dataset.hiddenByLocalBlacklist;
+    clearHiddenStyles(card);
   }
+
+  if (outer && outer !== card && outer.dataset[COLLAPSED_SLOT_FLAG] === '1') {
+    // Only restore the slot when nothing left inside it is still hidden — a slot
+    // can host more than one card.
+    const stillHidden = outer.querySelectorAll
+      ? outer.querySelectorAll('[data-hidden-by-local-blacklist="true"]').length
+      : 0;
+    if (!stillHidden) {
+      delete outer.dataset[COLLAPSED_SLOT_FLAG];
+      delete outer.dataset.hiddenByLocalBlacklist;
+      clearHiddenStyles(outer);
+    }
+  }
+}
+
+// Repair collapsed slots whose inner card is gone or no longer hidden — e.g. the
+// card was recycled away, or the rule that hid it was deleted in the popup. Only
+// elements we collapsed BY ASSOCIATION are candidates, so a card hidden by its own
+// channel / keyword / AI / shorts rule is never resurrected.
+function reconcileCollapsedSlots() {
+  const slots = document.querySelectorAll('[data-nyt-collapsed-slot="1"]');
+  for (let i = 0; i < slots.length; i++) {
+    const slot = slots[i];
+    if (!slot || !slot.querySelectorAll) continue;
+    const stillHidden = slot.querySelectorAll('[data-hidden-by-local-blacklist="true"]').length;
+    if (stillHidden) continue;
+    delete slot.dataset[COLLAPSED_SLOT_FLAG];
+    delete slot.dataset.hiddenByLocalBlacklist;
+    clearHiddenStyles(slot);
+  }
+}
+
+// ------------------------------------------------------------------
+// MASTER SWITCH (PAUSE) — restore everything a rule hid
+// ------------------------------------------------------------------
+// Runs when `extensionEnabled` is false (from loadSettings and from processFeed).
+// Five independent hiding mechanisms have to be undone, each with its OWN marker:
+//   1. the rules stylesheet — hides shorts shelves / community posts via CSS only,
+//   2. `data-hidden-by-local-blacklist` — channel / keyword / AI / auto-dub cards,
+//   3. `data-nyt-collapsed-slot` — grid slots collapsed by association,
+//   4. `data-nyt-hidden-by-shorts` — reels the subscribed-only shorts filter hid,
+//   5. `data-debait-for` — titles the AI De-Baiter rewrote in place.
+// The injected hover controls are removed too: with the stylesheet gone they would
+// stay in the DOM as unstyled, permanently visible blobs on every thumbnail.
+function restoreHiddenByRules() {
+  // 1. Drop the stylesheet entirely — none of it should apply while paused.
+  try {
+    const style = document.getElementById('nyt-blacklist-styles');
+    if (style && style.parentNode) style.parentNode.removeChild(style);
+  } catch (_) { }
+
+  // 2 + 3. Un-hide every card and every slot this extension collapsed. collapseSlot()
+  // stamps BOTH markers on the slot, so the slot is in this node set as well.
+  try {
+    document.querySelectorAll('[data-hidden-by-local-blacklist="true"]').forEach(el => {
+      delete el.dataset.hiddenByLocalBlacklist;
+      delete el.dataset[COLLAPSED_SLOT_FLAG];
+      delete el.dataset.hiddenReason;
+      clearHiddenStyles(el);
+    });
+    // Belt and braces: repair any slot left collapsed with only the association marker.
+    reconcileCollapsedSlots();
+  } catch (_) { }
+
+  // 4. Reels the subscribed-only shorts filter hid (own marker, own pass).
+  try { unhideShorts(); } catch (_) { }
+
+  // 5. Put the real titles back. The De-Baiter rewrites the title ELEMENT in place,
+  //    so pausing has to restore the text or the titles stay AI-rewritten with no
+  //    badge left to toggle them back.
+  try {
+    document.querySelectorAll('[data-debait-for]').forEach(card => {
+      const el = getVideoTitleElement(card);
+      const orig = card.dataset.originalTitle;
+      if (el && orig && el.querySelector('.nyt-debait-title, .nyt-debait-badge')) {
+        el.textContent = orig;
+      }
+      delete card.dataset.debaitState;
+      delete card.dataset.debaitFor;
+      delete card.dataset.neutralTitle;
+      delete card.dataset.originalTitle;
+    });
+  } catch (_) { }
+
+  // Injected UI and floating helpers have no stylesheet to live off while paused.
+  try {
+    document.querySelectorAll('.nyt-quick-block-btn, .nyt-extract-kw-btn, .nyt-tldw-btn')
+      .forEach(el => { if (el.parentNode) el.parentNode.removeChild(el); });
+    document.querySelectorAll('.nyt-tldw-overlay, .nyt-tldw-modal')
+      .forEach(el => { if (el.parentNode) el.parentNode.removeChild(el); });
+    removeChipRescueButton();
+    huntStop();
+  } catch (_) { }
+
+  // The per-tab badge counts hidden cards; with nothing hidden it must read empty.
+  try {
+    if (lastBadgeCount !== 0) {
+      lastBadgeCount = 0;
+      safeSendRuntimeMessage({ type: 'UPDATE_BADGE', count: 0 });
+    }
+  } catch (_) { }
 }
 
 // ------------------------------------------------------------------
 // AUTO-DUBBED DETECTION
 // ------------------------------------------------------------------
-// "Auto-dubbed" is a BADGE, not part of the title. YouTube's real badges are
-// "Auto-dubbed", "Auto-dub", "Dubbed", "Dubbed (English)". The bare word "Dub"
-// must NEVER match — "Go to channel Dub FM" is a channel name, not a badge.
-const AUTO_DUB_BADGE_TEXT_RE = /auto-?dub(?:bed)?\b|dubb?ed\b/i;
+// "Auto-dubbed" is the ONLY tag that may trigger the auto-dub filter. YouTube renders it
+// as a badge/tag reading "Auto-dubbed" beside the title, and the user's rule for this
+// feature is explicit: hide a video when that tag is present, and never on any other
+// basis (the reported bug was ordinary, non-dubbed videos being hidden — ancient /
+// history uploads among them — by a detector that counted any label merely CONTAINING
+// "dubbed" as evidence). A tag is a whole string, so it is matched as one, anchored at
+// the start; the bare word "Dub" ("Go to channel Dub FX") still never matches.
+const AUTO_DUB_TAG_RE = /^\s*(?:audio\s*track\s*:\s*)?auto[-\s]?dub(?:bed)?\b/i;
 
 function isAutoDubBadgeText(text) {
-  return AUTO_DUB_BADGE_TEXT_RE.test(String(text || '').trim());
+  return AUTO_DUB_TAG_RE.test(String(text || '').trim());
 }
 
 const AUTO_DUB_BADGE_SELECTORS = [
@@ -1260,20 +1779,47 @@ function autoDubHideDecision(mode, subscribed, badgeText) {
 // `extraText` carries badge text (e.g. "Auto-dubbed") so plain keyword/regex
 // rules like `/auto.?dubbed/i` match the badge the same way they match titles.
 // `keywordExceptions` is { keyword: [channel1, channel2] } - channels exempt from that keyword.
-function keywordRulesHidden({ title, channel, keywords, subscribed, whitelisted, extraText, keywordExceptions }) {
+// `channelKeys` (optional) is the card's other identities (handle / channel id / slug) so an
+// exception saved as a handle is honoured on surfaces that render the display name only.
+//
+// The exception list for a keyword, resolved CASE-INSENSITIVELY. The popup writes keys
+// lowercased, but an imported or hand-edited backup can carry any casing, and the previous
+// exact-key lookup (`exc[kw.toLowerCase()]`) silently ignored those exceptions — the user's
+// "I exempted that channel and it still got hidden".
+function keywordExceptionList(exc, keyword) {
+  const want = canonicalKeywordLower(keyword);
+  if (!want) return [];
+  if (Array.isArray(exc[keyword])) return exc[keyword];
+  if (Array.isArray(exc[want])) return exc[want];
+  for (const k of Object.keys(exc)) {
+    if (String(k).trim().toLowerCase() === want && Array.isArray(exc[k])) return exc[k];
+  }
+  return [];
+}
+
+function keywordRulesHidden({ title, channel, keywords, subscribed, whitelisted, extraText, keywordExceptions, channelKeys }) {
   if (subscribed || whitelisted) return { hidden: false, reason: null, matchedKeyword: null };
   const kw = Array.isArray(keywords) ? keywords : [];
   const exc = keywordExceptions && typeof keywordExceptions === 'object' ? keywordExceptions : {};
   const haystacks = [title, extraText, channel].filter(v => typeof v === 'string' && v);
+
+  // Every identity THIS card is known by (display name, @handle, channel id, slug), so an
+  // exception the user saved as "@news" still exempts a card that only renders the display
+  // name — and vice versa. Matching the display name alone made handle-keyed exceptions
+  // silently ineffective.
+  const identities = new Set();
+  const addIdentity = (v) => { const n = normalizeChannel(v); if (n) identities.add(n); };
+  addIdentity(channel);
+  for (const k of (Array.isArray(channelKeys) ? channelKeys : [])) addIdentity(k);
+
   for (let i = 0; i < haystacks.length; i++) {
     for (let j = 0; j < kw.length; j++) {
       if (hasWordBoundaryKeyword(haystacks[i], kw[j])) {
         // Check if this channel is exempt from this keyword
-        const exemptChannels = exc[kw[j].toLowerCase()] || [];
-        const channelNorm = (channel || '').toLowerCase();
+        const exemptChannels = keywordExceptionList(exc, kw[j]);
         const isExempt = exemptChannels.some(c => {
-          const cn = c.toLowerCase();
-          return cn === channelNorm || cn === '@' + channelNorm.replace(/^@/, '');
+          const n = normalizeChannel(c);
+          return Boolean(n) && identities.has(n);
         });
         if (isExempt) continue; // Skip this keyword for this channel
         return { hidden: true, reason: `keyword in ${haystacks[i]}`, matchedKeyword: kw[j] };
@@ -1322,6 +1868,14 @@ function evaluateCard(card) {
     return { hidden: true, reason: `video:${vid}`, resolved: true };
   }
 
+  // Persisted AI Guardian decision. Consulted here (and not only in the batch
+  // handler) because processFeed() re-evaluates every card on every pass: without
+  // a matcher-level rule, the pass took the `else` branch and un-hid the card.
+  if (isAiBlocked(vid, title)) {
+    if (window.__blkDebug) console.log('[blkDebug] AI DECISION HIT:', vid || title);
+    return { hidden: true, reason: 'ai', resolved: true };
+  }
+
   // Auto-dubbed videos: the badge is the signal (title keyword rules can't see it).
   // Mode decides: 'total' hides even subscribed/watched channels ("not even from
   // channels I've watched"); 'smart' keeps subscribed channels; whitelist always
@@ -1344,7 +1898,9 @@ function evaluateCard(card) {
     extraText: badgeText,
     subscribed: subscribedForAutoDub,
     whitelisted: false, // whitelist already returned above
-    keywordExceptions: settings.keywordExceptions
+    keywordExceptions: settings.keywordExceptions,
+    // The card's channel identities, minus its video id (which is not a channel).
+    channelKeys: cardKeys.filter(k => !vid || k !== vid.toLowerCase())
   });
   if (kwDecision.hidden) {
     if (window.__blkDebug) console.log('[blkDebug] KEYWORD HIT:', kwDecision.reason);
@@ -1453,6 +2009,10 @@ function redirectAwayFromWatchPage(ms) {
 }
 
 function checkCurrentWatchPageVideo() {
+  // Master switch: paused means we must not pause the player or navigate the user
+  // away from a video, however blacklisted it is. (yt-navigate-finish calls this
+  // directly, not only through processFeed.)
+  if (!settings.extensionEnabled) return;
   if (!window.location.pathname.startsWith('/watch')) return;
 
   try {
@@ -1498,6 +2058,14 @@ function checkCurrentWatchPageVideo() {
 // FEED PROCESSING ENGINE
 // ------------------------------------------------------------------
 function processFeed(force = false) {
+  // MASTER SWITCH: the user paused the extension. Restore anything a rule hid
+  // (idempotent) and touch nothing else — no per-card evaluation, no AI batch, no
+  // debait pass, no badge update, no watch-page redirect.
+  if (!settings.extensionEnabled) {
+    restoreHiddenByRules();
+    return 0;
+  }
+
   // Hidden tabs (incl. leftovers from the old scan bug) cost ~nothing now.
   if (document.visibilityState === 'hidden') return 0;
   const cards = document.querySelectorAll(VIDEO_CARD_SELECTORS);
@@ -1542,6 +2110,12 @@ function processFeed(force = false) {
     // earlier-hid shorts shelves permanently hidden.
     try { unhideShorts(); } catch (_) { }
   }
+
+  // Repair any grid slot left collapsed after its card was recycled away or the
+  // rule that hid it was removed — otherwise the hole stays for the life of the
+  // page. Only slots collapsed BY ASSOCIATION are candidates (own marker), so a
+  // card hidden by its own channel/keyword/AI/shorts rule is never resurrected.
+  try { reconcileCollapsedSlots(); } catch (_) { }
 
   // End-screen cards on watch page
   if (window.location.pathname.startsWith('/watch')) {
@@ -1590,26 +2164,51 @@ let aiBatchPending = false;
 let aiEvalTimer = null;
 
 function scheduleAiEvaluation() {
-  if (!settings.aiAutonomous) return;
+  if (!settings.extensionEnabled || !settings.aiAutonomous) return;
   if (aiEvalTimer) clearTimeout(aiEvalTimer);
   aiEvalTimer = setTimeout(() => {
     runAiEvaluationBatch();
   }, 1200);
 }
 
+// A Guardian verdict whose stated reason is one of the user's own RULES. Rule enforcement
+// is deterministic and exact (keywordRulesHidden / hasWordBoundaryKeyword, mirrored by the
+// offline evaluator): a card that genuinely matched a rule is hidden BEFORE this batch is
+// even built (runAiEvaluationBatch skips cards flagged hiddenByLocalBlacklist), so a
+// rationale that cites a rule is the model reasoning from the rule list instead of from
+// the video. That is the reported "'10 Prehistoric Blades Made From Metal' matches the
+// 'top 10' rule" block — a title no rule in the list matches. Such verdicts are refused;
+// the Guardian is for the judgement calls a regex cannot make.
+//
+// This is a TEXT heuristic by nature (the model's rationale is free text), so it is kept
+// narrow: it only rejects verdicts that name a rule/blacklist as their basis.
+const AI_RULE_CITATION_RE = /\b(?:keyword|blacklist|block\s?list|rule|regex|pattern|blocked\s+channel|channel\s+block)s?\b/i;
+
+function aiRationaleCitesUserRule(rationale) {
+  return AI_RULE_CITATION_RE.test(String(rationale == null ? '' : rationale));
+}
+
 function runAiEvaluationBatch() {
-  if (!settings.aiAutonomous || aiBatchPending) return;
+  // The master switch is re-checked here: a batch timer armed before the user paused
+  // would otherwise still fire and hide cards seconds after they turned us off.
+  if (!settings.extensionEnabled || !settings.aiAutonomous || aiBatchPending) return;
   const cards = document.querySelectorAll(VIDEO_CARD_SELECTORS);
   const candidates = [];
 
   for (let i = 0; i < cards.length && candidates.length < 6; i++) {
     const card = cards[i];
+    if (!card) continue;
     if (card.dataset.hiddenByLocalBlacklist === 'true') continue;
 
     const vid = getVideoId(card);
     const title = getVideoTitle(card);
     const channel = getChannelName(card);
     if (!title || title.length < 5) continue;
+
+    // Already ruled on by the Guardian — blocked (hidden above, so already
+    // skipped) or explicitly allowed by the user's Undo. Never ask again: an
+    // Undo that gets re-blocked a second later is not an Undo.
+    if (isAiHandled(vid, title)) continue;
 
     // Keyed to the card's VIDEO, not a flat boolean. YouTube recycles card
     // elements; with a sticky 'true' a recycled element was never evaluated for
@@ -1620,7 +2219,10 @@ function runAiEvaluationBatch() {
     if (card.dataset.aiEvaluated === identity) continue;
 
     card.dataset.aiEvaluated = identity;
-    candidates.push({ card, id: identity, title, channel });
+    // The badge rides along: it is real evidence (e.g. "Auto-dubbed") that the
+    // model cannot see from the title, and the content-script matcher already
+    // treats it as a first-class signal.
+    candidates.push({ card, id: identity, vid, title, channel, badge: cardAutoDubBadgeText(card) });
   }
 
   if (!candidates.length) return;
@@ -1628,12 +2230,19 @@ function runAiEvaluationBatch() {
   aiBatchPending = true;
   safeSendRuntimeMessage({
     type: 'AI_EVALUATE_BATCH',
-    videos: candidates.map(c => ({ id: c.id, title: c.title, channel: c.channel })),
+    videos: candidates.map(c => ({ id: c.id, title: c.title, channel: c.channel, badge: c.badge || '' })),
     persona: [settings.aiTastePrompt, settings.aiSubscriptionProfile].filter(Boolean).join(' — '),
     sensitivity: settings.aiSensitivity,
     modelChoice: settings.aiModel,
     keywords: settings.keywords,
-    channels: settings.channels
+    channels: settings.channels,
+    // The user's protected channels: the model must never be allowed to block
+    // what the user explicitly whitelisted.
+    whitelist: settings.whitelistChannels,
+    // ...and the channels the user is subscribed to. The Guardian filters the
+    // DISCOVERY feed; it has no business second-guessing a channel the user chose.
+    // (Reported: it hid content from an ancient-history channel they are subscribed to.)
+    subscribed: subscriptionDisplayNames()
   }, (res) => {
     aiBatchPending = false;
     if (!res || !Array.isArray(res.evaluations)) {
@@ -1644,36 +2253,79 @@ function runAiEvaluationBatch() {
     }
 
     res.evaluations.forEach(ev => {
-      if (ev && ev.block) {
-        const match = candidates.find(c => c.id === ev.id);
-        if (match && match.card && match.card.isConnected && match.card.dataset.hiddenByLocalBlacklist !== 'true') {
-          hideCardElement(match.card);
-          match.card.dataset.hiddenByAi = 'true';
-          safeSendRuntimeMessage({ type: 'INCREMENT_BLOCKED', inc: 1 });
+      if (!ev || ev.block !== true) return;
+      const match = candidates.find(c => c.id === ev.id);
+      if (!match || !match.card || !match.card.isConnected) return;
+      if (match.card.dataset.hiddenByLocalBlacklist === 'true') return;
 
-          // Record in aiLog in storage
-          try {
-            chrome.storage.local.get(['aiLog'], (store) => {
-              if (chrome.runtime?.lastError) return;
-              const logs = Array.isArray(store && store.aiLog) ? store.aiLog : [];
-              logs.unshift({
-                title: match.title,
-                channel: match.channel,
-                rationale: ev.rationale || 'Flagged by AI Guardian',
-                date: new Date().toISOString()
-              });
-              chrome.storage.local.set({ aiLog: logs.slice(0, 30) }, () => { if (chrome.runtime?.lastError) return; });
-            });
-          } catch (_) { }
+      // USER-INTENT GATES, enforced HERE rather than in the prompt: an instruction a
+      // model can ignore is not a constraint, and the reported blocks were exactly the
+      // model ignoring its instructions.
+      //   * a whitelisted channel is never hidden by the Guardian (the same
+      //     whitelist-first precedence evaluateCard() applies to every other rule);
+      //   * nor is a channel in the user's subscription snapshot;
+      //   * nor is a verdict whose rationale claims one of the user's own rules matched
+      //     (see aiRationaleCitesUserRule — those blocks are deterministic elsewhere).
+      if (channelMatches(match.card, settings.whitelistChannels)) return;
+      if (cardIsSubscribed(match.card)) return;
+      if (aiRationaleCitesUserRule(ev.rationale)) return;
 
-          showToast(`🤖 AI Intercepted: "${match.title.slice(0, 35)}..." (${ev.rationale || 'Filtered'})`, () => {
-            unhideCardElement(match.card);
-            match.card.dataset.hiddenByAi = 'false';
-            delete match.card.dataset.lastSignature;
-            safeSendRuntimeMessage({ type: 'INCREMENT_BLOCKED', inc: -1 });
+      const key = aiDecisionKey(match.vid, match.title);
+      if (!key) return;
+
+      const rationale = ev.rationale || 'Flagged by AI Guardian';
+
+      // Persist FIRST. The hide must not depend on this DOM node surviving:
+      // storing it only as an inline style is what made AI blocks vanish on the
+      // next feed pass and on every refresh.
+      persistAiDecisions([{
+        key,
+        id: match.vid || '',
+        title: match.title,
+        channel: match.channel,
+        badge: match.badge || '',
+        rationale,
+        date: new Date().toISOString(),
+        state: 'blocked'
+      }], []);
+
+      hideCardElement(match.card);
+      match.card.dataset.hiddenByAi = key;
+      safeSendRuntimeMessage({ type: 'INCREMENT_BLOCKED', inc: 1 });
+
+      // Mirror into aiLog so the popup's Autonomous Guardian list keeps working.
+      try {
+        chrome.storage.local.get(['aiLog'], (store) => {
+          if (chrome.runtime?.lastError) return;
+          const logs = Array.isArray(store && store.aiLog) ? store.aiLog : [];
+          logs.unshift({
+            title: match.title,
+            channel: match.channel,
+            rationale,
+            date: new Date().toISOString()
           });
-        }
-      }
+          chrome.storage.local.set({ aiLog: logs.slice(0, 30) }, () => { if (chrome.runtime?.lastError) return; });
+        });
+      } catch (_) { }
+
+      showToast(`🤖 AI Intercepted: "${match.title.slice(0, 35)}..." (${rationale})`, () => {
+        // Undo writes a real allowlist decision, not just a style removal.
+        // Stripping the style alone left the model free to re-block the same
+        // video on its next pass — an Undo button that visibly did nothing.
+        persistAiDecisions([{
+          key,
+          id: match.vid || '',
+          title: match.title,
+          channel: match.channel,
+          rationale: 'Allowed by user (undo)',
+          date: new Date().toISOString(),
+          state: 'allowed'
+        }], []);
+        unhideCardElement(match.card);
+        delete match.card.dataset.hiddenByAi;
+        delete match.card.dataset.lastSignature;
+        safeSendRuntimeMessage({ type: 'INCREMENT_BLOCKED', inc: -1 });
+      });
     });
   });
 }
@@ -1856,6 +2508,10 @@ document.addEventListener('mouseover', (e) => {
   const thumb = getCardThumbnail(card);
   if (!thumb) return;
 
+  // Master switch off: inject no hover controls at all. With the stylesheet removed
+  // they would render as unstyled, permanently visible blobs on every thumbnail.
+  if (!settings.extensionEnabled) return;
+
   // Mouseover fires on every element transition — do the expensive layout
   // probe ONCE per thumbnail node, not on every move across its children.
   if (thumb.dataset.nytPosFixed !== '1') {
@@ -1921,7 +2577,10 @@ document.addEventListener('mouseover', (e) => {
       ev.preventDefault();
       ev.stopPropagation();
       ev.stopImmediatePropagation();
-      extractKeywordsFromCard(card);
+      // Extraction is async now (it may read the video's own description before
+      // answering). Swallow any rejection here — an unhandled one surfaces in the
+      // page console and reads as a broken extension.
+      extractKeywordsFromCard(card).catch(() => {});
     }, true);
 
     thumb.appendChild(kwBtn);
@@ -2019,6 +2678,8 @@ function findOpenSheetContainer() {
 }
 
 function injectCustomMenuItem() {
+  // Paused: YouTube's 3-dot menu must look completely stock, so our row is not added.
+  if (!settings.extensionEnabled) return null;
   const classicContainer = findOpenMenuContainer();
   const sheetContainer = findOpenSheetContainer();
   const container = classicContainer || sheetContainer;
@@ -2201,6 +2862,10 @@ function requestNativeServerFeedback() {
 }
 
 function blacklistActiveChannel(targetCard) {
+  // Single choke point for every "block this channel" gesture (quick-block, 3-dot
+  // menu row, right-click, the 'B' shortcut). Paused = the extension is off, so no
+  // user gesture may add a rule, hide a card, or trigger YouTube's own feedback.
+  if (!settings.extensionEnabled) return;
   if (targetCard) {
     activeMenuVideoCard = targetCard;
   }
@@ -2223,26 +2888,37 @@ function blacklistActiveChannel(targetCard) {
     return;
   }
 
-  const primaryName = channel || (cardKeys.find(k => !k.startsWith('youtu') && k.length > 2 && !isViewCountOrTimeText(k))) || vid || 'Unknown Channel';
-  let addedAny = false;
-  const newlyAddedKeys = [];
+  const primaryName = channel || (cardKeys.find(k => !k.startsWith('youtu') && k.length > 2 && isChannelNameText(k))) || vid || 'Unknown Channel';
 
-  // Only add the primary channel identity to the blocklist — NOT every cardKey.
-  // Card keys include view-counts, timestamps, split tokens, and other noise
-  // that must never become "channel" entries.
-  if (primaryName && !settings.channels.includes(normalizeChannel(primaryName))) {
-    const norm = normalizeChannel(primaryName);
-    settings.channels.push(norm);
-    newlyAddedKeys.push(norm);
-    addedAny = true;
+  // Only high-confidence identities become blocklist entries — never every
+  // cardKey. Card keys include view-counts, timestamps, split tokens and other
+  // noise that must never become "channel" entries; getChannelEntityKeys() is the
+  // scoped subset (display name + the channel's own handle / channel id / slug).
+  //
+  // Persisting the handle and channel id alongside the display name is what makes
+  // the block stick on EVERY surface — search results, watch-page sidebar, shorts
+  // shelves and channel pages do not all render the display name.
+  const toAdd = [];
+  const primaryNorm = normalizeChannel(primaryName);
+  for (const k of [primaryNorm, ...getChannelEntityKeys(card)]) {
+    const norm = normalizeChannel(k);
+    if (norm && !toAdd.includes(norm)) toAdd.push(norm);
+  }
+  // Nothing but an unresolved video identity: block that one video, never a
+  // fabricated channel name.
+  if (!primaryNorm && vid) {
+    const vidKey = vid.toLowerCase();
+    if (!toAdd.includes(vidKey)) toAdd.push(vidKey);
+  }
+
+  const newlyAddedKeys = toAdd.filter(norm => !settings.channels.includes(norm));
+  const addedAny = newlyAddedKeys.length > 0;
+  if (addedAny) {
+    persistChannels(newlyAddedKeys, []);
   }
   // (The previous "block only this video when the channel is unknown" fallback
   // was dead code: primaryName already falls back to vid, so the first branch
   // above handles it. Removed.)
-
-  if (addedAny) {
-    saveSettings();
-  }
 
   // Re-scan and hide all matching cards across the document
   let hidCount = 0;
@@ -2291,8 +2967,7 @@ function blacklistActiveChannel(targetCard) {
   // decrementing the counter would corrupt the all-time stats.
   const handleUndo = () => {
     if (newlyAddedKeys.length) {
-      settings.channels = settings.channels.filter(k => !newlyAddedKeys.includes(k));
-      saveSettings();
+      persistChannels([], newlyAddedKeys);
       safeSendRuntimeMessage({ type: 'INCREMENT_BLOCKED', inc: -hidCount });
     }
     unhideCardElement(card);
@@ -2307,7 +2982,7 @@ function blacklistActiveChannel(targetCard) {
   );
 }
 
-function showToast(message, onUndo) {
+function showToast(message, onUndo, detail) {
   let toast = document.getElementById('nyt-ext-toast');
   if (!toast) {
     toast = document.createElement('div');
@@ -2329,10 +3004,25 @@ function showToast(message, onUndo) {
   iconSpan.textContent = onUndo ? '🚫' : '✅';
   toast.appendChild(iconSpan);
 
+  // A single line cannot explain why a rule was refused. `detail` (optional) is the
+  // second, dimmer line: which generic rules were skipped, so the extraction is
+  // inspectable instead of looking arbitrary.
+  const msgCol = document.createElement('span');
+  msgCol.style.cssText = 'display:flex;flex-direction:column;gap:2px;min-width:0;';
+
   const msgSpan = document.createElement('span');
   msgSpan.style.cssText = 'max-width:280px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:500;';
   msgSpan.textContent = message;
-  toast.appendChild(msgSpan);
+  msgCol.appendChild(msgSpan);
+
+  if (typeof detail === 'string' && detail) {
+    const detailSpan = document.createElement('span');
+    detailSpan.style.cssText =
+      'max-width:300px;font-size:11.5px;opacity:.62;line-height:1.35;white-space:normal;';
+    detailSpan.textContent = detail;
+    msgCol.appendChild(detailSpan);
+  }
+  toast.appendChild(msgCol);
 
   if (typeof onUndo === 'function') {
     const undoBtn = document.createElement('button');
@@ -2392,62 +3082,88 @@ function heuristicDebaitTitle(title) {
 }
 
 // ------------------------------------------------------------------
-// QUICK KEYWORD EXTRACTION (from video title)
+// KEYWORD EXTRACTION (title → video metadata → local model)
 // ------------------------------------------------------------------
 
-// Common filler/stop words to filter out when extracting candidate
-// blacklist keywords from a video title.
-const KW_STOP_WORDS = new Set([
-  'the', 'a', 'an', 'and', 'or', 'to', 'in', 'on', 'of', 'for', 'is', 'it', 'at', 'by',
-  'with', 'from', 'as', 'this', 'that', 'these', 'those', 'your', 'you', 'we', 'our',
-  'be', 'been', 'was', 'are', 'were', 'so', 'if', 'no', 'not', 'but', 'than', 'then',
-  'will', 'can', 'just', 'more', 'what', 'how', 'why', 'when', 'where', 'which', 'who',
-  'new', 'now', 'has', 'have', 'had', 'do', 'does', 'did', 'going', 'going', 'video',
-  'youtube', 'feat', 'ft', 'vs', 'vs.', 'and', 'or', 'the', 'this', 'that', 'these',
-  'those', 'very', 'really', 'still', 'ever', 'never', 'too', 'also', 'such', 'much',
-  'many', 'most', 'least', 'best', 'worst', 'better', 'worse', 'thing', 'things',
-]);
+// The stop-word tables and the ranker live in shared-tables.js
+// (NYT_KW_STOP_WORDS / NYT_KW_WEAK_ALONE / rankKeywordCandidates), not here: the
+// service worker's keyword-suggestion fallback must extract the SAME candidates from the
+// same text, or one engine offers a rule the other would never produce. The content
+// script's own extraction path calls rankKeywordCandidates directly
+// (see extractKeywordsFromCard) — there is no local wrapper to drift.
 
-// Extracts candidate keywords from the card's title text.
-// Returns an array of normalized keyword strings suitable for adding
-// directly to the keyword blacklist.
-function extractKeywordsFromTitle(title) {
-  if (!title || typeof title !== 'string') return [];
-  const t = title.trim();
-  if (!t) return [];
-
-  // Split on non-alphanumeric boundaries, then filter meaningful tokens.
-  const tokens = t.split(/[^a-zA-Z0-9]+/i).map(s => s.toLowerCase()).filter(Boolean);
-
-  const candidates = [];
-  const seen = new Set();
-
-  for (const token of tokens) {
-    if (!token || token.length < 3) continue;
-    if (KW_STOP_WORDS.has(token)) continue;
-    if (seen.has(token)) continue;
-    seen.add(token);
-    candidates.push(token);
-  }
-
-  // Also extract multi-word phrases (2-word and 3-word n-grams) that are
-  // NOT purely filler, to catch things like "year review", "holiday gift".
-  const filteredTokens = tokens.filter(t => t.length >= 3 && !KW_STOP_WORDS.has(t));
-  for (let i = 0; i < filteredTokens.length - 1; i++) {
-    for (let n = 2; n <= 3 && i + n <= filteredTokens.length; n++) {
-      const phrase = filteredTokens.slice(i, i + n).join(' ');
-      if (phrase.length >= 5 && !seen.has(phrase)) {
-        seen.add(phrase);
-        candidates.push(phrase);
-      }
-    }
-  }
-
-  return candidates;
+// Canonical storage form of a keyword rule (matches the popup's canonicalKeyword).
+function canonicalKeywordLower(kw) {
+  return String(kw == null ? '' : kw).trim().toLowerCase();
 }
 
-// Main entry point triggered by the quick-extract icon on a video card.
-function extractKeywordsFromCard(card) {
+// Persist keyword rules with a read-modify-write. Same reasoning as
+// persistChannels(): `keywords` is shared state, and a blind whole-list write from
+// a tab holding stale settings silently reverted whatever the popup had just saved.
+function persistKeywords(addKeys, removeKeys) {
+  const add = (Array.isArray(addKeys) ? addKeys : []).filter(Boolean);
+  const drop = new Set((Array.isArray(removeKeys) ? removeKeys : []).map(k => String(k || '')));
+  if (!add.length && !drop.size) return;
+
+  const optimistic = (Array.isArray(settings.keywords) ? settings.keywords.slice() : [])
+    .filter(k => !drop.has(String(k)));
+  for (const k of add) if (!optimistic.includes(k)) optimistic.push(k);
+  settings.keywords = optimistic;
+
+  if (!isExtensionValid()) return;
+  try {
+    chrome.storage.local.get(['keywords'], (res) => {
+      if (chrome.runtime?.lastError) return;
+      let current = Array.isArray(res && res.keywords) ? res.keywords.slice() : [];
+      current = current.filter(k => !drop.has(String(k)));
+      for (const k of add) if (!current.includes(k)) current.push(k);
+      chrome.storage.local.set({ keywords: current }, () => {
+        if (chrome.runtime?.lastError) return;
+        settings.keywords = current;
+        // Apply the new rules to the feed immediately.
+        if (typeof processFeed === 'function') setTimeout(() => processFeed(true), 250);
+      });
+    });
+  } catch (_) { }
+}
+
+// Adds rules to the keyword blacklist and offers an Undo.
+//
+// The rules PERSIST. The previous flow auto-removed them five seconds after the
+// toast appeared, which is why the feature looked broken: by the time the user
+// opened the Keywords tab the rules were already gone. Undo is the escape hatch
+// instead, which keeps the "never blacklist by accident" guarantee without
+// discarding the extraction the user explicitly asked for.
+function addExtractedKeywords(list, sourceLabel, detail) {
+  const toAdd = [];
+  for (const k of list) {
+    const norm = canonicalKeywordLower(k);
+    if (!norm || settings.keywords.includes(norm) || toAdd.includes(norm)) continue;
+    toAdd.push(norm);
+  }
+  if (!toAdd.length) {
+    showToast('Those keywords are already on your list');
+    return false;
+  }
+  persistKeywords(toAdd, []);
+  showToast(
+    `Added ${toAdd.length} keyword${toAdd.length > 1 ? 's' : ''}: ${toAdd.join(', ')}${sourceLabel ? ' ' + sourceLabel : ''}`,
+    () => {
+      persistKeywords([], toAdd);
+      showToast('Removed ' + toAdd.join(', '));
+    },
+    detail
+  );
+  return true;
+}
+
+// Main entry point for the key icon on a video card.
+//
+// Title-first, because it must stay instant for the common case — but the title is now
+// RANKED against the rest of the feed rather than sliced from the front. A THIN title
+// escalates: the video's own creator tags and description say what it is actually
+// about (they exist even when captions do not), and the local model weighs in too.
+async function extractKeywordsFromCard(card) {
   if (!card || !card.querySelector) {
     showToast('Could not extract keywords: no card found');
     return;
@@ -2462,55 +3178,160 @@ function extractKeywordsFromCard(card) {
     const anchor = card.querySelector('a#video-title-link');
     titleText = anchor ? (anchor.getAttribute('title') || anchor.getAttribute('aria-label') || '') : '';
   }
+  titleText = String(titleText || '').trim();
 
-  if (!titleText.trim()) {
+  if (!titleText) {
     showToast('No title found to extract keywords from');
     return;
   }
 
-  const keywords = extractKeywordsFromTitle(titleText);
-  if (!keywords.length) {
-    showToast('No meaningful keywords found to extract');
+  const channel = getChannelName(card);
+  const vid = getVideoId(card);
+  const otherTitles = collectOtherTitles(card);
+
+  // 1. Instant path: rank the title against the rest of the feed. If the title yields
+  //    ANY usable rule we are done — no network, no model, no waiting. There is no
+  //    minimum candidate count: a title whose single distinctive word is the subject
+  //    ("The Day We Got Out Of Prison" -> prison) has a complete answer already, and
+  //    demanding more candidates only forced a metadata fetch + model round trip on the
+  //    exact titles that needed it least. Escalation below is for titles that produced
+  //    nothing usable, not for titles that produced something good.
+  //    Nothing here looks at word position — that was the bug.
+  const droppedByFeed = [];
+  const fromTitle = rankKeywordCandidates({ title: titleText }, 8, otherTitles, droppedByFeed);
+  const titleSel = selectKeywordRules(fromTitle, settings.keywords, otherTitles, 3);
+  if (titleSel.terms.length) {
+    addExtractedKeywords(titleSel.terms, '(from title)', extractionDetail(titleSel, droppedByFeed));
     return;
   }
 
-  // Add extracted keywords to storage. We add only up to a reasonable
-  // cap to avoid spamming the blacklist from a single click.
-  const toAdd = keywords.slice(0, 8);
+  // 2. Thin title — or everything the title offered was too generic to keep. The
+  //    creator's tags and the description say what the video is actually about, and the
+  //    local model gets the rest of the feed too, so it cannot propose a rule that is
+  //    already everywhere on screen.
+  showToast('Reading the video\'s tags and description…');
+  let description = '';
+  let tags = [];
+  if (vid) {
+    try {
+      const meta = await fetchVideoMetadata(vid);
+      description = meta.shortDescription || '';
+      tags = meta.tags || [];
+    } catch (_) { }
+  }
 
-  chrome.storage.local.get(['keywords'], (result) => {
-    const existing = result.keywords || [];
-    const newOnes = toAdd.filter(k => !existing.includes(k));
-
-    if (!newOnes.length) {
-      showToast('All extracted keywords already in blacklist');
-      return;
+  let suggested = [];
+  let label = '';
+  try {
+    const res = await new Promise((resolve) => safeSendRuntimeMessage({
+      type: 'AI_SUGGEST_KEYWORDS',
+      title: titleText,
+      channel,
+      vid,
+      description,
+      tags,
+      otherTitles,
+      transcript: '',
+      note: '',
+      keywords: settings.keywords,
+      modelChoice: settings.aiModel
+    }, resolve));
+    if (res && res.ok && Array.isArray(res.keywords) && res.keywords.length) {
+      suggested = res.keywords;
+      label = res.isFallback ? '(from tags/metadata)' : '(AI)';
     }
+  } catch (_) { }
 
-    const updated = [...existing, ...newOnes];
-    chrome.storage.local.set({ keywords: updated }, () => {
-      settings.keywords = updated;
-      // Trigger a re-scan to apply the new keywords immediately
-      if (typeof processFeed === 'function') {
-        setTimeout(() => processFeed(true), 300);
-      }
-      showToast(
-        `Added ${newOnes.length} keyword${newOnes.length > 1 ? 's' : ''}: ${newOnes.join(', ')}`,
-        () => {
-          chrome.storage.local.get(['keywords'], (r) => {
-            const filtered = (r.keywords || []).filter(k => !newOnes.includes(k));
-            chrome.storage.local.set({ keywords: filtered }, () => {
-              settings.keywords = filtered;
-              if (typeof processFeed === 'function') {
-                setTimeout(() => processFeed(true), 300);
-              }
-              showToast('Removed ' + newOnes.join(', '));
-            });
-          });
-        }
-      );
-    });
-  });
+  // Model rules first (it read the user's own words when there were any), then the
+  // locally ranked text candidates — all through the same gate, because a rule that
+  // matches several cards on screen produces false positives whoever proposed it.
+  const local = rankKeywordCandidates({ title: titleText, tags, description, channel }, 8, otherTitles, droppedByFeed);
+  const sel = selectKeywordRules(suggested.concat(local), settings.keywords, otherTitles, 3);
+
+  if (!sel.terms.length) {
+    const detail = extractionDetail(sel, droppedByFeed);
+    showToast('No distinctive keyword in this video\'s text', undefined, detail ||
+      'Every candidate was too common to be a safe rule — open TL;DW and describe the video.');
+    return;
+  }
+  addExtractedKeywords(sel.terms, label, extractionDetail(sel, droppedByFeed));
+}
+
+// Titles of the OTHER cards on screen right now — a free local corpus for judging
+// whether a candidate describes THIS video or is just a phrase that happens to be
+// everywhere in the feed. No network, no model, roughly a millisecond.
+function collectOtherTitles(excludeCard, max) {
+  const cap = Math.max(1, Number(max) || 40);
+  const out = [];
+  const ex = excludeCard || null;
+  try {
+    const cards = document.querySelectorAll(VIDEO_CARD_SELECTORS);
+    for (let i = 0; i < cards.length && out.length < cap; i++) {
+      const card = cards[i];
+      if (!card || card === ex) continue;
+      // Feed cards nest, so skip anything that wraps the card being extracted for or is
+      // wrapped by it — otherwise the same video counts as "other" and skews the corpus.
+      if (ex && typeof card.contains === 'function' && card.contains(ex)) continue;
+      if (ex && typeof ex.contains === 'function' && ex.contains(card)) continue;
+      const el = getVideoTitleElement(card);
+      if (!el) continue;
+      const t = String(el.textContent || el.getAttribute('aria-label') || '').trim();
+      if (t.length > 3) out.push(t);
+    }
+  } catch (_) { }
+  return out;
+}
+
+// The last step before anything is written to the blacklist: de-duplicate, drop rules
+// the user already has, refuse rules too generic to stand alone, and refuse rules that
+// already match several other cards on screen. Returns what to offer AND what was
+// refused, so the toast can say so instead of quietly adding junk to the list.
+function selectKeywordRules(candidates, existing, otherTitles, limit) {
+  const cap = Math.max(1, Number(limit) || 3);
+  const have = Array.isArray(existing) ? existing : [];
+  const hitsLimit = nytKwFeedHitsLimit(otherTitles);
+  const out = [];
+  const generic = [];
+  const common = [];
+  const seen = new Set();
+  for (const raw of (Array.isArray(candidates) ? candidates : [])) {
+    const norm = canonicalKeywordLower(raw);
+    if (!norm || seen.has(norm) || have.includes(norm)) {
+      if (norm) seen.add(norm);
+      continue;
+    }
+    seen.add(norm);
+    // The two refusals are kept apart on purpose: "too generic" and "matches what is
+    // already on your screen" are different facts and the toast reports them separately.
+    if (nytKwIsGenericRule(norm)) { generic.push(norm); continue; }
+    if (hitsLimit !== Infinity && nytKwFeedHits(norm, otherTitles) >= hitsLimit) { common.push(norm); continue; }
+    if (out.length < cap) out.push(norm);
+  }
+  return { terms: out, generic, common, skipped: generic.concat(common) };
+}
+
+// "Added 2 keywords: prison, prison release (from title)" plus a second line naming what
+// was refused — "why did it pick THOSE" is the entire question being asked here.
+function extractionDetail(sel, droppedByFeed) {
+  const parts = [];
+  const generic = (sel && sel.generic) || [];
+  // Candidates the ranker refused for matching the visible feed, plus any the gate
+  // refused for the same reason: one list, one explanation.
+  const seen = new Set();
+  const common = [];
+  for (const k of ((sel && sel.common) || []).concat(Array.isArray(droppedByFeed) ? droppedByFeed : [])) {
+    if (!k || seen.has(k)) continue;
+    seen.add(k);
+    common.push(k);
+  }
+  const list = (arr) => arr.slice(0, 3).join(', ') + (arr.length > 3 ? ` (+${arr.length - 3} more)` : '');
+  if (generic.length) {
+    parts.push(`Skipped ${generic.length} too-generic rule${generic.length > 1 ? 's' : ''}: ${list(generic)}`);
+  }
+  if (common.length) {
+    parts.push(`Skipped ${common.length} rule${common.length > 1 ? 's' : ''} already matching other videos on screen: ${list(common)}`);
+  }
+  return parts.join(' · ');
 }
 
 function getVideoTitleElement(card) {
@@ -2532,7 +3353,7 @@ let debaitTimer = null;
 let lastDebaitRun = 0;
 
 function scheduleDebaitPass() {
-  if (!settings.aiDebaitTitles) return;
+  if (!settings.extensionEnabled || !settings.aiDebaitTitles) return;
   const now = Date.now();
   if (now - lastDebaitRun < 1500) return;
   if (debaitTimer) return;
@@ -2575,6 +3396,8 @@ function resetDebaitStateIfRecycled(card) {
 }
 
 function runDebaitPass() {
+  // A pass armed before the user paused must not rewrite titles while we are off.
+  if (!settings.extensionEnabled) return;
   lastDebaitRun = Date.now();
   const cards = document.querySelectorAll(VIDEO_CARD_SELECTORS);
   const candidates = [];
@@ -2779,16 +3602,29 @@ async function analyzeTldw(ctx) {
   let transcript = '';
   let durationSec = 0;
   let captionsFound = false;
+  let description = '';
+  let tags = [];
 
   try {
     const page = await fetchVideoPage(ctx.vid);
     durationSec = page.durationSec || 0;
+    // The description and the creator's declared tags are the ONLY text a video
+    // with captions disabled and a thin title has. They were being fetched here and
+    // thrown away, which is exactly why the report came back with nothing to act on.
+    description = page.shortDescription || '';
+    tags = page.tags || [];
     const track = pickCaptionTrack(page.captionTracks);
     if (track && track.baseUrl) {
       captionsFound = true;
       transcript = await fetchTranscript(track.baseUrl);
     }
   } catch (_) { }
+
+  // Stash the text signals on the context: the report's keyword lab runs a SECOND
+  // call once the user has typed a description, and it must not re-fetch the page.
+  ctx.transcript = transcript;
+  ctx.description = description;
+  ctx.tags = tags;
 
   let sent = false;
   try {
@@ -2797,7 +3633,13 @@ async function analyzeTldw(ctx) {
       transcript,
       title: ctx.title,
       modelChoice: settings.aiModel,
-      opts: { durationSec }
+      opts: {
+        durationSec, description, tags, keywords: settings.keywords,
+        // The visible feed, so the report's keyword chips go through the same
+        // feed-specificity guard as every other extraction path — without it a chip
+        // could be a phrase that already matches half the cards on screen.
+        otherTitles: ctx.card ? collectOtherTitles(ctx.card) : []
+      }
     }, (res) => {
       if (chrome.runtime?.lastError) res = null;
       try {
@@ -2832,13 +3674,37 @@ async function fetchVideoPage(vid) {
 
   let captionTracks = [];
   let durationSec = 0;
+  let shortDescription = '';
+  let tags = [];
   const pr = extractPlayerResponse(html);
   if (pr) {
     const tracks = extractCaptionsFromPlayerResponse(pr);
     if (Array.isArray(tracks)) captionTracks = tracks;
     durationSec = Number(pr.videoDetails && pr.videoDetails.lengthSeconds) || 0;
+
+    // Free signals that exist even when the title is thin and captions are absent:
+    // the creator's own description and their declared tags. They are what makes a
+    // no-caption video analysable at all, and they were being fetched and thrown
+    // away — only captionTracks and lengthSeconds were ever read from this response.
+    const vd = pr.videoDetails || {};
+    shortDescription = String(vd.shortDescription || '');
+    tags = Array.isArray(vd.keywords) ? vd.keywords.map(String).filter(Boolean) : [];
+    if (!shortDescription) {
+      try {
+        shortDescription = String(pr.microformat.playerMicroformatRenderer.description.simpleText || '');
+      } catch (_) { }
+    }
   }
-  return { captionTracks, durationSec };
+  return { captionTracks, durationSec, shortDescription, tags };
+}
+
+// Description + creator tags for a video, used when the card's title alone is too
+// thin to extract a keyword from. Reuses fetchVideoPage: the player response is the
+// same request, and the transcript is never fetched here.
+async function fetchVideoMetadata(vid) {
+  if (!vid) return { shortDescription: '', tags: [] };
+  const page = await fetchVideoPage(vid);
+  return { shortDescription: page.shortDescription || '', tags: page.tags || [] };
 }
 
 function extractPlayerResponse(html) {
@@ -2942,6 +3808,14 @@ function renderTldwResult(ctx, res, tr) {
     ? '<div style="font-size:11px;color:#ffb400;margin-top:8px;">⚠️ Public captions disabled — summary uses video metadata fallback.</div>'
     : '';
 
+  // The report's own first-pass suggestions. With no captions and a thin title the
+  // model may return none, which is exactly when the description box below earns
+  // its place — hence the placeholder copy rather than an empty gap.
+  const suggested = Array.isArray(summary.keywords) ? summary.keywords : [];
+  const kwNote = suggested.length
+    ? 'From this report — click one to add it to your keyword blacklist.'
+    : 'Thin transcript? Describe the video in your own words and get blockable keywords.';
+
   host.innerHTML = `
     <div class="nyt-tldw-modal">
       <div class="nyt-tldw-head">
@@ -2961,7 +3835,7 @@ function renderTldwResult(ctx, res, tr) {
 
       <div class="nyt-tldw-stats">
         <div class="nyt-tldw-stat">Estimated saved<strong>⏱️ ${timeSaved > 0 ? timeSaved + ' min' : '—'}</strong></div>
-        <div class="nyt-tldw-stat">Transcript source<strong>${tr.captionsFound ? 'Captions' : 'Metadata'}</strong></div>
+        <div class="nyt-tldw-stat">Text source<strong>${tr.captionsFound ? 'Captions' : (ctx.description ? 'Description' : 'Metadata')}</strong></div>
         <div class="nyt-tldw-stat">Model<strong>${summary.isFallback ? 'Heuristic' : 'Local AI'}</strong></div>
       </div>
 
@@ -2970,6 +3844,19 @@ function renderTldwResult(ctx, res, tr) {
       <div class="nyt-tldw-actions">
         <button class="nyt-tldw-action nyt-tldw-block" data-tldw-block="1">🚫 Blacklist Channel</button>
         <button class="nyt-tldw-action nyt-tldw-close" data-tldw-close="1">Close</button>
+      </div>
+
+      <div class="nyt-tldw-kwlab">
+        <div class="nyt-tldw-kwlab-label">🔑 Keyword blocker</div>
+        <div class="nyt-tldw-kwrow">
+          <input class="nyt-tldw-kwinput" data-tldw-note="1" type="text"
+                 placeholder="Describe it — e.g. low-effort crypto get-rich-quick reaction channel"
+                 aria-label="Describe this video or channel to get blockable keywords"
+                 autocomplete="off" spellcheck="false">
+          <button class="nyt-tldw-action nyt-tldw-kwsuggest" data-tldw-suggest="1">Suggest keywords</button>
+        </div>
+        <div class="nyt-tldw-kwchips" data-tldw-chips="1"></div>
+        <div class="nyt-tldw-kwnote" data-tldw-kwnote="1">${escapeHtml(kwNote)}</div>
       </div>
     </div>
   `;
@@ -2986,12 +3873,121 @@ function renderTldwResult(ctx, res, tr) {
       setTimeout(() => blacklistActiveChannel(ctx.card), 200);
     }, true);
   }
+
+  // Keyword lab wiring. The chips are pre-filled from the report's own suggestions;
+  // the field re-runs the suggestion with the user's description added, for the
+  // thin-input case the report alone cannot resolve.
+  const chipsEl = host.querySelector('[data-tldw-chips]');
+  renderTldwKeywordChips(chipsEl, suggested);
+
+  if (chipsEl) {
+    chipsEl.addEventListener('click', (e) => {
+      const chip = e.target && e.target.closest ? e.target.closest('[data-tldw-kw]') : null;
+      if (!chip || chip.disabled) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const kw = chip.getAttribute('data-tldw-kw');
+      if (kw && addExtractedKeywords([kw], '')) {
+        chip.classList.add('added');
+        chip.disabled = true;
+        chip.textContent = '✓ ' + kw;
+      }
+    }, true);
+  }
+
+  const suggestBtn = host.querySelector('[data-tldw-suggest]');
+  const kwInput = host.querySelector('[data-tldw-note]');
+  if (suggestBtn) {
+    suggestBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      runTldwKeywordSuggest(ctx, kwInput ? kwInput.value : '', host);
+    }, true);
+  }
+  if (kwInput) {
+    kwInput.addEventListener('keydown', (e) => {
+      // Never let a keystroke in this field reach YouTube's own shortcut handlers.
+      // (The content script's global 'B' quick-block already ignores inputs, but this
+      // keeps the page's handlers out too.)
+      e.stopPropagation();
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        runTldwKeywordSuggest(ctx, kwInput.value, host);
+      }
+    }, true);
+    kwInput.addEventListener('keyup', (e) => e.stopPropagation(), true);
+    kwInput.addEventListener('keypress', (e) => e.stopPropagation(), true);
+  }
+}
+
+// Renders candidate keyword rules as one-click chips. Chips already on the user's
+// blacklist render pre-added and inert, so the lab never looks like it dropped a
+// rule the user just added.
+function renderTldwKeywordChips(chipsEl, list) {
+  if (!chipsEl) return;
+  const existing = Array.isArray(settings.keywords) ? settings.keywords : [];
+  chipsEl.innerHTML = (Array.isArray(list) ? list : []).map(kw => {
+    const norm = canonicalKeywordLower(kw);
+    if (!norm) return '';
+    const added = existing.includes(norm);
+    return `<button class="nyt-tldw-kwchip${added ? ' added' : ''}" data-tldw-kw="${escapeHtml(norm)}"${added ? ' disabled' : ''}>${added ? '✓ ' : '+ '}${escapeHtml(norm)}</button>`;
+  }).join('');
+}
+
+// Second-pass keyword suggestion for the TL;DW report: title + description +
+// creator tags + transcript + whatever the user typed. This is the fix for "the
+// transcript and the title were both too thin to tell" — the user's own sentence is
+// usually the highest-signal input in the whole payload.
+function runTldwKeywordSuggest(ctx, note, host) {
+  const chipsEl = host.querySelector('[data-tldw-chips]');
+  const noteEl = host.querySelector('[data-tldw-kwnote]');
+  const clean = String(note || '').trim();
+
+  if (noteEl) {
+    noteEl.textContent = clean
+      ? 'Asking your local model…'
+      : 'Reading the video\'s title, description and tags…';
+  }
+
+  safeSendRuntimeMessage({
+    type: 'AI_SUGGEST_KEYWORDS',
+    title: ctx.title || '',
+    channel: ctx.channel || '',
+    vid: ctx.vid || '',
+    description: ctx.description || '',
+    tags: ctx.tags || [],
+    otherTitles: ctx.card ? collectOtherTitles(ctx.card) : [],
+    transcript: ctx.transcript || '',
+    note: clean,
+    keywords: settings.keywords,
+    modelChoice: settings.aiModel
+  }, (res) => {
+    // The modal may have been closed (or re-rendered for another video) while the
+    // model was thinking — bail instead of painting into a detached tree.
+    if (!host || !host.isConnected || host !== tldwModalHost) return;
+    if (!chipsEl || !chipsEl.isConnected) return;
+
+    const list = (res && res.ok && Array.isArray(res.keywords)) ? res.keywords : [];
+    renderTldwKeywordChips(chipsEl, list);
+    if (!noteEl) return;
+    if (!list.length) {
+      noteEl.textContent = 'Nothing keyword-worthy found — try describing the video more specifically.';
+    } else if (res.isFallback) {
+      noteEl.textContent = 'Suggestions from the video\'s own text (local model unavailable). Click one to add it to your keyword blacklist.';
+    } else {
+      noteEl.textContent = 'Model suggestions. Click one to add it to your keyword blacklist.';
+    }
+  });
 }
 
 // ------------------------------------------------------------------
 // OBSERVERS & EVENT LISTENERS
 // ------------------------------------------------------------------
 function scheduleFeedProcessing(delay = 80) {
+  // While paused the MutationObserver below keeps firing (YouTube mutates the feed
+  // constantly), so bailing here is what keeps a paused extension ~free. Re-enabling
+  // arrives through the storage / RULES_UPDATED path, which calls processFeed itself.
+  if (!settings.extensionEnabled) return;
   if (processTimer) clearTimeout(processTimer);
   processTimer = setTimeout(() => {
     processTimer = null;
@@ -3433,15 +4429,17 @@ function huntStop() {
 
 function syncHuntMode() {
   try {
-    if (settings.huntMode) huntStart();
+    if (settings.extensionEnabled && settings.huntMode) huntStart();
     else huntStop();
   } catch (_) { }
 }
 
 // These are the only storage keys that change WHICH videos get hidden. Counter /
-// log / UI writes (nyt_totalBlocked bumps on every block, hunt score, aiLog, ...)
-// must NOT force a full feed re-evaluation on every open YouTube tab.
-const RULE_KEYS = ['channels', 'keywords', 'whitelistChannels', 'subsSnapshot', 'blockShorts', 'shortsSubOnly', 'blockCommunity', 'autoDubMode', 'chipRescue', 'newToYouAuto', 'keywordExceptions', 'temporalRules'];
+// log / UI writes (nyt_totalBlocked bumps on every block, hunt score, huntScore,
+// ...) must NOT force a full feed re-evaluation on every open YouTube tab.
+// nyt_aiDecisions belongs here: an AI block recorded in one tab must hide the same
+// card in every other open tab, and undoing one must restore it there too.
+const RULE_KEYS = ['channels', 'keywords', 'whitelistChannels', 'subsSnapshot', 'blockShorts', 'shortsSubOnly', 'blockCommunity', 'autoDubMode', 'chipRescue', 'newToYouAuto', 'extensionEnabled', 'keywordExceptions', 'temporalRules', AI_DECISION_STORAGE_KEY];
 
 // Storage sync across tabs & popup
 if (isExtensionValid() && chrome?.storage?.onChanged) {
@@ -3543,10 +4541,10 @@ function initChipRescue() {
   removeChipRescueButton();
   if (chipRescueTimer) { clearTimeout(chipRescueTimer); chipRescueTimer = null; }
   chipRescuePolls = 0;
-  if (!settings.chipRescue || !isHomePath()) return;
+  if (!settings.extensionEnabled || !settings.chipRescue || !isHomePath()) return;
 
   const check = () => {
-    if (!settings.chipRescue || !isHomePath()) return;
+    if (!settings.extensionEnabled || !settings.chipRescue || !isHomePath()) return;
     // Only judge once the home feed rendered — YouTube can attach chips a beat late.
     const feedCards = document.querySelectorAll(VIDEO_CARD_SELECTORS).length;
     if (!feedCards) {
@@ -3629,10 +4627,10 @@ function shouldAutoEnterNewToYou(chipTexts, activeChipText, alreadyClicked) {
 
 function initNewToYouAuto() {
   if (newToYouTimer) { clearTimeout(newToYouTimer); newToYouTimer = null; }
-  if (!settings.newToYouAuto || !isHomePath()) return;
+  if (!settings.extensionEnabled || !settings.newToYouAuto || !isHomePath()) return;
 
   const check = (attempt) => {
-    if (!settings.newToYouAuto || !isHomePath()) return;
+    if (!settings.extensionEnabled || !settings.newToYouAuto || !isHomePath()) return;
     const chipsBar = document.querySelector('ytd-feed-filter-chip-bar-renderer, #chips-wrapper');
     if (!chipsBar) {
       // Chips can attach a beat late; give a few rounds, then shut up.
@@ -3703,6 +4701,9 @@ if (typeof module !== 'undefined' && module.exports) {
     extractChannelNamesFromByline,
     isAutoDubBadgeText,
     autoDubHideDecision,
+    cardIsSubscribed,
+    subscriptionDisplayNames,
+    aiRationaleCitesUserRule,
     chipRescueState,
     shouldAutoEnterNewToYou
   };

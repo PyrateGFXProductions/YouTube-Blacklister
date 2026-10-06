@@ -161,6 +161,8 @@ assert.strictEqual(localOnly(undefined, 'FALLBACK'), 'FALLBACK');
 assert.strictEqual(localOnly('http://localhost:11434/../../evil', 'FALLBACK'), 'http://localhost:11434', 'traversal must collapse to the origin');
 
 // Test 6: evaluateBatchWithAi respects sports persona in fallback
+// Tests 8-11 (below, same async chain): the user's own rules are HARD constraints.
+// Each of these was a real "the extension blocks too much / too little" report.
 console.log('Test 6: evaluateBatchWithAi persona-aware evaluation');
 (async () => {
   const testVideos = [
@@ -174,5 +176,99 @@ console.log('Test 6: evaluateBatchWithAi persona-aware evaluation');
   assert(v1 && v1.block === true, 'NBA video should be blocked by sports persona');
   assert(v2 && v2.block === false, 'Rust video should NOT be blocked');
 
-  console.log('All 7 Test Suites Passed Successfully! ✅');
-})();
+  // Test 8: a whitelisted channel is never blocked, whatever the persona says.
+  // The whitelist wins over every blacklist rule in content.js; a fallback that
+  // blocked a protected channel was the "it blocks too much" half of the report.
+  console.log('Test 8: user whitelist is a HARD stop in the offline fallback');
+  const wlRes = await bgContext.evaluateBatchWithAi(
+    [{ id: 'w1', title: 'NBA Finals Highlights', channel: 'ESPN' }, { id: 'w2', title: 'Basketball Weekly Roundup', channel: 'Serious News' }],
+    'block all ball sports related videos', 'balanced', 'non-existent-model', 'http://127.0.0.1:99999',
+    [], [], ['ESPN']
+  );
+  const w1 = wlRes.evaluations.find(e => e.id === 'w1');
+  const w2 = wlRes.evaluations.find(e => e.id === 'w2');
+  assert(w1 && w1.block === false, 'whitelisted ESPN must never be blocked, got: ' + JSON.stringify(w1));
+  assert(w2 && w2.block === true, 'an unprotected sports channel must still be blocked');
+  assert(/whitelist/i.test(w1.rationale || ''), 'the rationale should say WHY it was spared: ' + w1.rationale);
+
+  // Test 9: the user's keyword rules match the badge and the channel name, not only
+  // the title — the content script matches all three haystacks, so the fallback must
+  // agree or the same video is judged differently with/without the model.
+  console.log('Test 9: keyword rules match title, badge AND channel');
+  const badgeRes = await bgContext.evaluateBatchWithAi(
+    [{ id: 'b1', title: 'Episode 12', channel: 'Quiet Channel', badge: 'Auto-dubbed' }],
+    'nothing in particular', 'balanced', 'non-existent-model', 'http://127.0.0.1:99999',
+    ['auto-dubbed'], [], []
+  );
+  assert(badgeRes.evaluations[0].block === true, 'a badge-text keyword rule must fire, got: ' + JSON.stringify(badgeRes.evaluations[0]));
+  assert(/keyword rule/i.test(badgeRes.evaluations[0].rationale || ''), 'rationale should name the matched rule');
+
+  const chanRes = await bgContext.evaluateBatchWithAi(
+    [{ id: 'b2', title: 'Episode 12', channel: 'Dub FM' }],
+    'nothing in particular', 'balanced', 'non-existent-model', 'http://127.0.0.1:99999',
+    ['dub fm'], [], []
+  );
+  assert(chanRes.evaluations[0].block === true, 'a channel-name keyword rule must fire, got: ' + JSON.stringify(chanRes.evaluations[0]));
+
+  // Test 10: model output is validated, never trusted. A non-boolean `block` used to
+  // count as a block (the string "false" is truthy), and a hallucinated id maps onto
+  // no card at all.
+  console.log('Test 10: model output validation (hallucinated ids, non-boolean block)');
+  const realLlm = bgContext.queryLocalLlm;
+  bgContext.queryLocalLlm = async () => ({
+    ok: true,
+    content: JSON.stringify({
+      evaluations: [
+        { id: 'v1', block: 'false', rationale: 'string, not a boolean' },
+        { id: 'ghost-video', block: true, rationale: 'hallucinated id' },
+        { id: 'v2', block: true, rationale: 'genuine verdict' }
+      ]
+    })
+  });
+  const valRes = await bgContext.evaluateBatchWithAi(
+    [{ id: 'v1', title: 'A' }, { id: 'v2', title: 'B' }],
+    'anything', 'balanced', 'stub-model', undefined
+  );
+  bgContext.queryLocalLlm = realLlm;
+  assert(valRes.evaluations.length === 1, 'only the valid verdict should survive, got: ' + JSON.stringify(valRes.evaluations));
+  assert(valRes.evaluations[0].id === 'v2' && valRes.evaluations[0].block === true, 'the surviving verdict must be v2/true');
+
+  // Test 11: keyword suggestion. A thin title plus the user's own sentence must
+  // produce usable rules even with no model and no captions.
+  console.log('Test 11: keyword suggestion (offline fallback + sanitizer)');
+  assert(bgContext.sanitizeKeywordList(['ok', 'a b c d e f', 'the', 42, 'Valid Rule'], [], 10).length === 1,
+    'sanitizeKeywordList must drop short/over-long/non-string input');
+
+  const sanitized = bgContext.sanitizeKeywordList(
+    ['"Crypto Signals!"', 'crypto signals', 'get rich quick schemes now', 'Crypto', 'slop'],
+    ['slop'], 5
+  );
+  assert(sanitized[0] === 'crypto signals', 'quotes/punctuation stripped + lowercased, got: ' + JSON.stringify(sanitized));
+  assert(!sanitized.includes('crypto signals') === false && sanitized.filter(k => k === 'crypto signals').length === 1,
+    'duplicates collapse to one entry');
+  assert(sanitized.includes('crypto'), 'a second distinct rule survives');
+  assert(!sanitized.includes('slop'), 'rules the user already has are never re-suggested');
+  assert(!sanitized.some(k => k.split(' ').length > 4), 'rules longer than 4 words are rejected');
+
+  const thinSug = await bgContext.suggestKeywordsWithAi({
+    title: 'Episode 12', channel: 'Quiet Channel', description: '', tags: [], transcript: '', note: '',
+    keywords: [], modelChoice: 'non-existent-model', customUrl: 'http://127.0.0.1:99999'
+  });
+  assert(thinSug && thinSug.ok === false && thinSug.keywords.length === 0,
+    'a title with nothing but filler must yield NO rules (honest empty result), got: ' + JSON.stringify(thinSug));
+
+  const noteSug = await bgContext.suggestKeywordsWithAi({
+    title: 'Episode 12', channel: 'Quiet Channel', description: '', tags: [], transcript: '',
+    note: 'low-effort crypto get-rich-quick reaction channel that wastes my time',
+    keywords: [], modelChoice: 'non-existent-model', customUrl: 'http://127.0.0.1:99999'
+  });
+  assert(noteSug && noteSug.ok === true && noteSug.keywords.length > 0,
+    'the user\'s own description must produce rules, got: ' + JSON.stringify(noteSug));
+  assert(noteSug.keywords.includes('crypto'), 'expected "crypto" among ' + JSON.stringify(noteSug.keywords));
+  assert(noteSug.isFallback === true, 'with no reachable model this must be flagged as the offline fallback');
+
+  console.log('All 11 Test Suites Passed Successfully! ✅');
+})().catch((err) => {
+  console.error('AI Guardian test failed: ' + (err && err.message || err));
+  process.exit(1);
+});

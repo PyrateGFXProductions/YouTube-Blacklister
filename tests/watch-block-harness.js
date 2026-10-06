@@ -130,11 +130,17 @@ check('13: no keyword match -> not hidden',
     keywords: ['movie'], subscribed: false, whitelisted: false }),
   { hidden: false, reason: null, matchedKeyword: null });
 
-console.log('AUTO-DUB badge detection (badge text is the ONLY signal; titles never contain it):');
-// 14. badge text variants -> detected
-check('14: "Auto-dubbed" badge -> detected', isAutoDubBadgeText('Auto-dubbed'), true);
-check('15: "Dubbed" badge -> detected', isAutoDubBadgeText('Dubbed'), true);
-check('16: "Auto-dub" badge -> detected', isAutoDubBadgeText('Auto-dub'), true);
+console.log('AUTO-DUB badge detection (the "Auto-dubbed" TAG is the ONLY signal):');
+// 14-16. the auto-dub tag itself -> detected (long and short form of the same tag)
+check('14: "Auto-dubbed" tag -> detected', isAutoDubBadgeText('Auto-dubbed'), true);
+// 15. A PLAIN "Dubbed" label is NOT the Auto-dubbed tag. It appears in YouTube's audio-track
+//     picker on perfectly ordinary uploads, and counting it as evidence is what hid
+//     non-dubbed videos (the reported false positives). Only the Auto-dubbed tag counts.
+check('15: "Dubbed" (no auto- prefix) -> NOT detected', isAutoDubBadgeText('Dubbed'), false);
+check('16: "Auto-dub" tag -> detected', isAutoDubBadgeText('Auto-dub'), true);
+check('16b: "Audio track: Auto-dubbed" -> detected', isAutoDubBadgeText('Audio track: Auto-dubbed'), true);
+check('16c: a label merely CONTAINING "dubbed" -> NOT detected',
+  isAutoDubBadgeText('Dune (dubbed version) review'), false);
 // 17-19. non-badge text must NOT trigger
 check('17: "LIVE" badge -> not detected', isAutoDubBadgeText('LIVE'), false);
 check('18: "Premieres" badge -> not detected', isAutoDubBadgeText('Premieres in 2 days'), false);
@@ -256,8 +262,8 @@ check('50: "Go to channel Dub FM" is NOT an auto-dub badge',
 // 51. real badges still detected
 check('51: "Auto-dubbed" IS an auto-dub badge',
   isAutoDubBadgeText('Auto-dubbed'), true);
-check('52: "Dubbed (English)" IS an auto-dub badge',
-  isAutoDubBadgeText('Dubbed (English)'), true);
+check('52: "Dubbed (English)" is NOT the Auto-dubbed tag -> not a trigger',
+  isAutoDubBadgeText('Dubbed (English)'), false);
 check('53: "Dublin" is NOT a badge',
   isAutoDubBadgeText('Dublin'), false);
 // 54. regex /.../i rule path unaffected
