@@ -17,6 +17,28 @@ const OLLAMA_DEFAULT_URL = 'http://localhost:11434';
 const LMSTUDIO_DEFAULT_URL = 'http://localhost:1234';
 let blockedCounterQueue = Promise.resolve();
 
+// Channel-sample bounds for the subscription synthesizer prompt.
+// These mirror the values in content.js but must be defined here too —
+// the service worker cannot see content-script constants (isolated worlds).
+const CHANNEL_SAMPLE_MAX_VIDEOS = 6;
+const CHANNEL_SAMPLE_DESC_CHARS = 300;
+
+// Bundled in-browser AI provider (transformers.js + onnxruntime-web, vendored).
+// Loaded lazily on first use — no Ollama, no LM Studio, no other app required.
+let _bundledAi = null;
+let _bundledAiLoading = null;
+
+async function loadBundledAi() {
+  if (_bundledAi) return _bundledAi;
+  if (_bundledAiLoading) return _bundledAiLoading;
+  _bundledAiLoading = (async () => {
+    const mod = await import(chrome.runtime.getURL('bundled-ai.js'));
+    _bundledAi = mod.BundledAiProvider || globalThis.BundledAiProvider;
+    return _bundledAi;
+  })();
+  return _bundledAiLoading;
+}
+
 // Only loopback AI endpoints are ever contacted. `customUrl` rides in on the
 // message payload, so validating it here makes the "nothing leaves your machine"
 // guarantee a property of the code rather than a coincidence of the current popup
@@ -558,9 +580,26 @@ function auditKeywordConflicts(rules, channelEntries) {
   return conflicts;
 }
 
-// Synthesize blacklist rules from the user's actual YouTube subscriptions
-async function synthesizeSubscriptionRulesWithAi(channels, modelChoice, customUrl) {
+// Synthesize blacklist rules from the user's actual YouTube subscriptions.
+//
+// `options` (all optional): { samples: [{name, description, videos:[{title,description,length}]}],
+//   liked: string[], disliked: string[], existingProfile: string, tastePrompt: string }
+//
+// The samples are the whole point. A channel LIST can only support topic inference
+// ("you like drag racing"), which cannot express the preference that actually matters to a
+// viewer — Cleetus McFarland yes, Beater Bomb no; Matt's Off Road Recovery yes, Murphy's no.
+// Those pairs share a subject and differ in personality, presentation and edit, so the
+// model is given the creators' own titles/descriptions and asked for the STYLE the user
+// keeps choosing, plus a short list of presentation traits to hide. `liked`/`disliked` are
+// the user's own corrections and always outrank anything inferred.
+async function synthesizeSubscriptionRulesWithAi(channels, modelChoice, customUrl, options) {
   const baseUrl = customUrl || OLLAMA_DEFAULT_URL;
+  const opts = (options && typeof options === 'object') ? options : {};
+  const liked = Array.isArray(opts.liked) ? opts.liked.map(String).map(s => s.trim()).filter(Boolean).slice(0, 40) : [];
+  const disliked = Array.isArray(opts.disliked) ? opts.disliked.map(String).map(s => s.trim()).filter(Boolean).slice(0, 40) : [];
+  const existingProfile = String(opts.existingProfile || '').trim().slice(0, 800);
+  const tastePrompt = String(opts.tastePrompt || '').trim().slice(0, 1500);
+  const samples = Array.isArray(opts.samples) ? opts.samples.slice(0, 24) : [];
 
   // Flatten + bound the channel list (name + handle), defensive against malformed entries
   const cleanChannels = (channels || []).slice(0, 500).map(c => {
@@ -570,26 +609,70 @@ async function synthesizeSubscriptionRulesWithAi(channels, modelChoice, customUr
     return handle ? `${name} (${handle})` : name;
   }).filter(Boolean);
 
+  // The style evidence, as compact readable text rather than raw JSON — the model reasons
+  // far better about "titles look like this" than about an object graph, and it keeps the
+  // prompt inside a small model's context.
+  const styleBlock = samples.map(s => {
+    const vids = (s.videos || []).slice(0, CHANNEL_SAMPLE_MAX_VIDEOS).map(v => {
+      const len = v.length ? ` [${v.length}]` : '';
+      return `    - ${v.title}${len}`;
+    }).join('\n');
+    const desc = s.description ? `\n  About: ${String(s.description).slice(0, CHANNEL_SAMPLE_DESC_CHARS)}` : '';
+    return `- ${s.name}${s.handle ? ' ' + s.handle : ''}${desc}${vids ? '\n  Recent titles:\n' + vids : ''}`;
+  }).join('\n');
+
   const systemPrompt =
-    'You are the YouTube Slop Defense Intelligence. A user has provided their subscribed channel list. ' +
-    'Infer their dominant taste topics, then output ONLY valid JSON in this exact structure: ' +
-    '{"keywords": string[], "regex": string[], "rationale": string, "profile": string}. ' +
-    '"keywords" must contain 6-12 high-impact clickbait/slop keywords that parasitically ride the coattails of those topics ' +
-    '(e.g. fake "top 10" fact lists beside science subscriptions, crypto hype beside hardware subscriptions). ' +
-    'Never output a keyword that matches a subscribed channel name or handle. ' +
-    '"regex": 1-3 regex patterns. "profile": a short 2-4 word taste label. Do not output markdown codeblocks, just raw JSON.';
+    'You are the YouTube Taste Analyst for ONE viewer. You are given the channels they ' +
+    'subscribe to, plus — for a sample of those channels — the creator\'s own channel blurb ' +
+    'and recent video titles.\n' +
+    'Your job is NOT to name their topics. It is to describe the STYLE they keep choosing: ' +
+    'the presentation, tone, pacing, production feel and personality of the creators they ' +
+    'follow. Two channels can share a subject and differ completely in style — one is a ' +
+    'calm, well-edited documentary voice, the other is loud hype and manufactured outrage. ' +
+    'The viewer follows one and not the other, so style is the signal that matters.\n' +
+    'Output ONLY valid JSON in this exact structure: ' +
+    '{"profile": string, "styleLikes": string[], "styleDislikes": string[], ' +
+    '"keywords": string[], "regex": string[], "rationale": string, "sampleNotes": string}.\n' +
+    '- "profile": ONE sentence, max 25 words, describing the style this viewer enjoys. Not a topic list.\n' +
+    '- "styleLikes": 3-6 short phrases naming presentation/personality traits visible in the ' +
+    'sampled channels (e.g. "unscripted workshop builds", "dry deadpan narration", ' +
+    '"long-form single-project documentary").\n' +
+    '- "styleDislikes": 3-6 short phrases naming the PRESENTATION traits that are the ' +
+    'opposite of what they watch — the neighbouring style they do NOT follow (e.g. ' +
+    '"manufactured outrage", "shouty reaction faces", "listicle narration"). These describe ' +
+    'STYLE, never a topic and never a named channel.\n' +
+    '- "keywords": 6-12 blacklist keywords for clickbait/slop that parasitically rides the ' +
+    'viewer\'s topics. NEVER a keyword that matches a subscribed channel name or handle, and ' +
+    'never a bare topic word the viewer actually watches.\n' +
+    '- "regex": 1-3 regex patterns, each written as /pattern/i, targeting PRESENTATION ' +
+    'clickbait (shouty casing, bait phrases), not subject matter.\n' +
+    '- "rationale": 2-4 sentences explaining what you inferred and why.\n' +
+    '- "sampleNotes": one short sentence on what the sampled titles revealed about style.\n' +
+    'Do not output markdown codeblocks, just raw JSON.';
+
+  const userContent = [
+    `Subscribed channels (${cleanChannels.length}):\n${cleanChannels.join(', ')}`,
+    liked.length ? `\nChannels the viewer EXPLICITLY said they like (highest-weight evidence of their style):\n${liked.join(', ')}` : '',
+    disliked.length ? `\nChannels the viewer EXPLICITLY said they do NOT like (the style to move away from; never name these channels in any rule):\n${disliked.join(', ')}` : '',
+    tastePrompt ? `\nThe viewer's own description of what they want:\n${tastePrompt}` : '',
+    existingProfile ? `\nWhat was inferred previously (refine it, do not simply repeat it):\n${existingProfile}` : '',
+    styleBlock ? `\nStyle evidence from a sample of their channels:\n${styleBlock}` : '\n(No channel pages could be sampled this run — infer from names and say so in sampleNotes.)'
+  ].filter(Boolean).join('\n');
 
   let keywords = [];
   let regex = [];
   let rationale = '';
   let profile = '';
+  let styleLikes = [];
+  let styleDislikes = [];
+  let sampleNotes = '';
   let isFallback = false;
 
   try {
     const res = await queryLocalLlm({
       messages: [
         { role: 'system', content: systemPrompt },
-        { role: 'user', content: `Subscribed channels:\n${cleanChannels.join(', ')}` }
+        { role: 'user', content: userContent }
       ],
       format: 'json',
       model: modelChoice,
@@ -612,6 +695,10 @@ async function synthesizeSubscriptionRulesWithAi(channels, modelChoice, customUr
           if (name) forbidden.add(name.trim().toLowerCase());
           if (handle) forbidden.add(handle.replace(/\)$/, '').trim().toLowerCase().replace(/^@/, ''));
         });
+        // The channels the user explicitly dislikes are ALSO forbidden as rule text: the
+        // point is to learn their STYLE, not to blacklist a channel by name from here
+        // (that is what the channel blacklist is for, and it is one click).
+        disliked.forEach(d => forbidden.add(String(d).trim().toLowerCase().replace(/^@/, '')));
 
         keywords = [];
         parsed.keywords.forEach(k => {
@@ -622,6 +709,9 @@ async function synthesizeSubscriptionRulesWithAi(channels, modelChoice, customUr
         const rawRegex = Array.isArray(parsed.regex) ? parsed.regex : [];
         regex = rawRegex.map(normalizeRegexRule).filter(Boolean);
         rationale = parsed.rationale || 'Synthesized from subscription patterns by local neural model.';
+        styleLikes = Array.isArray(parsed.styleLikes) ? parsed.styleLikes.map(s => String(s).trim()).filter(Boolean).slice(0, 6) : [];
+        styleDislikes = Array.isArray(parsed.styleDislikes) ? parsed.styleDislikes.map(s => String(s).trim()).filter(Boolean).slice(0, 6) : [];
+        sampleNotes = typeof parsed.sampleNotes === 'string' ? parsed.sampleNotes.trim().slice(0, 240) : '';
         profile = typeof parsed.profile === 'string' && parsed.profile.trim()
           ? parsed.profile.trim().slice(0, 60)
           : '';
@@ -641,10 +731,21 @@ async function synthesizeSubscriptionRulesWithAi(channels, modelChoice, customUr
     isFallback = true;
   }
 
+  // A model that answered but returned no usable style text still deserves a readable
+  // profile: fall back to naming the sampled channels, so the UI never shows a blank.
+  if (!styleLikes.length && samples.length) {
+    styleLikes = samples.slice(0, 4).map(s => s.name).filter(Boolean);
+  }
+  if (!profile) {
+    profile = samples.length
+      ? `Style sample from ${samples.length} channels`
+      : 'Subscription Insights';
+  }
+
   // Semantic audit: which of the user's own subscriptions could these rules surface?
   const conflicts = auditKeywordConflicts([...keywords, ...regex], cleanChannels);
 
-  return { ok: true, keywords, regex, rationale, profile, conflicts, isFallback };
+  return { ok: true, keywords, regex, rationale, profile, styleLikes, styleDislikes, sampleNotes, sampled: samples.length, conflicts, isFallback };
 }
 
 // Evaluate candidate videos in batch.
@@ -1350,13 +1451,70 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
 
+  // --- Bundled in-browser AI provider (no Ollama / LM Studio needed) ---
+
+  if (msg.type === 'CHECK_BUNDLED_AI_STATUS') {
+    loadBundledAi()
+      .then(ai => ai.checkBundledAiStatus())
+      .then(res => sendResponse(res))
+      .catch((err) => { try { sendResponse({ ok: false, error: String((err && err.message) || err) }); } catch (_) {} });
+    return true;
+  }
+
+  if (msg.type === 'BUNDLED_AI_GET_MODELS') {
+    loadBundledAi()
+      .then(ai => sendResponse({ ok: true, models: ai.BUNDLED_AI_MODELS }))
+      .catch((err) => { try { sendResponse({ ok: false, error: String((err && err.message) || err) }); } catch (_) {} });
+    return true;
+  }
+
+  if (msg.type === 'BUNDLED_AI_GET_MODEL_STATUS') {
+    loadBundledAi()
+      .then(ai => ai.getBundledModelStatus(msg.modelKey))
+      .then(res => sendResponse({ ok: true, ...res }))
+      .catch((err) => { try { sendResponse({ ok: false, error: String((err && err.message) || err) }); } catch (_) {} });
+    return true;
+  }
+
+  if (msg.type === 'BUNDLED_AI_DOWNLOAD_MODEL') {
+    loadBundledAi()
+      .then(ai => ai.downloadBundledModel(msg.modelKey, (p) => {
+        // Forward progress to the popup
+        try { chrome.runtime.sendMessage({ type: 'BUNDLED_AI_PROGRESS', modelKey: msg.modelKey, ...p }).catch(() => {}); } catch (_) {}
+      }))
+      .then(res => sendResponse(res))
+      .catch((err) => { try { sendResponse({ ok: false, error: String((err && err.message) || err) }); } catch (_) {} });
+    return true;
+  }
+
+  if (msg.type === 'BUNDLED_AI_QUERY') {
+    loadBundledAi()
+      .then(ai => ai.queryBundledLlm({
+        messages: msg.messages,
+        format: msg.format,
+        model: msg.model,
+        timeoutMs: msg.timeoutMs,
+      }))
+      .then(res => sendResponse(res))
+      .catch((err) => { try { sendResponse({ ok: false, error: String((err && err.message) || err) }); } catch (_) {} });
+    return true;
+  }
+
+  if (msg.type === 'BUNDLED_AI_UNLOAD') {
+    loadBundledAi()
+      .then(ai => ai.unloadBundledModel())
+      .then(() => sendResponse({ ok: true }))
+      .catch((err) => { try { sendResponse({ ok: false, error: String((err && err.message) || err) }); } catch (_) {} });
+    return true;
+  }
+
   if (msg.type === 'AI_SYNTHESIZE_RULES') {
     synthesizeRulesWithAi(msg.prompt, msg.modelChoice, msg.customUrl).then(res => sendResponse(res)).catch((err) => { try { sendResponse({ ok: false, error: String((err && err.message) || err) }); } catch (_) {} });
     return true;
   }
 
   if (msg.type === 'AI_SYNTHESIZE_SUBSCRIPTION_RULES') {
-    synthesizeSubscriptionRulesWithAi(msg.channels, msg.modelChoice, msg.customUrl).then(res => sendResponse(res)).catch((err) => { try { sendResponse({ ok: false, error: String((err && err.message) || err) }); } catch (_) {} });
+    synthesizeSubscriptionRulesWithAi(msg.channels, msg.modelChoice, msg.customUrl, msg.options).then(res => sendResponse(res)).catch((err) => { try { sendResponse({ ok: false, error: String((err && err.message) || err) }); } catch (_) {} });
     return true;
   }
 

@@ -2475,6 +2475,184 @@ async function scrapeSubscriptions() {
   return { ok: true, channels, count: channels.length, url: location.href, signedIn: signedIn() };
 }
 
+// ------------------------------------------------------------------
+// CHANNEL TASTE SAMPLING
+// ------------------------------------------------------------------
+// "Synthesize Rules from My Subscriptions" used to see a channel list and nothing else, so
+// it could only ever reason about TOPIC ("you like drag racing"). The user's actual request
+// is finer than that: they follow Cleetus McFarland and not Beater Bomb, Matt's Off Road
+// Recovery and not Murphy's — same subject, different personality, presentation and edit.
+// Topic is the one thing that does NOT distinguish those pairs, so a topic-only profile
+// cannot express the preference at all.
+//
+// What distinguishes them IS readable from the outside: how the creator writes titles, what
+// the descriptions say, how long the videos are, whether they use ALL CAPS and hype, how
+// they name their series and their own on-camera persona. So for a bounded sample of
+// channels we read that public text and hand it to the local model, which can then name the
+// STYLE the user actually keeps choosing (and the neighbouring style they don't).
+//
+// All of this is the same-origin public page the extension is already allowed to read.
+// Nothing leaves the machine except to the user's own local model.
+const CHANNEL_SAMPLE_MAX_VIDEOS = 6;
+const CHANNEL_SAMPLE_DESC_CHARS = 300;
+const CHANNEL_SAMPLE_TITLE_CHARS = 110;
+
+// Pull the channel's own public blurb + a handful of recent uploads out of a
+// /videos page's ytInitialData. Pure and testable: no DOM, no network.
+function parseChannelPageSample(html, fallbackName) {
+  const out = { name: '', description: '', subscriberText: '', videos: [] };
+  // YouTube text is either a plain string, `{simpleText}`, or `{runs:[{text}]}`. Stringifying
+  // the object form yields "[object Object]" — which is how a video's length and description
+  // used to reach the model.
+  const textOf = (node) => {
+    if (node == null) return '';
+    if (typeof node === 'string') return node;
+    if (typeof node === 'object') {
+      if (typeof node.simpleText === 'string') return node.simpleText;
+      if (Array.isArray(node.runs)) return node.runs.map(r => (r && r.text) || '').join('');
+      if (typeof node.content === 'string') return node.content;
+    }
+    return '';
+  };
+  try {
+    const marker = 'ytInitialData';
+    const idx = html.indexOf(marker);
+    if (idx === -1) return out;
+    const open = html.indexOf('{', idx);
+    if (open === -1) return out;
+    // Balance braces so the trailing `;</script>` and any later JSON cannot truncate it.
+    let depth = 0, end = -1, inStr = false, esc = false;
+    for (let i = open; i < html.length; i++) {
+      const ch = html[i];
+      if (inStr) {
+        if (esc) { esc = false; continue; }
+        if (ch === '\\') { esc = true; continue; }
+        if (ch === '"') inStr = false;
+        continue;
+      }
+      if (ch === '"') { inStr = true; continue; }
+      if (ch === '{') depth++;
+      else if (ch === '}') { depth--; if (depth === 0) { end = i; break; } }
+    }
+    if (end === -1) return out;
+    const data = JSON.parse(html.slice(open, end + 1));
+    const header = data && data.header && (data.header.pageHeaderRenderer || data.header.c4TabbedHeaderRenderer);
+    if (header) {
+      const md = header.metadata && header.metadata.channelMetadataRenderer;
+      if (md) {
+        // The parsed title must WIN over the caller's fallback, not be blocked by it —
+        // the fallback is the scraped display name, which is the less reliable of the two.
+        if (md.title) out.name = textOf(md.title).trim();
+        out.description = textOf(md.description).replace(/\s+/g, ' ').trim().slice(0, 500);
+        out.subscriberText = textOf(md.subscriberCountText).trim();
+      }
+      if (!out.description && header.description) {
+        out.description = textOf(header.description).replace(/\s+/g, ' ').trim().slice(0, 500);
+      }
+    }
+    // Videos arrive either as richItemRenderer.content.videoRenderer or as
+    // richItemRenderer.content.lockupViewModel (the newer shape) — handle both.
+    const tabs = (data && data.contents && data.contents.twoColumnBrowseResultsRenderer
+      && data.contents.twoColumnBrowseResultsRenderer.tabs) || [];
+    const items = [];
+    const pushVideo = (v) => {
+      if (!v || !v.title) return;
+      const t = textOf(v.title);
+      const desc = textOf(v.descriptionSnippet).replace(/\s+/g, ' ').trim();
+      const len = textOf(v.lengthText).trim();
+      if (t) items.push({ title: t.trim(), description: desc, length: len });
+    };
+    const walk = (node, depth) => {
+      if (!node || depth > 14) return;
+      if (Array.isArray(node)) { node.forEach(n => walk(n, depth + 1)); return; }
+      if (typeof node !== 'object') return;
+      if (node.videoRenderer) pushVideo(node.videoRenderer);
+      if (node.gridVideoRenderer) pushVideo(node.gridVideoRenderer);
+      if (node.lockupViewModel) {
+        const lm = node.lockupViewModel;
+        let title = '';
+        try {
+          title = textOf(lm.metadata.lockupMetadataViewModel.title);
+        } catch (_) { }
+        if (title) items.push({ title: title.trim(), description: '', length: '' });
+      }
+      Object.keys(node).forEach(k => walk(node[k], depth + 1));
+    };
+    tabs.forEach(tab => walk(tab, 0));
+    out.videos = items.slice(0, CHANNEL_SAMPLE_MAX_VIDEOS).map(v => ({
+      title: v.title.slice(0, CHANNEL_SAMPLE_TITLE_CHARS),
+      description: v.description.slice(0, CHANNEL_SAMPLE_DESC_CHARS),
+      length: v.length
+    }));
+  } catch (_) { }
+  return out;
+}
+
+// Fetch ONE channel's public page and return its style sample. Bounded, best-effort:
+// a channel that cannot be resolved simply contributes nothing rather than failing the run.
+async function sampleChannelTaste(channel) {
+  const name = String((channel && channel.name) || '').trim();
+  const url = String((channel && channel.url) || '').trim();
+  let target = '';
+  if (url && /^https?:\/\/(www\.)?youtube\.com\//i.test(url)) {
+    target = url.split('?')[0].replace(/\/+$/, '');
+    if (!/\/videos$/.test(target)) target += '/videos';
+  } else if (url && /\/@|\/channel\/|\/c\/|\/user\//.test(url)) {
+    target = 'https://www.youtube.com' + url.split('?')[0].replace(/\/+$/, '') + '/videos';
+  } else {
+    return { ok: false, name, reason: 'no_url' };
+  }
+  try {
+    const res = await fetch(target, { credentials: 'include', headers: { accept: 'text/html' } });
+    if (!res.ok) return { ok: false, name, reason: 'http_' + res.status };
+    const html = await res.text();
+    const sample = parseChannelPageSample(html, name);
+    if (!sample.name) sample.name = name;
+    if (!sample.videos.length && !sample.description) return { ok: false, name, reason: 'no_data' };
+    return {
+      ok: true,
+      name: sample.name || name,
+      handle: String((channel && channel.handle) || '').trim(),
+      description: sample.description,
+      subscriberText: sample.subscriberText,
+      videos: sample.videos
+    };
+  } catch (e) {
+    return { ok: false, name, reason: 'fetch_failed' };
+  }
+}
+
+// A small round-robin so the sample spans the whole subscription list instead of the
+// first N entries (the list arrives in YouTube's own order, which clusters by recency).
+function interleaveChannels(list, limit) {
+  const out = [];
+  const arr = Array.isArray(list) ? list : [];
+  const cap = Math.max(0, Number(limit) || 0);
+  if (!cap || !arr.length) return out;
+  // Even distribution across the FULL length: index i maps to floor(i * len / cap), so the
+  // sample reaches the tail of the list instead of clustering at the top. A stride of
+  // floor(len/cap) truncates and can stop short (30 channels, cap 12 -> stride 2, never
+  // reaching the last entries); ceil overshoots the cap and then backfills from the top,
+  // re-clustering exactly the head this exists to avoid.
+  const seen = new Set();
+  for (let i = 0; i < cap; i++) {
+    const idx = Math.floor((i * arr.length) / cap);
+    if (!seen.has(idx)) { seen.add(idx); out.push(arr[idx]); }
+  }
+  return out;
+}
+
+async function scrapeSubscriptionSamples(channels, maxChannels) {
+  const cap = Math.max(1, Math.min(Number(maxChannels) || 12, 24));
+  const picks = interleaveChannels(channels, cap);
+  const out = [];
+  for (const ch of picks) {
+    const sample = await sampleChannelTaste(ch);
+    if (sample && sample.ok) out.push(sample);
+  }
+  return { ok: true, samples: out, requested: picks.length };
+}
+
 function checkFeedReplenishment(cards) {
   const now = Date.now();
   if (now - lastSeedTime < 4000) return;
@@ -4504,6 +4682,17 @@ if (isExtensionValid() && chrome?.runtime?.onMessage) {
           });
         return true;
       }
+      // Deep style sampling for the subscription synthesizer. Separate message so the
+      // caller can degrade gracefully: if this fails or times out, synthesis still runs
+      // on the channel LIST (today's behaviour) rather than failing outright.
+      if (msg && typeof msg === 'object' && msg.type === 'SCRAPE_SUBSCRIPTION_SAMPLES') {
+        scrapeSubscriptionSamples(msg.channels, msg.max)
+          .then(res => { try { sendResponse(res); } catch (_) { } })
+          .catch(() => {
+            try { sendResponse({ ok: false, samples: [] }); } catch (_) { }
+          });
+        return true;
+      }
     });
   } catch (_) { }
 }
@@ -4704,6 +4893,8 @@ if (typeof module !== 'undefined' && module.exports) {
     cardIsSubscribed,
     subscriptionDisplayNames,
     aiRationaleCitesUserRule,
+    parseChannelPageSample,
+    interleaveChannels,
     chipRescueState,
     shouldAutoEnterNewToYou
   };

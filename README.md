@@ -194,11 +194,16 @@ Always New To You is built natively against WebExtensions standards and compiled
 ### Chromium Family (Chrome, Edge, Brave, Opera, Vivaldi)
 
 #### Quick Windows Automated Install
-1. Download the [Latest Release ZIP](https://github.com/PyrateGFXProductions/YouTube-Blacklister/releases).
-2. Extract the archive to your desired permanent folder.
-3. Double-click [`install.bat`](install.bat). It will automatically open your browser's extension manager and copy the installation folder path to your clipboard.
-4. Toggle **Developer mode** in the top right corner.
-5. Click **Load unpacked**, paste the path (`Ctrl + V`), and confirm.
+1. Download the [Latest Release ZIP](https://github.com/PyrateGFXProductions/YouTube-Blacklister/releases) and extract it to your desired permanent folder.
+2. Open your browser's extensions page (`chrome://extensions`, `edge://extensions`, or `brave://extensions`).
+3. Toggle **Developer mode** in the top right corner.
+4. Click **Load unpacked** and select the extracted folder.
+
+> [!NOTE]
+> The release ZIP contains the extension only. The `install.bat` Windows helper and the
+> project docs ship in the [repository](https://github.com/PyrateGFXProductions/YouTube-Blacklister)
+> instead — if you want the automated loader, clone the repo and double-click `install.bat`
+> there (it opens your browser's extension manager and copies the folder path to your clipboard).
 
 #### Manual Load
 1. Clone this repository or download the source code:
@@ -300,7 +305,7 @@ YouTube-Blacklister/
 ├── popup.html / popup.js      # Main extension control interface
 ├── backup.html / backup.js    # Dedicated backup & restore dashboard
 ├── package-extension.ps1      # Multi-target release build script
-├── install.bat                # Windows quick developer loader
+├── install.bat                # Windows quick developer loader (repo-only; not in the release ZIP)
 ├── tests/                     # Automated unit and integration test suite
 │   ├── test_ai_guardian.js    # AI parser, <think> token & JSON tests
 │   ├── test_rules.js          # Word-boundary & regex matching test harness

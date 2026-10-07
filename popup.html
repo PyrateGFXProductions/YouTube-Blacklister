@@ -1127,6 +1127,24 @@
         <div id="aiStatusDetail" style="font-size: 11px; color: var(--muted); line-height: 1.4;">Detecting local AI engine…</div>
       </div>
 
+      <!-- Bundled In-Browser AI (no Ollama / LM Studio needed) -->
+      <div class="ai-card" id="bundledAiCard" style="margin-top:8px;">
+        <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px;">
+          <span class="setting-title">🧠 Bundled AI Engine</span>
+          <span style="font-size:10px;color:#4db6ff;font-weight:600;">In-Browser ONNX</span>
+        </div>
+        <p class="help-hint" style="margin-bottom:8px;">Runs entirely in your browser — no Ollama, no LM Studio, no other app. Download a small model once, then it's cached locally.</p>
+        <div id="bundledAiModelList" style="display:flex;flex-direction:column;gap:6px;">
+          <div style="font-size:11px;color:var(--muted);">Loading model catalog…</div>
+        </div>
+        <div id="bundledAiProgress" style="display:none;margin-top:6px;">
+          <div style="font-size:11px;color:var(--muted);margin-bottom:2px;" id="bundledAiProgressLabel">Downloading…</div>
+          <div style="height:4px;background:#374151;border-radius:2px;overflow:hidden;">
+            <div id="bundledAiProgressBar" style="height:100%;width:0%;background:linear-gradient(90deg,#4db6ff,#b162ff);transition:width 0.3s;"></div>
+          </div>
+        </div>
+      </div>
+
       <!-- Mind Reader Taste Profiler -->
       <div class="setting-group" style="gap: 8px;">
         <div style="display: flex; justify-content: space-between; align-items: baseline;">
@@ -1158,6 +1176,18 @@
           <span style="font-size: 10px; color: #4db6ff; font-weight: 600;">Feed Archaeology</span>
         </div>
         <p class="help-hint">Scans your actual YouTube subscriptions and synthesizes rules that blacklist the parasitic slop riding those topics' coattails. Reads <code>youtube.com/feed/channels</code> locally — nothing leaves your machine.</p>
+
+        <div style="display:flex;gap:8px;margin-bottom:8px;">
+          <div style="flex:1;">
+            <label class="setting-desc" style="display:block;margin-bottom:3px;">✅ Channels you LIKE (style to keep)</label>
+            <input type="text" id="tasteLikedInput" placeholder="e.g. Cleetus McFarland, Matts Off Road Recovery" style="width:100%;padding:6px 8px;border-radius:6px;border:1px solid #374151;background:#1f2937;color:#e5e7eb;font-size:12px;" />
+          </div>
+          <div style="flex:1;">
+            <label class="setting-desc" style="display:block;margin-bottom:3px;">❌ Channels you DON'T like (style to avoid)</label>
+            <input type="text" id="tasteDislikedInput" placeholder="e.g. Beater Bomb, Murphy's Off Road" style="width:100%;padding:6px 8px;border-radius:6px;border:1px solid #374151;background:#1f2937;color:#e5e7eb;font-size:12px;" />
+          </div>
+        </div>
+        <p class="help-hint" style="margin-top:-4px;margin-bottom:8px;">Optional. The AI uses these as the highest-weight evidence of your style — same topic, different personality is exactly what this teaches it.</p>
 
         <button class="ai-action-btn" id="aiSubSynthBtn">
           <span>🔭 Synthesize Rules from My Subscriptions</span>

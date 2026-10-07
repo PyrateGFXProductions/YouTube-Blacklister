@@ -15,7 +15,8 @@ let data = {
   blockShorts: false, shortsSubOnly: false, blockCommunity: false, autoDubMode: 'off',
   enableQuickBlock: true, triggerServerFeedback: false, totalBlocked: 0,
   aiAutonomous: false, aiSensitivity: 'balanced', aiModel: '', aiTastePrompt: '',
-  aiSubscriptionProfile: '', aiLog: [], aiDebaitTitles: false, aiDebaitModel: '',
+  aiSubscriptionProfile: '', tasteLikedChannels: [], tasteDislikedChannels: [],
+  aiLog: [], aiDebaitTitles: false, aiDebaitModel: '',
   tldwEnabled: true, huntMode: false, chipRescue: false, newToYouAuto: false,
   extensionEnabled: true,
   keywordExceptions: {}, feedHealthLog: [], communityPacks: [], temporalRules: [],
@@ -30,7 +31,7 @@ function load() {
       'channels','keywords','whitelistChannels','subsSnapshot',
       'blockShorts','shortsSubOnly','blockCommunity','autoDubMode','enableQuickBlock',
       'triggerServerFeedback','nyt_totalBlocked','aiAutonomous','aiSensitivity',
-      'aiModel','aiTastePrompt','aiSubscriptionProfile','aiLog',
+      'aiModel','aiTastePrompt','aiSubscriptionProfile','tasteLikedChannels','tasteDislikedChannels','aiLog',
       'aiDebaitTitles','aiDebaitModel','tldwEnabled','huntMode','chipRescue','newToYouAuto',
       'extensionEnabled',
       'keywordExceptions','feedHealthLog','communityPacks','temporalRules',
@@ -52,6 +53,8 @@ function load() {
       data.aiModel = res.aiModel || '';
       data.aiTastePrompt = res.aiTastePrompt || '';
       data.aiSubscriptionProfile = res.aiSubscriptionProfile || '';
+      data.tasteLikedChannels = Array.isArray(res.tasteLikedChannels) ? res.tasteLikedChannels : [];
+      data.tasteDislikedChannels = Array.isArray(res.tasteDislikedChannels) ? res.tasteDislikedChannels : [];
       data.aiLog = Array.isArray(res.aiLog) ? res.aiLog : [];
       data.aiDebaitTitles = Boolean(res.aiDebaitTitles);
       data.aiDebaitModel = res.aiDebaitModel || res.aiModel || '';
@@ -104,7 +107,9 @@ function saveToStorage(pinned) {
         triggerServerFeedback: data.triggerServerFeedback,
         aiAutonomous: data.aiAutonomous,
         aiSensitivity: data.aiSensitivity, aiModel: data.aiModel,
-        aiTastePrompt: data.aiTastePrompt, aiDebaitTitles: data.aiDebaitTitles,
+        aiTastePrompt: data.aiTastePrompt, aiSubscriptionProfile: data.aiSubscriptionProfile,
+        tasteLikedChannels: data.tasteLikedChannels, tasteDislikedChannels: data.tasteDislikedChannels,
+        aiDebaitTitles: data.aiDebaitTitles,
         aiDebaitModel: data.aiDebaitModel, tldwEnabled: data.tldwEnabled,
         huntMode: data.huntMode, chipRescue: data.chipRescue,
         newToYouAuto: data.newToYouAuto,
@@ -225,6 +230,7 @@ function buildPayload() {
       triggerServerFeedback: data.triggerServerFeedback, aiAutonomous: data.aiAutonomous,
       aiSensitivity: data.aiSensitivity, aiModel: data.aiModel,
       aiTastePrompt: data.aiTastePrompt, aiSubscriptionProfile: data.aiSubscriptionProfile,
+      tasteLikedChannels: data.tasteLikedChannels, tasteDislikedChannels: data.tasteDislikedChannels,
       aiDebaitTitles: data.aiDebaitTitles, aiDebaitModel: data.aiDebaitModel,
       tldwEnabled: data.tldwEnabled, huntMode: data.huntMode, chipRescue: data.chipRescue,
       newToYouAuto: data.newToYouAuto, extensionEnabled: data.extensionEnabled
@@ -390,6 +396,8 @@ async function runImportFile(file) {
     if ('aiModel' in s) data.aiModel = String(s.aiModel || '');
     if ('aiTastePrompt' in s) data.aiTastePrompt = String(s.aiTastePrompt || '');
     if ('aiSubscriptionProfile' in s) data.aiSubscriptionProfile = String(s.aiSubscriptionProfile || '');
+    if (Array.isArray(s.tasteLikedChannels)) data.tasteLikedChannels = s.tasteLikedChannels.map(String).filter(Boolean).slice(0, 40);
+    if (Array.isArray(s.tasteDislikedChannels)) data.tasteDislikedChannels = s.tasteDislikedChannels.map(String).filter(Boolean).slice(0, 40);
     if ('aiDebaitTitles' in s) data.aiDebaitTitles = Boolean(s.aiDebaitTitles);
     if ('aiDebaitModel' in s) data.aiDebaitModel = String(s.aiDebaitModel || '');
     if ('tldwEnabled' in s) data.tldwEnabled = Boolean(s.tldwEnabled);

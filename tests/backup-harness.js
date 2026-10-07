@@ -58,6 +58,7 @@ const ok = (cond, msg) => { if (cond) { pass++; console.log('  PASS ' + msg); } 
   const FEATURE_TOGGLES = [
     'blockShorts', 'shortsSubOnly', 'blockCommunity', 'autoDubMode', 'enableQuickBlock',
     'triggerServerFeedback', 'aiAutonomous', 'aiSensitivity', 'aiModel', 'aiTastePrompt',
+    'aiSubscriptionProfile', 'tasteLikedChannels', 'tasteDislikedChannels',
     'aiDebaitTitles', 'aiDebaitModel', 'tldwEnabled', 'huntMode', 'chipRescue',
     'newToYouAuto', 'extensionEnabled'
   ];
@@ -73,6 +74,9 @@ const ok = (cond, msg) => { if (cond) { pass++; console.log('  PASS ' + msg); } 
     blockShorts: true, shortsSubOnly: true, blockCommunity: true, autoDubMode: 'total',
     enableQuickBlock: false, triggerServerFeedback: true, aiAutonomous: true,
     aiSensitivity: 'ruthless', aiModel: 'test-model:tag', aiTastePrompt: 'no slop',
+    aiSubscriptionProfile: 'Style sample from 12 channels',
+    tasteLikedChannels: ['Cleetus McFarland', 'Matts Off Road Recovery'],
+    tasteDislikedChannels: ['Beater Bomb', "Murphy's Off Road"],
     aiDebaitTitles: true, aiDebaitModel: 'debaiter:tag', tldwEnabled: false,
     huntMode: true, chipRescue: false, newToYouAuto: false, extensionEnabled: false
   };
@@ -81,7 +85,7 @@ const ok = (cond, msg) => { if (cond) { pass++; console.log('  PASS ' + msg); } 
   for (const k of FEATURE_TOGGLES) delete B.data[k];
   document.getElementById = (id) => id === 'replaceRules' ? { checked: true } : null;
   const toggleOk = await B.doImportFile({ text: async () => toggleText });
-  const wrong = FEATURE_TOGGLES.filter(k => B.data[k] !== nonDefaults[k]);
+  const wrong = FEATURE_TOGGLES.filter(k => JSON.stringify(B.data[k]) !== JSON.stringify(nonDefaults[k]));
   ok(toggleOk === true && wrong.length === 0,
     'every feature toggle round-trips through export+import with its value intact (wrong: ' +
     JSON.stringify(wrong.map(k => k + ': ' + JSON.stringify(B.data[k]) + ' != ' + JSON.stringify(nonDefaults[k]))) + ')');

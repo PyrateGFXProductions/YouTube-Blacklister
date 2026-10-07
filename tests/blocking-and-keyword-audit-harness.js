@@ -567,6 +567,56 @@ const script = `
     !hidden(promoFromSub), 'hidden=' + hidden(promoFromSub) + ' reason=' + promoFromSub.dataset.hiddenReason);
   resetSettings();
 
+  // ===================== L. channel taste sampling =====================
+  // The synthesizer now reads each channel's own blurb + recent titles so it can
+  // describe STYLE, not just topic. These tests pin the parser and the interleaver.
+  const hasParse = typeof parseChannelPageSample === 'function';
+  const hasInterleave = typeof interleaveChannels === 'function';
+
+  ok('L1: parseChannelPageSample is exported', hasParse);
+  ok('L2: interleaveChannels is exported', hasInterleave);
+
+  if (hasParse) {
+    // Build the fixture as a real object and JSON.stringify it: hand-escaped JSON inside the
+    // harness's own template literal is a quoting minefield, and a nested template literal
+    // would terminate the outer one outright.
+    const ytData = {
+      header: { pageHeaderRenderer: { metadata: { channelMetadataRenderer: {
+        title: 'Cleetus McFarland',
+        description: 'Loud cars, big smiles, and a whole lotta horsepower.',
+        subscriberCountText: { simpleText: '2.1M subscribers' }
+      } } } },
+      contents: { twoColumnBrowseResultsRenderer: { tabs: [ { richGridRenderer: { contents: [
+        { richItemRenderer: { content: { videoRenderer: {
+          title: { runs: [ { text: 'I Bought The WORST Car At Auction' } ] },
+          lengthText: { simpleText: '18:24' },
+          descriptionSnippet: { runs: [ { text: 'Today we drag home the ugliest project car...' } ] }
+        } } } }
+      ] } } ] } }
+    };
+    const html = '<html><body><script>var ytInitialData = ' + JSON.stringify(ytData) + ';</' + 'script></body></html>';
+    const sample = parseChannelPageSample(html, 'fallback');
+    ok('L3: parses channel name from ytInitialData', sample.name === 'Cleetus McFarland', 'name=' + sample.name);
+    ok('L4: parses channel description', sample.description.includes('Loud cars'), 'desc=' + sample.description);
+    ok('L5: parses subscriber count', sample.subscriberText === '2.1M subscribers', 'subs=' + sample.subscriberText);
+    ok('L6: parses video titles', sample.videos.length > 0 && sample.videos[0].title.includes('WORST Car'), 'vids=' + JSON.stringify(sample.videos));
+    ok('L7: parses video length', sample.videos[0] && sample.videos[0].length === '18:24', 'len=' + (sample.videos[0] || {}).length);
+    ok('L8: handles missing ytInitialData gracefully (empty, caller supplies the fallback)',
+      parseChannelPageSample('<html></html>', 'fallback').name === '');
+    ok('L9: handles malformed JSON gracefully (empty, no throw)',
+      parseChannelPageSample('<script>var ytInitialData = {bad json</' + 'script>', 'fallback').name === '');
+  }
+
+  if (hasInterleave) {
+    const list = Array.from({ length: 30 }, (_, i) => ({ name: 'ch' + i }));
+    const picks = interleaveChannels(list, 12);
+    ok('L10: interleave picks at most limit channels', picks.length === 12, 'picks=' + picks.length);
+    ok('L11: interleave reaches the TAIL of the list, not just the first N',
+      picks.some(p => Number(String(p.name).slice(2)) >= 22), 'picks=' + picks.map(p => p.name).join(','));
+    ok('L12: interleave handles empty list', interleaveChannels([], 5).length === 0);
+    ok('L13: interleave handles limit > list length', interleaveChannels([{ name: 'a' }], 10).length === 1);
+  }
+
   return out;
 })()
 `;
@@ -628,10 +678,36 @@ for (const k of RULE_KEYS_EXPECTED) {
 const CONTROL_IDS = [
   'toggleExtensionEnabled', 'exceptionKeyword', 'exceptionChannel', 'addKeywordException',
   'keywordExceptionsList', 'temporalKeyword', 'temporalExpires', 'temporalReason',
-  'addTemporalRule', 'temporalRulesList', 'communityPackUrl', 'addCommunityPack', 'communityPacksList'
+  'addTemporalRule', 'temporalRulesList', 'communityPackUrl', 'addCommunityPack', 'communityPacksList',
+  'tasteLikedInput', 'tasteDislikedInput'
 ];
 for (const id of CONTROL_IDS) {
   staticOk('H: popup.html exposes #' + id, popupHtml.includes('id="' + id + '"'));
+}
+
+// The subscription synthesizer's style-sampling path is a 4-file contract: the popup asks the
+// content script to sample, the content script answers a message the worker's synthesizer
+// understands, and both new taste keys must ride storage or they vanish on the next restart.
+const synthWiring = [
+  ['popup sends SCRAPE_SUBSCRIPTION_SAMPLES', popupJs.includes('SCRAPE_SUBSCRIPTION_SAMPLES')],
+  ['content handles SCRAPE_SUBSCRIPTION_SAMPLES', contentSrc.includes("msg.type === 'SCRAPE_SUBSCRIPTION_SAMPLES'")],
+  ['popup forwards samples + liked/disliked into the synthesis message',
+    /AI_SYNTHESIZE_SUBSCRIPTION_RULES[\s\S]{0,400}samples:/.test(popupJs)],
+  ['worker accepts the options argument',
+    /synthesizeSubscriptionRulesWithAi\([^)]*msg\.options\)/.test(fs.readFileSync(path.join(REPO, 'background.js'), 'utf8'))],
+  ['worker prompt is style-aware (asks for styleLikes/styleDislikes)',
+    fs.readFileSync(path.join(REPO, 'background.js'), 'utf8').includes('styleDislikes')],
+  ['popup renders the style profile', popupJs.includes('Style you keep')],
+  ['backup exports the taste keys', fs.readFileSync(path.join(REPO, 'backup.js'), 'utf8').includes('tasteLikedChannels')],
+];
+for (const [name, cond] of synthWiring) staticOk('H: ' + name, cond);
+for (const k of ['tasteLikedChannels', 'tasteDislikedChannels']) {
+  // Popup-only state: the content script never reads these (they only build the synthesis
+  // message), so the bus check is popup load + popup save + the backup round-trip.
+  const absent = [];
+  if (missing(popupLoadList, k)) absent.push('popup load list');
+  if (missing(popupSavePayload, k)) absent.push('popup save payload');
+  staticOk('H: "' + k + '" rides every bus', absent.length === 0, 'missing from: ' + absent.join(', '));
 }
 
 (async () => {

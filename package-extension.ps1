@@ -32,6 +32,9 @@ Write-Host "`n[OK] Extension: $extName" -ForegroundColor Green
 Write-Host "[OK] Version  : $extVersion" -ForegroundColor Green
 
 # 2. Verify Essential Files
+# Files that must EXIST IN THE REPO. This is a completeness check on the checkout, not a
+# statement about what ships: the docs and the Windows loader are repo-only and are
+# deliberately kept out of every published artifact (see $packageFiles below).
 $essentialFiles = @(
     "manifest.json",
     "background.js",
@@ -44,13 +47,13 @@ $essentialFiles = @(
     "icon16.png",
     "icon48.png",
     "icon128.png",
-    "install.bat",
     "LICENSE",
-    "README.md",
     "PRIVACY.md",
+    "README.md",
     "CHANGELOG.md",
     "CONTRIBUTING.md",
-    "ZEN-INSTALL.md"
+    "ZEN-INSTALL.md",
+    "install.bat"
 )
 
 Write-Host "`n[i] Verifying essential package files..." -ForegroundColor Yellow
@@ -64,7 +67,11 @@ foreach ($file in $essentialFiles) {
 }
 
 # 3. Derive per-browser manifests from the universal manifest.json
-$extensionFiles = @(
+# The runtime files that make up the extension itself. This is the ONLY file list any
+# published artifact is built from, so the browser builds and the release zip cannot drift
+# apart. The repo docs (README/CHANGELOG/CONTRIBUTING/ZEN-INSTALL) and the Windows loader
+# (install.bat) live in the repo only — the release archive is the extension, nothing else.
+$packageFiles = @(
     "background.js",
     "content.js",
     "shared-tables.js",
@@ -74,7 +81,18 @@ $extensionFiles = @(
     "backup.js",
     "icon16.png",
     "icon48.png",
-    "icon128.png"
+    "icon128.png",
+    # Bundled in-browser AI provider (transformers.js + onnxruntime-web, vendored).
+    "bundled-ai.js",
+    "vendor/transformers.web.js",
+    "vendor/ort.min.mjs",
+    "vendor/ort-wasm-simd-threaded.mjs",
+    "vendor/ort-wasm-simd-threaded.wasm",
+    "vendor/vendored-manifest.json",
+    # Shipped because it is the user-facing data-flow disclosure the Chrome Web Store
+    # data-safety review reads, and it is a code-relevant document rather than project meta.
+    "PRIVACY.md",
+    "LICENSE"
 )
 
 $chromiumManifest = $manifest | ConvertTo-Json -Depth 10 | ConvertFrom-Json
@@ -149,8 +167,11 @@ if (Test-Path $distDir) {
 $chromeDir = Join-Path $distDir "chromium"
 New-Item -ItemType Directory -Path $chromeDir -Force | Out-Null
 Write-ManifestJson -ManifestObj $chromiumManifest -Path (Join-Path $chromeDir "manifest.json")
-foreach ($file in $extensionFiles) {
-    Copy-Item -Path (Join-Path $PSScriptRoot $file) -Destination $chromeDir -Force
+foreach ($file in $packageFiles) {
+    $destPath = Join-Path $chromeDir $file
+    $destDir = Split-Path -Parent $destPath
+    if (-not (Test-Path $destDir)) { New-Item -ItemType Directory -Path $destDir -Force | Out-Null }
+    Copy-Item -Path (Join-Path $PSScriptRoot $file) -Destination $destPath -Force
 }
 $chromeZip = Join-Path $distDir "chromium.zip"
 Compress-Archive -Path "$chromeDir\*" -DestinationPath $chromeZip -CompressionLevel Optimal
@@ -160,8 +181,11 @@ Write-Host "`n[OK] Chromium build -> dist/chromium/ + dist/chromium.zip" -Foregr
 $foxDir = Join-Path $distDir "firefox"
 New-Item -ItemType Directory -Path $foxDir -Force | Out-Null
 Write-ManifestJson -ManifestObj $firefoxManifest -Path (Join-Path $foxDir "manifest.json")
-foreach ($file in $extensionFiles) {
-    Copy-Item -Path (Join-Path $PSScriptRoot $file) -Destination $foxDir -Force
+foreach ($file in $packageFiles) {
+    $destPath = Join-Path $foxDir $file
+    $destDir = Split-Path -Parent $destPath
+    if (-not (Test-Path $destDir)) { New-Item -ItemType Directory -Path $destDir -Force | Out-Null }
+    Copy-Item -Path (Join-Path $PSScriptRoot $file) -Destination $destPath -Force
 }
 $foxZip = Join-Path $distDir "firefox.zip"
 $foxXpi = Join-Path $distDir "firefox.xpi"
@@ -177,8 +201,11 @@ if (Test-Path $zenDir) {
 }
 New-Item -ItemType Directory -Path $zenDir -Force | Out-Null
 Write-ManifestJson -ManifestObj $firefoxManifest -Path (Join-Path $zenDir "manifest.json")
-foreach ($file in $extensionFiles) {
-    Copy-Item -Path (Join-Path $PSScriptRoot $file) -Destination $zenDir -Force
+foreach ($file in $packageFiles) {
+    $destPath = Join-Path $zenDir $file
+    $destDir = Split-Path -Parent $destPath
+    if (-not (Test-Path $destDir)) { New-Item -ItemType Directory -Path $destDir -Force | Out-Null }
+    Copy-Item -Path (Join-Path $PSScriptRoot $file) -Destination $destPath -Force
 }
 Write-ManifestJson -ManifestObj $firefoxManifest -Path (Join-Path $PSScriptRoot "manifest-firefox.json")
 Copy-FileAtomic -SourcePath $foxZip -DestinationPath (Join-Path $PSScriptRoot "blacklist-firefox.zip")
@@ -186,7 +213,10 @@ Copy-FileAtomic -SourcePath $foxZip -DestinationPath (Join-Path $PSScriptRoot "b
 Copy-FileAtomic -SourcePath $foxZip -DestinationPath (Join-Path $PSScriptRoot "blacklist-firefox.jar")
 Write-Host "[OK] Zen helpers refreshed -> zen-unpacked/ + blacklist-firefox.* + manifest-firefox.json" -ForegroundColor Green
 
-# 7. Build the classic release zip (docs + install.bat) for GitHub Releases / Chrome Web Store
+# 7. Build the release zip for GitHub Releases / Chrome Web Store.
+# Contains EXACTLY the Chromium build: the extension files plus the Chromium manifest, and
+# nothing else. The repo docs and install.bat are intentionally excluded so a downloader
+# gets the extension rather than a copy of the repository's prose.
 # Root the output path first: the default is $PSScriptRoot, but an explicit -OutputDir
 # may be relative and the atomic file swap below resolves paths against the process CWD.
 if (-not [System.IO.Path]::IsPathRooted($OutputDir)) {
@@ -209,14 +239,17 @@ if (Test-Path $stagingDir) {
 New-Item -ItemType Directory -Path $stagingDir | Out-Null
 
 try {
-    foreach ($file in $essentialFiles) {
-        Copy-Item -Path (Join-Path $PSScriptRoot $file) -Destination (Join-Path $stagingDir $file)
+    foreach ($file in $packageFiles) {
+        $destPath = Join-Path $stagingDir $file
+        $destDir = Split-Path -Parent $destPath
+        if (-not (Test-Path $destDir)) {
+            New-Item -ItemType Directory -Path $destDir -Force | Out-Null
+        }
+        Copy-Item -Path (Join-Path $PSScriptRoot $file) -Destination $destPath
     }
 
-    # The staging copy above pulls in the *universal* root manifest.json (key +
-    # browser_specific_settings + Firefox "background.scripts"). Overwrite it with the
-    # same stripped Chromium manifest that dist/chromium ships, so the release zip
-    # contains exactly what dist/chromium contains.
+    # The release zip must carry the same stripped Chromium manifest that dist/chromium
+    # ships (no Chromium-only `key` leaking into a store upload, no Firefox background.scripts).
     Write-ManifestJson -ManifestObj $chromiumManifest -Path (Join-Path $stagingDir "manifest.json")
 
     Write-Host "`n[i] Compressing package into $zipName..." -ForegroundColor Cyan

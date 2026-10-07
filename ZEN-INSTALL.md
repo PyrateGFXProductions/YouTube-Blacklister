@@ -92,19 +92,24 @@ makes this route a recurring chore, which is exactly why Route A is recommended.
 
    ```powershell
    $polDir = "C:\Program Files\Zen Browser\distribution"
+   # Set this to the folder you extracted this repository into, then point install_url at
+   # the XPI inside it. Replace the placeholder below with your own absolute path — do not
+   # copy someone else's, and note that policies.json does NOT expand environment variables,
+   # so a literal path is required.
+   $xpiPath = "C:\path\to\YouTube-Blacklister\blacklist-firefox.xpi"
    New-Item -ItemType Directory -Path $polDir -Force | Out-Null
-   @'
+   @"
    {
      "policies": {
        "ExtensionSettings": {
          "youtubeblacklister@pyrategfx.productions": {
            "installation_mode": "force_installed",
-           "install_url": "file:///C:/Users/Administrator/YouTube-Blacklister/blacklist-firefox.xpi"
+           "install_url": "file:///$($xpiPath -replace '\\','/')"
          }
        }
      }
    }
-   '@ | Set-Content (Join-Path $polDir "policies.json") -Encoding UTF8
+   "@ | Set-Content (Join-Path $polDir "policies.json") -Encoding UTF8
    ```
 
 3. Launch Zen and check `about:policies` and `about:addons` as described above.

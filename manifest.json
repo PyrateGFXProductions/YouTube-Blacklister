@@ -22,14 +22,16 @@
     "http://localhost:11434/*",
     "http://127.0.0.1:11434/*",
     "http://localhost:1234/*",
-    "http://127.0.0.1:1234/*"
+    "http://127.0.0.1:1234/*",
+    "https://huggingface.co/*",
+    "https://cdn-lfs.huggingface.co/*"
   ],
   "background": {
     "scripts": ["shared-tables.js", "background.js"],
     "service_worker": "background.js"
   },
   "content_security_policy": {
-    "extension_pages": "script-src 'self'; object-src 'self'; connect-src http://localhost:11434 http://127.0.0.1:11434 http://localhost:1234 http://127.0.0.1:1234"
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; connect-src http://localhost:11434 http://127.0.0.1:11434 http://localhost:1234 http://127.0.0.1:1234 https://huggingface.co https://cdn-lfs.huggingface.co"
   },
   "action": {
     "default_popup": "popup.html",

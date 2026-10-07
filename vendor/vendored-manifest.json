@@ -1,0 +1,27 @@
+{
+  "name": "YouTube Blacklister \u2014 bundled local AI engine",
+  "description": "Vendored in-browser ONNX runtime + transformers.js. No Ollama, no LM Studio, no other app required. Models are downloaded from HuggingFace on first use (user chooses which).",
+  "vendoredAt": "2026-10-06",
+  "files": {
+    "transformers.web.js": {
+      "bytes": 1156762,
+      "sha256": "ad44c6e41ff23fd5b01fa3fe08199a0440a35711dc9f80a31132fcce08fbd432",
+      "description": "transformers.js 4.3.1 (HuggingFace) \u2014 tokenizer + generation pipeline"
+    },
+    "ort.min.mjs": {
+      "bytes": 368019,
+      "sha256": "e000c8bc059ddaf10eab26bce50d2175fde55dc648e3e14f2106252ffb7b215f",
+      "description": "onnxruntime-web 1.31.0-dev.20260914-8d85527a0 \u2014 ORT JS API"
+    },
+    "ort-wasm-simd-threaded.mjs": {
+      "bytes": 24381,
+      "sha256": "c57ca56328877353a575e51bbca6f18450027d6c9bf2307a2cb2c41363b4de9f",
+      "description": "onnxruntime-web WASM loader (SIMD + threads)"
+    },
+    "ort-wasm-simd-threaded.wasm": {
+      "bytes": 14264838,
+      "sha256": "06ba057753da3847e4c24f02d91ab133455b0817c69a44993a9a53a2146df9e3",
+      "description": "onnxruntime-web WASM binary (SIMD + threads, ~14 MB)"
+    }
+  }
+}

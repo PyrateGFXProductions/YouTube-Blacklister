@@ -291,6 +291,8 @@ let data = {
   aiModel: '',
   aiTastePrompt: '',
   aiSubscriptionProfile: '',
+  tasteLikedChannels: [],
+  tasteDislikedChannels: [],
   aiLog: [],
   aiDebaitTitles: false,
   aiDebaitModel: '',
@@ -331,6 +333,8 @@ function load() {
       'aiModel',
       'aiTastePrompt',
       'aiSubscriptionProfile',
+      'tasteLikedChannels',
+      'tasteDislikedChannels',
       'aiLog',
       'aiDebaitTitles',
       'aiDebaitModel',
@@ -364,6 +368,8 @@ function load() {
       data.aiModel = res.aiModel || '';
       data.aiTastePrompt = res.aiTastePrompt || '';
       data.aiSubscriptionProfile = res.aiSubscriptionProfile || '';
+      data.tasteLikedChannels = Array.isArray(res.tasteLikedChannels) ? res.tasteLikedChannels : [];
+      data.tasteDislikedChannels = Array.isArray(res.tasteDislikedChannels) ? res.tasteDislikedChannels : [];
       data.aiLog = Array.isArray(res.aiLog) ? res.aiLog : [];
       data.aiDebaitTitles = Boolean(res.aiDebaitTitles);
       data.aiDebaitModel = res.aiDebaitModel || res.aiModel || '';
@@ -401,6 +407,8 @@ async function save() {
     aiModel: data.aiModel,
     aiTastePrompt: data.aiTastePrompt,
     aiSubscriptionProfile: data.aiSubscriptionProfile,
+    tasteLikedChannels: data.tasteLikedChannels,
+    tasteDislikedChannels: data.tasteDislikedChannels,
     aiLog: data.aiLog,
     aiDebaitTitles: data.aiDebaitTitles,
     aiDebaitModel: data.aiDebaitModel,
@@ -1415,6 +1423,19 @@ function runSubscriptionSynthesize() {
   if (subSynthBusy) return;
   subSynthBusy = true;
 
+  // Read the like/dislike inputs and persist them so they survive across runs.
+  const likedRaw = (document.getElementById('tasteLikedInput') || {}).value || '';
+  const dislikedRaw = (document.getElementById('tasteDislikedInput') || {}).value || '';
+  const parseList = (s) => s.split(',').map(x => x.trim()).filter(Boolean).slice(0, 40);
+  data.tasteLikedChannels = parseList(likedRaw);
+  data.tasteDislikedChannels = parseList(dislikedRaw);
+  save();
+
+  // Declared here (not inside handleScrape) so the retry-on-dropped-response counter
+  // survives across the sampling round-trip. It is incremented inside requestSynthesis,
+  // which is itself only reachable after the sampler callback.
+  let synthAttempts = 0;
+
   const btn = document.getElementById('aiSubSynthBtn');
   const card = document.getElementById('aiSubResultBox');
   if (btn) {
@@ -1451,7 +1472,7 @@ function runSubscriptionSynthesize() {
     subSynthBusy = false;
   };
 
-  const handleScrape = (res) => {
+  const handleScrape = (res, tabId) => {
     if (!res || !res.ok || !Array.isArray(res.channels) || res.channels.length < 3) {
       const signedOut = res && res.ok && res.signedIn === false;
       finishSubSynth(btn, signedOut
@@ -1464,13 +1485,23 @@ function runSubscriptionSynthesize() {
     }
     const count = res.channels.length;
 
-let synthAttempts = 0;
-    const requestSynthesis = () => {
+    // Deep style sampling, best-effort. This is what turns the synthesizer from
+    // topic-matching into preference-matching: it reads each sampled channel's own blurb
+    // and recent titles so the model can describe the STYLE the user follows. If it fails,
+    // times out, or the page is busy, synthesis still runs on the channel list alone.
+    const requestSynthesis = (samples) => {
       synthAttempts++;
       chrome.runtime.sendMessage({
         type: 'AI_SYNTHESIZE_SUBSCRIPTION_RULES',
         channels: res.channels,
-        modelChoice: currentAiModelChoice()
+        modelChoice: currentAiModelChoice(),
+        options: {
+          samples: samples || [],
+          liked: (data.tasteLikedChannels || []).slice(),
+          disliked: (data.tasteDislikedChannels || []).slice(),
+          existingProfile: data.aiSubscriptionProfile || '',
+          tastePrompt: data.aiTastePrompt || ''
+        }
       }, (aiRes) => {
         if (!aiRes || !aiRes.ok || !Array.isArray(aiRes.keywords)) {
           // MV3 service-worker message channels can drop a response once —
@@ -1500,10 +1531,17 @@ let synthAttempts = 0;
       if (out) {
         out.style.display = 'block';
         out.className = 'ai-result-box';
+        const styleLikes = Array.isArray(aiRes.styleLikes) ? aiRes.styleLikes : [];
+        const styleDislikes = Array.isArray(aiRes.styleDislikes) ? aiRes.styleDislikes : [];
+        const sampleNotes = typeof aiRes.sampleNotes === 'string' ? aiRes.sampleNotes.trim() : '';
+        const sampled = Number(aiRes.sampled) || 0;
         out.innerHTML =
           `<div style="font-size:12px;font-weight:700;color:#4db6ff;margin-bottom:4px;">🔭 Taste Profile: ${escapeHtml(aiRes.profile || 'Subscription Insights')} — ${count} subscriptions analyzed</div>` +
           `<div style="font-size:11.5px;color:#e5e7eb;line-height:1.45;">${escapeHtml(aiRes.rationale || '')}</div>` +
-          `<div style="font-size:11.5px;color:#4ade80;margin-top:6px;">${aiRes.isFallback ? '⚡ Heuristic' : '🧠 AI'} synthesis — ${added} new precision rules injected:</div>` +
+          (styleLikes.length ? `<div style="font-size:11px;color:#4ade80;margin-top:6px;">✅ Style you keep: ${escapeHtml(styleLikes.join(', '))}</div>` : '') +
+          (styleDislikes.length ? `<div style="font-size:11px;color:#f87171;margin-top:3px;">❌ Style to avoid: ${escapeHtml(styleDislikes.join(', '))}</div>` : '') +
+          (sampleNotes ? `<div style="font-size:10.5px;color:#9ca3af;margin-top:4px;font-style:italic;">${escapeHtml(sampleNotes)}</div>` : '') +
+          `<div style="font-size:11.5px;color:#4ade80;margin-top:6px;">${aiRes.isFallback ? '⚡ Heuristic' : '🧠 AI'} synthesis — ${added} new precision rules injected${sampled ? ` (from ${sampled} sampled channels)` : ''}:</div>` +
           renderRuleChips(aiRes.keywords, aiRes.regex) +
           `<div style="margin-top:8px;"><button class="ai-action-btn" id="gotoKeywordsBtn" style="font-size:11px;padding:5px 10px;">📋 Show rules in Keywords tab</button></div>` +
           renderConflictRows(aiRes.conflicts) +
@@ -1522,7 +1560,20 @@ let synthAttempts = 0;
       setTimeout(() => { measureFeedDiversity(); }, 600);
       });
     };
-    requestSynthesis();
+    // Sample the channels' own pages for style evidence, then synthesize. The sampler
+    // runs on the same tab we already opened, so it costs no extra navigation. It is
+    // deliberately bounded (a handful of channels, a few titles each) and best-effort:
+    // if it returns nothing, synthesis proceeds on the channel list alone.
+    chrome.tabs.sendMessage(tabId, {
+      type: 'SCRAPE_SUBSCRIPTION_SAMPLES',
+      channels: res.channels,
+      max: 12
+    }, (sampleRes) => {
+      const samples = (sampleRes && sampleRes.ok && Array.isArray(sampleRes.samples))
+        ? sampleRes.samples
+        : [];
+      requestSynthesis(samples);
+    });
   };
 
   const tryScrape = (tabId, attemptsLeft, onFailure) => {
@@ -1542,7 +1593,7 @@ let synthAttempts = 0;
           setTimeout(() => tryScrape(tabId, attemptsLeft - 1, onFailure), 800);
           return;
         }
-        handleScrape(res);
+        handleScrape(res, tabId);
       });
     } catch (_) {
       if (attemptsLeft > 0) {
@@ -1792,6 +1843,7 @@ async function init() {
 
   initToggles();
   initAiGuardian();
+  initBundledAi();
 
   // Feed Forensic Diagnostic Roast
   const roastBtn = document.getElementById('aiRoastBtn');
@@ -1825,6 +1877,14 @@ function initAiGuardian() {
 
   if (tasteInput && data.aiTastePrompt) {
     tasteInput.value = data.aiTastePrompt;
+  }
+  const likedInput = document.getElementById('tasteLikedInput');
+  if (likedInput && Array.isArray(data.tasteLikedChannels) && data.tasteLikedChannels.length) {
+    likedInput.value = data.tasteLikedChannels.join(', ');
+  }
+  const dislikedInput = document.getElementById('tasteDislikedInput');
+  if (dislikedInput && Array.isArray(data.tasteDislikedChannels) && data.tasteDislikedChannels.length) {
+    dislikedInput.value = data.tasteDislikedChannels.join(', ');
   }
   if (autoToggle) {
     autoToggle.checked = Boolean(data.aiAutonomous);
@@ -2256,6 +2316,97 @@ async function cleanupZeroHitRules() {
   renderAll();
   await loadHitCounters();
   setStatus(`Removed ${zeroHitKeywords.length} zero-hit rule${zeroHitKeywords.length !== 1 ? 's' : ''}.`);
+}
+
+// ===== Bundled In-Browser AI Provider =====
+// No Ollama, no LM Studio, no other app — runs entirely in the browser.
+function initBundledAi() {
+  const listEl = document.getElementById('bundledAiModelList');
+  const progressEl = document.getElementById('bundledAiProgress');
+  const progressBar = document.getElementById('bundledAiProgressBar');
+  const progressLabel = document.getElementById('bundledAiProgressLabel');
+
+  if (!listEl) return;
+
+  // Fetch the model catalog from the background worker
+  chrome.runtime.sendMessage({ type: 'BUNDLED_AI_GET_MODELS' }, (res) => {
+    if (chrome.runtime?.lastError || !res || !res.ok || !Array.isArray(res.models)) {
+      listEl.innerHTML = '<div style="font-size:11px;color:var(--muted);">Could not load model catalog.</div>';
+      return;
+    }
+
+    listEl.innerHTML = '';
+    res.models.forEach(model => {
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:6px 8px;background:#1f2937;border-radius:6px;border:1px solid #374151;';
+
+      const info = document.createElement('div');
+      info.style.cssText = 'flex:1;min-width:0;';
+      info.innerHTML = `
+        <div style="font-size:12px;font-weight:600;color:#e5e7eb;">${escapeHtml(model.label)}</div>
+        <div style="font-size:10px;color:var(--muted);">${escapeHtml(model.size)} · ${escapeHtml(model.desc)}</div>
+      `;
+
+      const btn = document.createElement('button');
+      btn.className = 'action-btn';
+      btn.style.cssText = 'padding:4px 10px;font-size:11px;white-space:nowrap;';
+      btn.dataset.modelKey = model.key;
+
+      // Check download status
+      chrome.runtime.sendMessage({ type: 'BUNDLED_AI_GET_MODEL_STATUS', modelKey: model.key }, (statusRes) => {
+        if (statusRes && statusRes.downloaded) {
+          btn.textContent = '✓ Ready';
+          btn.style.background = '#065f46';
+          btn.style.color = '#d1fae5';
+          btn.disabled = true;
+        } else if (statusRes && statusRes.downloading) {
+          btn.textContent = '⏳ Downloading…';
+          btn.disabled = true;
+        } else {
+          btn.textContent = 'Download';
+          btn.addEventListener('click', () => {
+            btn.disabled = true;
+            btn.textContent = '⏳ Downloading…';
+            if (progressEl) progressEl.style.display = 'block';
+            if (progressBar) progressBar.style.width = '0%';
+            if (progressLabel) progressLabel.textContent = `Downloading ${model.label}…`;
+
+            chrome.runtime.sendMessage({ type: 'BUNDLED_AI_DOWNLOAD_MODEL', modelKey: model.key }, (dlRes) => {
+              if (progressEl) progressEl.style.display = 'none';
+              if (dlRes && dlRes.ok) {
+                btn.textContent = '✓ Ready';
+                btn.style.background = '#065f46';
+                btn.style.color = '#d1fae5';
+                btn.disabled = true;
+              } else {
+                btn.textContent = 'Download';
+                btn.disabled = false;
+                const errMsg = dlRes && dlRes.error ? dlRes.error : 'Unknown error';
+                if (progressLabel) progressLabel.textContent = `Download failed: ${errMsg}`;
+              }
+            });
+          });
+        }
+      });
+
+      row.appendChild(info);
+      row.appendChild(btn);
+      listEl.appendChild(row);
+    });
+  });
+
+  // Listen for progress updates from the background worker
+  chrome.runtime.onMessage.addListener((msg) => {
+    if (msg.type === 'BUNDLED_AI_PROGRESS' && msg.modelKey) {
+      if (progressEl) progressEl.style.display = 'block';
+      if (progressBar) progressBar.style.width = (msg.progress || 0) + '%';
+      if (progressLabel) {
+        const statusText = msg.status === 'progress' ? 'Downloading…' :
+          msg.status === 'done' ? 'Complete!' : msg.status || 'Working…';
+        progressLabel.textContent = `${statusText} ${msg.progress || 0}%`;
+      }
+    }
+  });
 }
 
 // Initialize new features after renderAll
