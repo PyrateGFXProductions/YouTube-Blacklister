@@ -143,7 +143,7 @@ Connect your browser directly to your own self-hosted inference engine (**Ollama
 - **Shorts Subscribed-Only Filter**: Keep the Shorts shelf visible, but filter out all algorithmic recommendations, preserving only creators you actually subscribe to.
 - **Community Posts Concealment**: Remove poll spam, text cards, and promotional channel announcements from your video stream.
 - **AI-Voiced Auto-Dubbed Triage**: Detects YouTube’s automated multi-language audio track dubs. Choose to hide all dubbed videos, keep only dubs from your subscriptions, or allow all.
-- **Topic Chip Rescue**: Automatically detects and repairs YouTube client bugs that cause topic filter bars to disappear from the top of the viewport.
+- **Topic Chip Rescue & Persistence**: Detects and repairs YouTube client bugs that cause the topic filter bar to disappear. When YouTube has only *hidden* the bar it is un-hidden; when YouTube serves **no chip data at all** (verified: the empty-feed state carries zero chips), the bar is **rebuilt into the page** from a local capture of your last good session — so you never have to sit there refreshing until the chips come back. The rebuilt bar is a plain page-styled element the extension owns (a hand-built YouTube renderer element is recycled by the page within a tick), its chips open real topics, and it disappears the moment YouTube serves its own bar again.
 
 ### 6. Feed Diversity Meter & Subscription Scanner
 - **Privacy-Preserving Mirror**: Securely caches your subscribed channel identities (`youtube.com/feed/channels`) entirely in `chrome.storage.local`.

@@ -20,7 +20,7 @@ let data = {
   tldwEnabled: true, huntMode: false, chipRescue: false, feedFallback: true, newToYouAuto: false,
   extensionEnabled: true,
   keywordExceptions: {}, feedHealthLog: [], communityPacks: [], temporalRules: [],
-  feedCache: [],
+  feedCache: [], chipBarCache: null,
   // Persisted AI verdicts (content.js: nyt_aiDecisions). They are user-visible block
   // state — a restore that dropped them visibly un-hid every AI-blocked video.
   aiDecisions: []
@@ -36,7 +36,7 @@ function load() {
       'aiDebaitTitles','aiDebaitModel','tldwEnabled','huntMode','chipRescue','feedFallback','newToYouAuto',
       'extensionEnabled',
       'keywordExceptions','feedHealthLog','communityPacks','temporalRules',
-      'nyt_aiDecisions'
+      'nyt_aiDecisions','nyt_feedCache','nyt_chipBarCache'
     ], (res) => {
       data.channels = Array.isArray(res.channels) ? res.channels : [];
       data.keywords = Array.isArray(res.keywords) ? res.keywords : [];
@@ -72,6 +72,11 @@ function load() {
       data.communityPacks = Array.isArray(res.communityPacks) ? res.communityPacks : [];
       data.temporalRules = Array.isArray(res.temporalRules) ? res.temporalRules : [];
       data.aiDecisions = Array.isArray(res.nyt_aiDecisions) ? res.nyt_aiDecisions : [];
+      // Both caches are exported by buildPayload from `data`, so they MUST be loaded here or
+      // the export silently ships an empty cache (the exact bug the feed cache shipped with:
+      // exported from data.feedCache that nothing ever populated).
+      data.feedCache = Array.isArray(res.nyt_feedCache) ? res.nyt_feedCache.filter(e => e && e.videoId) : [];
+      data.chipBarCache = (res.nyt_chipBarCache && typeof res.nyt_chipBarCache === 'object' && Array.isArray(res.nyt_chipBarCache.chips)) ? res.nyt_chipBarCache : null;
       resolve();
     });
   });
@@ -93,6 +98,9 @@ const PRESERVED_KEYS = {
   // browses. Re-reading it at write time means an import never restores a stale snapshot
   // over a fresher cache; an import that explicitly carries one passes it in `pinned`.
   nyt_feedCache: ['feedCache', (v) => (Array.isArray(v) ? v.filter(e => e && e.videoId) : [])],
+  // The rebuilt-chip-bar capture: the data needed to restore the Home topic bar when YouTube
+  // serves none. Small, and it must survive a restore or the bar cannot be rebuilt.
+  nyt_chipBarCache: ['chipBarCache', (v) => (v && typeof v === 'object' && Array.isArray(v.chips) ? v : null)],
   // AI verdicts are written continuously by the content script as the user browses.
   // Re-reading them at write time (instead of writing this page's open-time copy)
   // means an import can never silently resurrect videos the AI blocked meanwhile;
@@ -228,6 +236,7 @@ function buildPayload() {
     temporalRules: data.temporalRules,
     aiDecisions: data.aiDecisions,
     feedCache: Array.isArray(data.feedCache) ? data.feedCache : [],
+    chipBarCache: (data.chipBarCache && typeof data.chipBarCache === 'object' && Array.isArray(data.chipBarCache.chips)) ? data.chipBarCache : null,
     // Must stay in lockstep with the import path: every key the popup persists under
     // `settings` has to be here, or a backup → wipe → import round-trip silently resets
     // the missing ones to their defaults (which reads as "my settings changed themselves").
@@ -448,6 +457,12 @@ async function runImportFile(file) {
   if (Array.isArray(json.feedCache) && json.feedCache.length) {
     data.feedCache = json.feedCache.filter(e => e && e.videoId);
     pinned.nyt_feedCache = data.feedCache;
+  }
+  // The chip-bar capture: pinned only when the file carried a usable one, so importing an
+  // older backup never wipes the capture that makes a rebuild possible.
+  if (json.chipBarCache && typeof json.chipBarCache === 'object' && Array.isArray(json.chipBarCache.chips) && json.chipBarCache.chips.length) {
+    data.chipBarCache = json.chipBarCache;
+    pinned.nyt_chipBarCache = data.chipBarCache;
   }
 
   const saveErr = await saveToStorage(pinned);
