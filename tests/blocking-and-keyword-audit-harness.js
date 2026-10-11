@@ -1031,7 +1031,17 @@ const chipWiring = [
   ['navigation removes the rebuilt bar', /yt-navigate-finish'[\s\S]{0,900}removeRebuiltChipBar\(\)/.test(contentSrc)],
   ['the rebuilt bar id is ignored by the feed MutationObserver', contentSrc.includes("node.id === 'nyt-chip-cloud-rebuilt'")],
   ['backup exports the chip cache', backupSrc.includes('chipBarCache')],
-  ['backup import handles the chip cache', backupSrc.includes('nyt_chipBarCache')]
+  ['backup import handles the chip cache', backupSrc.includes('nyt_chipBarCache')],
+  // THE FEED-FILTER CONTRACT: a Home topic chip filters the Home grid by clicking YouTube's
+  // own chip. It must NEVER navigate to a generic /results search — the reported defect
+  // ("I don't want to search all of YouTube for a broad category").
+  ['a rebuilt chip click routes through clickChipByLabel (the real-chip clicker)',
+    /addEventListener\('click'[\s\S]{0,400}?clickChipByLabel\(/.test(contentSrc)],
+  ['NO code path navigates a chip to a generic YouTube search',
+    !/search_query/.test(contentSrc.replace(/\/\/[^\n]*search_query[^\n]*/g, ''))],
+  ['the real-chip clicker looks for the chip in YouTube real bar hosts',
+    /ytd-feed-filter-chip-bar-renderer, #chips-wrapper, yt-chip-cloud-renderer/.test(contentSrc)],
+  ['pause cancels a pending chip-click watch', /restoreHiddenByRules[\s\S]{0,2900}chipClickWatchTimer\)/.test(contentSrc)]
 ];
 for (const [name, cond] of chipWiring) staticOk('H: chipBar — ' + name, cond);
 staticOk('H: both caches are READ in the backup load path (or export ships them empty)',

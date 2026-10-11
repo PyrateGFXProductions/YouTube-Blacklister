@@ -152,7 +152,7 @@ const script = `
   const __store = __storeRef;
   const j = (v) => JSON.stringify(v);
 
-  const syms = ['chipBarCaptureIsUseful','normalizeChipEntry','extractChipsFromInitialData','extractChipsFromDom','chipRebuildDecision','buildChipBarElement','insertRebuiltChipBar','captureChipBarIfUseful','tryRebuildChipBar'];
+  const syms = ['chipBarCaptureIsUseful','normalizeChipEntry','extractChipsFromInitialData','extractChipsFromDom','chipRebuildDecision','buildChipBarElement','insertRebuiltChipBar','captureChipBarIfUseful','tryRebuildChipBar','realChipByLabel','clickRealChip','clickChipByLabel'];
   const missing = syms.filter(s => eval('typeof ' + s) !== 'function');
   ok('SEAM: the chip-bar persistence symbols exist', missing.length === 0, 'missing=' + j(missing));
   if (missing.length) return out;
@@ -230,6 +230,41 @@ const script = `
      inserted === true && !!document.getElementById('nyt-chip-cloud-rebuilt') &&
      grid.children[0].id === 'nyt-chip-cloud-rebuilt',
      'inserted=' + inserted + ' firstChild=' + (grid.children[0] && grid.children[0].id));
+
+  // B4-B6. THE FEED-FILTER CONTRACT (the reported defect): clicking a rebuilt chip must
+  // filter Home through YouTube's OWN chip — never navigate to a generic search. Here the
+  // stub's addEventListener is a no-op, so the contract is driven through the function the
+  // click handler calls: clickChipByLabel must find and click the REAL chip with that label
+  // in a real bar host, and must never touch location.
+  window.__nytChipClicks = [];
+  const realBarHost = makeEl('ytd-feed-filter-chip-bar-renderer');
+  const comedyChip = makeEl('yt-chip-cloud-chip-renderer');
+  const comedyLabel = makeEl('yt-formatted-string'); comedyLabel.textContent = 'Comedy';
+  comedyChip.appendChild(comedyLabel);
+  comedyChip.click = () => { window.__nytChipClicks.push('comedy'); return true; };
+  const otherChip = makeEl('yt-chip-cloud-chip-renderer');
+  const otherLabel = makeEl('yt-formatted-string'); otherLabel.textContent = 'All';
+  otherChip.appendChild(otherLabel);
+  otherChip.click = () => { window.__nytChipClicks.push('all'); return true; };
+  realBarHost.appendChild(comedyChip); realBarHost.appendChild(otherChip);
+  document.body.appendChild(realBarHost);
+
+  const foundChip = realChipByLabel('Comedy');
+  ok('B4: realChipByLabel finds the matching REAL chip by label',
+     !!foundChip && foundChip === comedyChip,
+     'found=' + (foundChip ? 'yes' : 'no'));
+  ok('B5: realChipByLabel is label-exact (a different label is not returned)',
+     realChipByLabel('Nonexistent Topic') === null);
+  clickChipByLabel('Comedy');
+  ok('B6: clicking routes to the real chip (the feed filter), and no navigation happens',
+     window.__nytChipClicks.includes('comedy') && !window.__nytChipClicks.includes('all') &&
+     window.location.href === 'https://www.youtube.com/',
+     'clicks=' + j(window.__nytChipClicks) + ' href=' + window.location.href);
+  window.__nytChipClicks = null;
+  // The real-bar fixture is this section's instrument ONLY: it must not leak into the
+  // capture/rebuild world below (it would add its chips to captures and make the page look
+  // like YouTube served a bar, so the rebuild would correctly refuse to run).
+  realBarHost.remove();
 
   // ---- E. end to end: capture on a good page, rebuild on an empty one ----
   // A good page: a rendered chip bar in the DOM.

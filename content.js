@@ -1943,6 +1943,8 @@ function restoreHiddenByRules() {
     removeFeedStuckButton();
     removeFeedFallbackPanel();
     removeRebuiltChipBar();
+    // A pending chip-click watch is background work: paused means paused.
+    if (chipClickWatchTimer) { clearTimeout(chipClickWatchTimer); chipClickWatchTimer = null; }
     // The chip watcher and the feed health poll are background work: paused means paused.
     stopChipRescueObserver();
     if (chipRescueTimer) { clearTimeout(chipRescueTimer); chipRescueTimer = null; }
@@ -5853,21 +5855,85 @@ function buildChipBarElement(chips) {
       ev.preventDefault();
       ev.stopPropagation();
       ev.stopImmediatePropagation();
-      // Prefer YouTube's own navigation target captured with the chip; fall back to its own
-      // results URL for the topic so the chip always does something real.
-      const ep = c.endpoint;
-      const url = ep && ep.commandMetadata && ep.commandMetadata.webCommandMetadata
-        ? ep.commandMetadata.webCommandMetadata.url : '';
-      try {
-        if (url) { window.location.href = url; return; }
-        if (String(c.text).trim()) {
-          window.location.href = '/results?search_query=' + encodeURIComponent(String(c.text).trim());
-        }
-      } catch (_) { }
+      clickChipByLabel(String(c.text || '').trim());
     }, true);
     bar.appendChild(chip);
   }
   return bar;
+}
+
+// Click YOUTUBE'S OWN chip for this topic. A Home topic chip is a FEED FILTER, not a search:
+// clicking "Comedy" must filter the Home grid in place (SPA), the way the real chip bar does —
+// never navigate to a generic /results?search_query= page, which serves an unrelated global
+// search. (That fallback was a wrong pattern and is gone.)
+//
+// Order of attempts:
+//   1. the real chip bar's chip whose label matches (click it — YouTube swaps the grid);
+//   2. if no real bar exists yet, re-request the home feed through YouTube's own navigation
+//      (the same SPA re-fetch the "Restore chips" path uses), then watch briefly for the bar
+//      to appear and click the matching chip when it does;
+//   3. if the topic never appears, say so — an honest no-op beats a wrong navigation.
+let chipClickWatchTimer = null;
+
+function realChipByLabel(label) {
+  if (!label) return null;
+  const want = label.trim().toLowerCase();
+  const bars = document.querySelectorAll(
+    'ytd-feed-filter-chip-bar-renderer, #chips-wrapper, yt-chip-cloud-renderer'
+  );
+  for (const bar of bars) {
+    for (const chip of bar.querySelectorAll('yt-chip-cloud-chip-renderer')) {
+      const t = (chip.querySelector('yt-formatted-string, #text')?.textContent || chip.textContent || '').trim();
+      if (t && t.toLowerCase() === want) return chip;
+    }
+  }
+  return null;
+}
+
+function clickRealChip(chip) {
+  try {
+    const clickable = chip.shadowRoot?.querySelector('button, a') ||
+      chip.querySelector('button, a') || chip;
+    clickable.click();
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+function clickChipByLabel(label) {
+  if (!label) return;
+  const now = realChipByLabel(label);
+  if (now) {
+    if (clickRealChip(now)) return;
+  }
+  // No real chip yet: ask YouTube for the home feed again (SPA re-fetch, no reload) and
+  // watch for the bar. The bar is the thing that was missing in the first place; a fresh
+  // Home render usually brings it with the standard chips attached.
+  if (chipClickWatchTimer) { clearTimeout(chipClickWatchTimer); chipClickWatchTimer = null; }
+  let attempts = 0;
+  const watch = () => {
+    chipClickWatchTimer = null;
+    if (!isHomePath()) return;
+    const chip = realChipByLabel(label);
+    if (chip) {
+      if (clickRealChip(chip)) {
+        showToast('Filtered Home to "' + label + '".');
+        return;
+      }
+    }
+    if (++attempts < 10) {
+      chipClickWatchTimer = setTimeout(watch, 700);
+    } else {
+      showToast('"' + label + '" is not available on your Home feed right now.');
+    }
+  };
+  if (refetchHomeFeed()) {
+    showToast('Asking YouTube for the Home feed again…');
+    chipClickWatchTimer = setTimeout(watch, 700);
+  } else {
+    watch();
+  }
 }
 
 // Insert the rebuilt bar where YouTube puts the home chip bar. Measured live, the bar sits
@@ -6088,6 +6154,7 @@ window.addEventListener('yt-navigate-finish', () => {
   // a fresh page (initChipRescue below re-evaluates whether one is needed).
   chipBarRebuiltThisPage = false;
   removeRebuiltChipBar();
+  if (chipClickWatchTimer) { clearTimeout(chipClickWatchTimer); chipClickWatchTimer = null; }
   scheduleFeedProcessing(200);
   checkCurrentWatchPageVideo();
   initChipRescue();
@@ -6102,6 +6169,7 @@ window.addEventListener('popstate', () => {
   removeFeedFallbackPanel();
   chipBarRebuiltThisPage = false;
   removeRebuiltChipBar();
+  if (chipClickWatchTimer) { clearTimeout(chipClickWatchTimer); chipClickWatchTimer = null; }
   scheduleFeedProcessing(200);
   checkCurrentWatchPageVideo();
   initChipRescue();
