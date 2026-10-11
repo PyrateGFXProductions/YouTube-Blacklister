@@ -797,6 +797,105 @@ const script = `
     metaHidden === 0 && metaOnly.dataset.hiddenByLocalBlacklist !== 'true', 'hidden=' + metaHidden);
   resetSettings();
 
+  // ===================== O. THE DOUBLED-NAME ARTIFACT (the reported "blocked 6+ times, keeps coming back") =====================
+  // A pre-fix content.js has none of these symbols: report FAILED assertions, never a crash,
+  // so the RED seam still names what broke.
+  const hasCollapse = eval('typeof collapseDoubledChannelText') === 'function';
+  if (!hasCollapse) {
+    ok('O6: collapseDoubledChannelText fixes an already-poisoned stored rule', false,
+      'collapseDoubledChannelText absent (pre-fix file)');
+    ok('O7: ...but never touches a real repeated-word channel name ("Duran Duran")', false,
+      'collapseDoubledChannelText absent (pre-fix file)');
+    ok('O8: a partial repeat (a genuine name) is not collapsed', false,
+      'collapseDoubledChannelText absent (pre-fix file)');
+  }
+  // VERIFIED LIVE on ytd-video-renderer: a ytd-channel-name wrapper carries the name TWICE —
+  // a visible #text plus a tp-yt-paper-tooltip #tooltip copy — so the wrapper's textContent
+  // reads "DW Documentary DW Documentary". The block gesture stored THAT as the rule; a
+  // doubled rule matches no card (and a clean rule no doubled key), so the channel reappeared
+  // on every refresh and re-blocking stored the same dead rule again.
+  clearFeed();
+  resetSettings();
+  // The card shape as captured from the live DOM: ytd-video-renderer > ytd-channel-name >
+  // #container > #text-container > yt-formatted-string#text, plus the tooltip copy.
+  function buildDoubledNameCard(name) {
+    const card = makeEl('ytd-video-renderer');
+    card.dataset.videoId = 'vidDoubled01';
+    const cn = makeEl('ytd-channel-name');
+    // The live wrapper carries id="channel-name" — it is how getChannelName's candidate
+    // list reaches this element at all. Without it the fixture tests nothing.
+    cn.setAttribute('id', 'channel-name');
+    const container = makeEl('div'); container.setAttribute('id', 'container');
+    const textContainer = makeEl('div'); textContainer.setAttribute('id', 'text-container');
+    const text = makeEl('yt-formatted-string'); text.setAttribute('id', 'text');
+    text.textContent = name;
+    textContainer.appendChild(text); container.appendChild(textContainer); cn.appendChild(container);
+    const tooltipHost = makeEl('tp-yt-paper-tooltip');
+    const tooltip = makeEl('div'); tooltip.setAttribute('id', 'tooltip');
+    tooltip.textContent = name;
+    tooltipHost.appendChild(tooltip); cn.appendChild(tooltipHost);
+    card.appendChild(cn);
+    document.body.appendChild(card);
+    return card;
+  }
+  const dbl = buildDoubledNameCard('DW Documentary');
+  ok('O1: the fixture really reads as the doubled artifact (control for O2)',
+    // The stub joins child text with no separator; the live DOM joins with whitespace. Both
+    // are the same artifact: the name appearing TWICE in the wrapper's textContent.
+    (() => {
+      const flat = String(dbl.querySelector('#channel-name').textContent).replace(/\s+/g, '');
+      return flat === 'DW Documentary'.repeat(2).replace(/\s+/g, '');
+    })(),
+    'wrapperText=' + JSON.stringify(String(dbl.querySelector('#channel-name').textContent).replace(/\s+/g, ' ').trim()));
+  ok('O2: getChannelName returns the SINGLE name, not the doubled textContent',
+    getChannelName(dbl) === 'DW Documentary', 'got ' + JSON.stringify(getChannelName(dbl)));
+  ok('O3: the card-key set carries the clean identity (so a clean stored rule matches)',
+    getCardChannelKeys(dbl).includes('dw documentary') &&
+    !getCardChannelKeys(dbl).includes('dw documentary dw documentary'),
+    'keys=' + JSON.stringify(getCardChannelKeys(dbl)));
+  // The whole point: block it, and the rule that lands in the list must match this card.
+  const toAdd = [];
+  for (const k of [normalizeChannel(getChannelName(dbl)), ...getChannelEntityKeys(dbl)]) {
+    const n = normalizeChannel(k);
+    if (n && !toAdd.includes(n)) toAdd.push(n);
+  }
+  ok('O4: the block gesture now stores the clean rule',
+    toAdd.includes('dw documentary') && !toAdd.includes('dw documentary dw documentary'),
+    'toAdd=' + JSON.stringify(toAdd));
+  settings.channels = toAdd;
+  delete dbl.dataset.lastSignature;
+  const dblHidden = processFeed(true);
+  ok('O5: the card is hidden by the rule the gesture just stored (end to end)',
+    dblHidden === 1 && dbl.dataset.hiddenByLocalBlacklist === 'true',
+    'hidden=' + dblHidden + ' channels=' + JSON.stringify(settings.channels));
+
+  // The backstop, and its limits: 3+ identical words collapse; a real 2-word repeat never does.
+  if (hasCollapse) {
+    ok('O6: collapseDoubledChannelText fixes an already-poisoned stored rule',
+      collapseDoubledChannelText('dw documentary dw documentary') === 'dw documentary');
+    ok('O7: ...but never touches a real repeated-word channel name ("Duran Duran")',
+      collapseDoubledChannelText('duran duran') === 'duran duran' &&
+      collapseDoubledChannelText('ling ling') === 'ling ling');
+    ok('O8: a partial repeat (a genuine name) is not collapsed',
+      collapseDoubledChannelText('sam and sam') === 'sam and sam');
+  }
+
+  // MIGRATION: rules already poisoned by the old code must heal on load, not just in memory.
+  const savedLoad = store.channels;
+  store.channels = ['dw documentary dw documentary', 'ancient history guy', 'duran duran'];
+  settings.channels = [];
+  await new Promise(r => { loadSettings().then(r); });
+  ok('O9: poisoned stored rules MIGRATE to the real name on load (and are persisted back)',
+    settings.channels.includes('dw documentary') &&
+    !settings.channels.includes('dw documentary dw documentary') &&
+    store.channels.includes('dw documentary') &&
+    !store.channels.includes('dw documentary dw documentary'),
+    'memory=' + JSON.stringify(settings.channels) + ' store=' + JSON.stringify(store.channels));
+  ok('O10: ...while clean entries and real repeated-word names survive migration untouched',
+    settings.channels.includes('ancient history guy') && settings.channels.includes('duran duran'),
+    'memory=' + JSON.stringify(settings.channels));
+  store.channels = savedLoad;
+
   // ===================== N. the visible-card COUNT (the reported "same 4 videos") =========
   // The feed health pass asks "are there fewer than N visible cards?" and only then asks
   // YouTube for more. Counting the raw card list made each video count TWICE on the modern

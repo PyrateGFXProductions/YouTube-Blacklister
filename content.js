@@ -371,9 +371,20 @@ function loadSettings() {
             // Channel names can legitimately be short ("DJ", "AI") or numeric ("1900"), so
             // do NOT reject by length or bare digits — those rules dropped real channels.
             return true;
-          });
-        // Persist the cleaned channels list back to storage if we removed anything
-        if (settings.channels.length !== (Array.isArray(res.channels) ? res.channels.length : 0)) {
+          })
+          // MIGRATE the doubled-name artifact: a rule stored as "dw documentary dw documentary"
+          // (YouTube's ytd-channel-name wrapper carries the name twice — visible #text plus a
+          // tooltip copy — and the block gesture used to read the wrapper's whole textContent)
+          // matched nothing, so the blocked channel kept reappearing. collapseDoubledChannelText
+          // rewrites it to the real name in place; entries that are not the artifact are kept
+          // verbatim, and "duran duran" (a real channel) is never touched (see its guard).
+          .map(c => collapseDoubledChannelText(String(c || '').trim()))
+          .filter((c, i, arr) => c && arr.indexOf(c) === i);
+        // Persist the cleaned channels list back to storage if anything CHANGED — including
+        // a doubled entry that migrated to its real name (same count, different content), so
+        // the garbage does not survive in storage and get re-migrated in memory on every load.
+        const storedChannels = Array.isArray(res.channels) ? res.channels : [];
+        if (JSON.stringify(settings.channels) !== JSON.stringify(storedChannels)) {
           try { chrome.storage.local.set({ channels: settings.channels }); } catch (_) { }
         }
         settings.keywords = Array.isArray(res.keywords) ? res.keywords : settings.keywords;
@@ -1017,6 +1028,54 @@ function cleanChannelText(str) {
   }
 }
 
+// A rendering artifact, not a real name: YouTube renders a channel's name TWICE inside one
+// `ytd-channel-name` (a visible `#text` node plus a `tp-yt-paper-tooltip #tooltip` copy), so
+// the element's textContent reads "DW Documentary DW Documentary". Verified live on
+// ytd-video-renderer; the doubled string was what the block gesture STORED, and a doubled
+// rule can never match a clean card (or a clean rule a doubled card key) — the reported
+// "I blocked this channel six times and it keeps coming back".
+//
+// The precise fix reads the single-name node at the source (getChannelName/getCardChannelKeys
+// prefer `#text`/`#text-container` before the wrapper). This collapse is the FALLBACK for
+// wrappers whose inner nodes are missing or shaped differently, and it is deliberately
+// conservative: it collapses ONLY an exact whole-string repeat, and ONLY when a simple
+// repeated-word name is impossible — "Duran Duran" and "Ling Ling" are real channels, and a
+// collapse that ate them would store a rule ("duran") that matches nothing, which is the
+// same bug this exists to fix.
+function collapseDoubledChannelText(s) {
+  const text = String(s == null ? '' : s).replace(/\s+/g, ' ').trim();
+  if (!text) return text;
+  const words = text.split(' ');
+  // A 2-word string of identical words IS ambiguous ("Duran Duran") — never touch it.
+  if (words.length < 3 || words.length % 2 !== 0) return text;
+  const half = words.length / 2;
+  const a = words.slice(0, half).join(' ');
+  const b = words.slice(half).join(' ');
+  // Identical halves of three-or-more words is not a plausible channel name: it is the
+  // rendering artifact. (A real "X X" name can only be two words long, guarded above.)
+  if (a && a.toLowerCase() === b.toLowerCase()) return a;
+  return text;
+}
+
+// One canonical "safe name" for a channel-name element: the inner single-name node when the
+// wrapper carries the doubled artifact, else the element's own text. All channel-name reads
+// (getChannelName, getCardChannelKeys, getChannelEntityKeys) go through this so the three
+// can never disagree about what a card's channel is.
+function channelNameOfElement(el) {
+  if (!el) return '';
+  let raw = '';
+  // Prefer the exact single-name nodes: the visible #text, its container. The wrapper's own
+  // textContent is the DOUBLED artifact (visible name + tooltip copy) and is only used when
+  // the inner nodes are absent — and then through the conservative collapse.
+  const inner = (el.querySelector && el.querySelector('#text, #text-container')) || null;
+  if (inner) {
+    raw = String(inner.textContent || '');
+  } else {
+    raw = String(el.textContent || '');
+  }
+  return collapseDoubledChannelText(cleanChannelText(raw));
+}
+
 function normalizeChannel(name) {
   return cleanChannelText(name).toLowerCase().replace(/^@+/, '');
 }
@@ -1257,10 +1316,12 @@ function getChannelName(card) {
   ) || [];
 
   for (const el of candidates) {
-    // channelNameFromRowText() returns a plain name unchanged and recovers the name out of a
-    // row that also carries the view count / timestamp (see its comment) — the row's own
-    // classifier would otherwise discard the identity along with the metadata.
-    const t = channelNameFromRowText(el.textContent);
+    // channelNameOfElement() reads the SINGLE-NAME inner node (#text / #text-container)
+    // before the wrapper, because a `ytd-channel-name` wrapper's own textContent is the
+    // doubled artifact (visible name + tooltip copy) — verified live. Row recovery
+    // (channelNameFromRowText) then handles a row that also carries the view count /
+    // timestamp, which its own classifier would otherwise discard with the metadata.
+    const t = channelNameFromRowText(channelNameOfElement(el));
     if (t) {
       const decomp = extractChannelNamesFromByline(t);
       // decomp[0] is the MAIN channel ("X" in "X and N more"); it is the
@@ -1274,7 +1335,7 @@ function getChannelName(card) {
 
   const anyChannelAnchor = card.querySelector?.('a[href*="/@"], a[href*="/channel/"], a[href*="/c/"], a[href*="/user/"]');
   if (anyChannelAnchor) {
-    const t = cleanChannelText(anyChannelAnchor.textContent);
+    const t = channelNameOfElement(anyChannelAnchor);
     if (t && isChannelNameText(t)) return t;
     const title = anyChannelAnchor.getAttribute('title') || anyChannelAnchor.getAttribute('aria-label') || '';
     const cleaned = cleanChannelText(title.replace(/^go to channel\s+/i, ''));
@@ -1307,7 +1368,10 @@ function getCardChannelKeys(card) {
   ) : [];
 
   for (const c of rawCandidates) {
-    const t = channelNameFromRowText(c.textContent);
+    // channelNameOfElement(): the card-key set must be built from the SAME single-name read
+    // getChannelName uses, or a doubled wrapper would put a garbage key in the set while the
+    // stored rule is clean — the exact mismatch that made blocked channels come back.
+    const t = channelNameFromRowText(channelNameOfElement(c));
     if (t) {
       // Skip YouTube's multi-collaborator overlay text ("X and N more") —
       // extractChannelNamesFromByline handles decomposition; the full overlay
@@ -1446,7 +1510,9 @@ function getChannelEntityKeys(card) {
     // If the link carries visible text, it must be the channel's display name,
     // its handle, or its squashed core; a completely unrelated text means this is
     // a collaboration guest or external link, not the primary channel identity.
-    const text = cleanChannelText(a.textContent);
+    // (channelNameOfElement: the same canonical single-name read as everywhere
+    // else, so a doubled wrapper cannot fail this agreement check by accident.)
+    const text = channelNameOfElement(a);
     if (text && nameNorm && isChannelNameText(text)) {
       const textNorm = normalizeChannel(text);
       const isSameAsName = textNorm === nameNorm;

@@ -330,15 +330,19 @@ try {
 
 new Promise((resolve) => resolve(results)).then((results) => {
   // ------------------------------------------------ cross-file wiring (W) ----
+  // Content.js may carry CRLF or LF line endings depending on which editor touched a region
+  // last; every literal here is matched against an ENDING-NORMALIZED copy so a patch that
+  // re-saves lines cannot break a wiring check by accident.
   const contentSrc = fs.readFileSync(CONTENT_PATH, 'utf8');
+  const contentNorm = contentSrc.replace(/\r\n/g, '\n');
   const bgSrc = fs.readFileSync(path.join(ROOT, 'background.js'), 'utf8');
   const fileChecks = [
     ['W1: the batch handler gates on whitelist, subscription and rule-citation before hiding',
-      /if \(channelMatches\(match\.card, settings\.whitelistChannels\)\) return;/.test(contentSrc) &&
-      /if \(cardIsSubscribed\(match\.card\)\) return;/.test(contentSrc) &&
-      /if \(aiRationaleCitesUserRule\(ev\.rationale\)\) return;/.test(contentSrc) &&
-      contentSrc.indexOf('channelMatches(match.card, settings.whitelistChannels)') <
-      contentSrc.indexOf('persistAiDecisions([{\n        key,')],
+      /if \(channelMatches\(match\.card, settings\.whitelistChannels\)\) return;/.test(contentNorm) &&
+      /if \(cardIsSubscribed\(match\.card\)\) return;/.test(contentNorm) &&
+      /if \(aiRationaleCitesUserRule\(ev\.rationale\)\) return;/.test(contentNorm) &&
+      contentNorm.indexOf('channelMatches(match.card, settings.whitelistChannels)') <
+        contentNorm.indexOf('persistAiDecisions([{\n        key,')],
     ['W2: the content script sends the subscription list with the batch',
       /subscribed: subscriptionDisplayNames\(\)/.test(contentSrc)],
     ['W3: the model prompt no longer receives the rule lists (that is what it approximate-matched)',
