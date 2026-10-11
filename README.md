@@ -210,10 +210,9 @@ Always New To You is built natively against WebExtensions standards and compiled
 4. Click **Load unpacked** and select the extracted folder.
 
 > [!NOTE]
-> The release ZIP contains the extension only. The `install.bat` Windows helper and the
-> project docs ship in the [repository](https://github.com/PyrateGFXProductions/YouTube-Blacklister)
-> instead — if you want the automated loader, clone the repo and double-click `install.bat`
-> there (it opens your browser's extension manager and copies the folder path to your clipboard).
+> The release ZIP contains the extension only. The project docs ship in the
+> [repository](https://github.com/PyrateGFXProductions/YouTube-Blacklister) instead — the
+> downloader gets the extension, not a copy of the repository's prose.
 
 #### Manual Load
 1. Clone this repository or download the source code:
@@ -317,7 +316,6 @@ YouTube-Blacklister/
 ├── popup.html / popup.js      # Main extension control interface
 ├── backup.html / backup.js    # Dedicated backup & restore dashboard
 ├── package-extension.ps1      # Multi-target release build script
-├── install.bat                # Windows quick developer loader (repo-only; not in the release ZIP)
 ├── tests/                     # Automated unit and integration test suite
 │   ├── test_ai_guardian.js    # AI parser, <think> token & JSON tests
 │   ├── test_rules.js          # Word-boundary & regex matching test harness

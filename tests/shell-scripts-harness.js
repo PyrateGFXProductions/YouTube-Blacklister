@@ -1,17 +1,14 @@
 /*
  * Shell-script structural gate.
  *
- * install.bat / fix-zen-install.bat / package-extension.ps1 / fix-zen-install.ps1 are covered
- * by NO other test in `npm test`, and a green JS suite cannot vouch for them — a batch file
- * with an unbalanced quote or a stage banner that contradicts its own step list ships
- * silently. This gate checks the classes of breakage an edit introduces, so the suite that
- * guards every .js file also guards the scripts that install the extension:
+ * package-extension.ps1 is covered by NO other test in `npm test`, and a green JS suite cannot
+ * vouch for it — an unbalanced delimiter or an unpaired here-string ships silently, and the
+ * packager is the one script whose failure means no release is produced at all.
  *
- *   - batch: quote balance, every stage banner agrees on its total, a "Final N ..." label
- *     matches the numbered steps under it, and line-ending-sensitive constructs (goto,
- *     :labels, parenthesised blocks) are flagged when the file is bare-LF;
- *   - PowerShell: delimiter balance and here-string pairing, with comments and quoted
- *     literals stripped first (mirrors scripts/ps1-structural-check.py).
+ * It covers the scripts that ARE TRACKED. The repo-only installers (install.bat,
+ * fix-zen-install.*) are deliberately untracked and are NOT required here: a fresh clone does
+ * not have them, so demanding them would fail the suite on every machine but this one. The
+ * batch-specific checks below still exist and run if a .bat is ever tracked again.
  *
  * This is a STRUCTURAL check, not a parser run. It proves the scripts are well-formed; it
  * does not prove they run.
@@ -97,8 +94,13 @@ function checkBat(file) {
   ok(`${file}: structurally sound (quotes, stage banners, step labels)`, bad.length === 0, bad.join('; '));
 }
 
-for (const f of ['install.bat', 'fix-zen-install.bat']) checkBat(f);
-for (const f of ['package-extension.ps1', 'fix-zen-install.ps1']) checkPs1(f);
+// The TRACKED scripts this gate owns. Every entry must be tracked, or a fresh clone fails the
+// suite — which is exactly the bug this list used to have (it required install.bat and
+// fix-zen-install.*, which are no longer tracked).
+const TRACKED_PS1 = ['package-extension.ps1'];
+const TRACKED_BAT = [];
+for (const f of TRACKED_PS1) checkPs1(f);
+for (const f of TRACKED_BAT) checkBat(f);
 
 let fail = 0;
 for (const r of results) {

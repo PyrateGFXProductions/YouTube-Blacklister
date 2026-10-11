@@ -94,10 +94,10 @@ if ($missingBuild.Count -gt 0) {
     exit 1
 }
 
-# Repo-only prose and the dev loader. Their absence is NOT a build failure — it only means
-# this checkout is a source-only tree. Reported as a non-fatal note so a maintainer still
-# sees it, without a missing README being able to break a release.
-$repoOnlyFiles = @("README.md", "CHANGELOG.md", "CONTRIBUTING.md", "ZEN-INSTALL.md", "install.bat")
+# Repo-only prose. Its absence is NOT a build failure — it only means this checkout is a
+# source-only tree. Reported as a non-fatal note so a maintainer still sees it, without a
+# missing README being able to break a release.
+$repoOnlyFiles = @("README.md", "CHANGELOG.md", "CONTRIBUTING.md", "ZEN-INSTALL.md")
 $absentRepoOnly = @($repoOnlyFiles | Where-Object { -not (Test-Path (Join-Path $PSScriptRoot $_)) })
 if ($absentRepoOnly.Count -gt 0) {
     Write-Host "[i] Repo-only files not present (not a build dependency, build continues): $($absentRepoOnly -join ', ')" -ForegroundColor DarkGray

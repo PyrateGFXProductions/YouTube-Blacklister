@@ -27,8 +27,9 @@ and unbranded builds**. Zen's own maintainers confirm the preference has no effe
 *"Currently the xpinstall.signatures.required and xpinstall.whitelist.required doesn't do
 anything"* ([zen-browser/desktop discussion #8961](https://github.com/zen-browser/desktop/discussions/8961)).
 
-So: **editing `prefs.js` (or `user.js`) cannot unlock unsigned installs in Zen.** This repo's
-earlier `fix-zen-install.bat` was built on that false premise and could not have worked.
+So: **editing `prefs.js` (or `user.js`) cannot unlock unsigned installs in Zen.** An earlier
+`fix-zen-install.bat` helper in this repo was built on that false premise and could not have
+worked; it has been removed rather than kept as a misleading option.
 
 Exactly two routes can give a permanent install. **Route A is the only guaranteed one, and
 the only one that survives a Zen update.**
@@ -114,8 +115,9 @@ makes this route a recurring chore, which is exactly why Route A is recommended.
 
 3. Launch Zen and check `about:policies` and `about:addons` as described above.
 
-`fix-zen-install.bat` automates this step (and writes a `user.js` copy of the preference,
-which Zen is expected to ignore — it is kept only so the script is honest about what it did).
+> **No helper script is shipped for this route.** It is unverified, and it must be re-applied
+> after every Zen update — a script that automated it would only hide that recurring chore.
+> Route A (AMO signing) is the supported path.
 
 ---
 

@@ -58,3 +58,14 @@ tmp/
 /references/
 /Generate_icons.html
 /.ignore
+
+# Repo-only installers and local agent tooling. These are NOT part of the published
+# extension (the packager's $packageFiles never included them) and they are not needed to
+# build, test or ship it — so they live in the working tree for local convenience only and
+# must not be tracked. install.bat is a Windows "load unpacked" helper for a cloned checkout;
+# fix-zen-install.* is the UNVERIFIED Zen enterprise-policy route (ZEN-INSTALL.md Route A,
+# AMO signing, is the supported one); .hermes.md is the local agent rules file.
+/install.bat
+/fix-zen-install.bat
+/fix-zen-install.ps1
+/.hermes.md
