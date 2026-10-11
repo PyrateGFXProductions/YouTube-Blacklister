@@ -36,6 +36,7 @@
   - [7. Interactive Feed Hunt Mode](#7-interactive-feed-hunt-mode)
   - [8. Atomic Backup, Restore & Migration](#8-atomic-backup-restore--migration)
   - [9. Instant Master Pause Switch](#9-instant-master-pause-switch)
+  - [10. Feed Fallback — a Home page YouTube cannot blank](#10-feed-fallback--a-home-page-youtube-cannot-blank)
 - [Browser Compatibility Matrix](#browser-compatibility-matrix)
 - [Installation Guide](#installation-guide)
   - [Chromium Family (Chrome, Edge, Brave, Opera, Vivaldi)](#chromium-family-chrome-edge-brave-opera-vivaldi)
@@ -109,7 +110,7 @@ The extension operates across three isolated environments coordinated by Chrome/
 
 ### 2. Multi-Tier Keyword & Regex Evaluator
 - **Word-Boundary Precision**: Plain-text terms are strictly bounded (`\b`). Adding `cat` intercepts "cute cat video" while safely preserving "category", "education", or "scatter".
-- **Relevance-Ranked Keyword Extraction**: The 🔑 key icon proposes rules from the words that *describe* the video — never the first, middle or last three words of the title. Candidates are scored by where they came from (the creator's own tags outrank the description, which outranks the transcript) and by how specific they are to the video you are looking at compared with the rest of the cards on your screen. Every proposed phrase is checked to appear verbatim in the source text, filler words (`day`, `first`, `last`) can never become a rule on their own, and anything that already matches several other visible cards is refused as too generic for your feed. The toast tells you what was skipped and why; Undo is one click.
+- **Relevance-Ranked Keyword Extraction**: The 🔑 key icon proposes rules from the words that *describe* the video — never the first, middle or last three words of the title. Candidates are scored by where they came from (the creator's own tags outrank the description, which outranks the transcript) and by how specific they are to the video you are looking at compared with the rest of the cards on your screen. A **specific phrase always outranks the single words inside it**, so `"America's New Home Market"` yields `new home market` — not `america`, `home`, `market`, each of which would block a huge slice of unrelated YouTube on its own; a coarse rule that is merely part of a higher-ranked phrase is dropped rather than stored alongside it. Possessive modifiers (`america's`, `nation's`) are never treated as the subject. Every proposed phrase is checked to appear verbatim in the source text, filler words (`day`, `first`, `last`) can never become a rule on their own, and anything that already matches several other visible cards is refused as too generic for your feed. The toast tells you what was skipped and why; Undo is one click.
 - **Raw Regular Expressions**: Full JavaScript `/pattern/flags` support. Block repetitive serial content like `/(?:ep|episode)\s*\d+/i` or challenge spam like `/(?:in|within)\s*(?:24|48)\s*hours/i`.
 - **Pre-Curated Starter Packs**: Built-in, one-click community rulesets for instant protection against:
   - 🧠 **Anti-Brainrot** (Skibidi, Grimace, content-farm syndicates)
@@ -170,6 +171,15 @@ Some days you want YouTube untouched. **Settings → ⏻ Extension Enabled** is 
 - **Fully inert**: no hover quick-block button, no 3-dot menu row, no "B" shortcut, no watch-page redirect, and no AI/debait work while paused — a paused extension does not evaluate a single card.
 - **Impossible to miss**: a paused banner appears on every tab in the popup with a one-click "Turn back on" button.
 - **Lossless and instant**: every rule, whitelist entry and preference is preserved and re-applied the moment you switch it back on. The switch itself survives backup/restore.
+
+### 10. Feed Fallback — a Home page YouTube cannot blank
+YouTube has a confirmed failure class where Home serves an **empty** recommendation grid (sign-in state, history settings and re-login change nothing; the empty response is an HTTP 200 from the recommender itself). No client-side retry, reload or "spoof" can force it to recommend — so the extension stops waiting on the recommender and supplies the cards itself.
+
+- **Local-first cache**: while your feed is healthy, the extension quietly records recent uploads from channels **you** subscribe to (video id, title, channel) into `chrome.storage.local`. That cache is what renders the fallback, so it works even when the recommender — and the subscriptions page — are refusing.
+- **Best-effort live top-up**: when the cache is thin or stale, it refreshes from each subscribed channel's own public `/videos` page — a plain content route, never a recommender surface. A hard wall-clock budget means a hanging fetch can never wedge the build, and partial progress is kept.
+- **Pure addition, never a takeover**: the panel is extension UI rendered *into* the page. It appears only when YouTube served **zero** cards, disappears the instant real cards arrive or you navigate away, and never hides or rewrites anything YouTube rendered.
+- **Honest about freshness**: a cache older than 14 days is labelled as such, so "cached" can never masquerade as "live".
+- **One switch, on by default**: **Settings → 🛟 Feed Fallback (empty Home)**. It carries no blacklist data on any request and is exported/imported with your backup.
 
 ---
 

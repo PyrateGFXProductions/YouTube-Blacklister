@@ -21,7 +21,7 @@ echo [2/3] Opening extensions page in your browser...
 start chrome chrome://extensions 2>nul || start msedge edge://extensions 2>nul || start "" "chrome://extensions"
 echo.
 
-echo [3/3] Final 2 Quick Steps in your browser:
+echo [3/3] Final 3 Quick Steps in your browser:
 echo       ----------------------------------------------------
 echo       1. Toggle "Developer mode" ON (top-right switch).
 echo       2. Click "Load unpacked" (top-left button).

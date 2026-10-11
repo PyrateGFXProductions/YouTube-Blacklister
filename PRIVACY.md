@@ -1,6 +1,6 @@
 # Privacy Policy — Always New To You (YouTube Smart Blacklister)
 
-**Last updated:** 2026-09-27 · Version 1.11.0
+**Last updated:** 2026-10-11 · Version 1.12.1
 
 This extension is **local-first by design**: the point of it is control over your own YouTube feed without giving anyone — including us — a copy of what you watch, block, or scroll past.
 
@@ -18,6 +18,7 @@ This document is the authoritative data-flow disclosure and is written to answer
 | Feed cards that are currently visible (titles, channel names) | Read from the page DOM you are looking at | Not stored (transient) | Only to your **local** AI daemon when you explicitly trigger an AI judgment / roast / diversity comparison (see §3) |
 | Closed captions / transcript for the video in the active tab (TL;DR) | Fetched from **YouTube itself** within your existing signed-in session | Not stored (transient) | Only to your **local** AI daemon when you explicitly trigger a TL;DR summary (see §3) |
 | Community blocklist packs (a public JSON rule list you choose to subscribe to) | Fetched from the URL **you** paste (https, on a code-hosting host only) | The pack's URL and its rules in `chrome.storage.local` | Only to the host serving the pack you chose. Nothing about you or your blacklist is sent — the request is a plain GET for a public file |
+| Feed Fallback cache (video id, title, channel name of recent uploads from channels **you** subscribe to) | Read from the YouTube feed DOM you are looking at, and — only when YouTube serves an empty Home page — from the public `/videos` page of channels in your subscription snapshot | `chrome.storage.local` on your device (capped, and dropped when it ages out) | **Never.** The cache is written and read entirely on your device; no request carries it. The one request the fallback makes is a plain GET for a channel's public page, the same URL you would open yourself — no blacklist, no settings, no identity is sent with it |
 
 The extension hosts **no** server, sends **no** analytics, and contains **no** third-party SDKs, trackers, or ad code. The external services reachable from the popup (GitHub, Ko-fi) are opened only when you click a link that you asked to click. The one non-click network request the extension can make on its own is the weekly refresh of a community pack you subscribed to; it is a plain GET for a public file, restricted to https and to code-hosting hosts, and it sends none of your data.
 
@@ -50,10 +51,12 @@ Some features (Mind Reader Taste Profiler, Autonomous Feed Guardian, AI Title De
 - **No telemetry, analytics, crash reporting, or remote configuration** — there is no code path that transmits telemetry, a beacon, or an update check.
 - **No disguised feedback to YouTube** — ordinary blocking hides cards in the page DOM only. The one deliberate exception is the **Server Recommendation Feedback** toggle, which you must explicitly enable; it attempts YouTube's own native "Don't recommend channel" menu action when that UI is available. Disabled by default.
 - **No hidden page rewriting** — the **"Start on 'New to you'"** feature simply clicks YouTube's own chip in the page you are viewing; auto-dubbed triage, feed decluttering, and the de-baiter only hide or rewrite elements locally. None of these send feedback or leave anything on the page YouTube did not already render.
+- **No server-side influence, and no fabricated feed** — the **Feed Fallback** does not spoof, forge or re-request YouTube's recommendations (the recommender's own answer is taken as final). When YouTube serves an empty Home page, it only *renders your own subscribed channels' recent uploads* into the page from a local cache, and removes that panel the instant YouTube serves real cards again. It cannot make YouTube recommend anything, and it sends nothing.
 
 ## 5. Retention and deletion
 
 - Your rules, settings, and subscription snapshot live in `chrome.storage.local` only. Removing the extension from Chrome deletes **all** of it.
+- The **Feed Fallback cache** is capped and pruned by age, lives only in `chrome.storage.local`, and is exported in your backup like everything else. It is never uploaded anywhere.
 - You can export and import a complete backup from the dedicated **Backup & Restore** page (opened from the popup's **Export** / **Import** buttons) and remove individual rules at any time.
 - Transient data (visible feed cards, captions) is never stored between sessions.
 
