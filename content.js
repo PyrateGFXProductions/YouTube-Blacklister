@@ -119,7 +119,21 @@ let settings = {
   aiDebaitModel: '',
   tldwEnabled: true,
   huntMode: false,
-  chipRescue: false,
+  // ON by default: YouTube intermittently serves the home page WITHOUT the topic-chip bar, and
+  // without the bar there is no way back to the default (or any other) topic feed — the user is
+  // stranded on whatever the page happened to load. The mitigation is cheap and self-limiting
+  // (it unhides the bar, or offers one button), and this extension's contract is feed health,
+  // so it is not something the user should have to discover in Settings.
+  chipRescue: true,
+  // Feed Fallback: when YouTube serves Home with an EMPTY recommendation grid (a confirmed
+  // platform-side failure class — see the September 2026 blank-home-feed incident, where
+  // signing out/in and account state changed nothing), render the user's own subscribed
+  // channels' latest videos in its place. The panel is built from a LOCAL cache this
+  // extension maintains, topped up from the channels' own /videos pages — never from a
+  // YouTube recommender surface, so it works when the recommender (and even the
+  // subscriptions page) refuses. Absent key means ON: an empty page is the exact state this
+  // exists for, and the fallback never hides or rewrites anything YouTube served.
+  feedFallback: true,
   newToYouAuto: false,
 
   // MASTER SWITCH. false = the extension is PAUSED: no rule hides a card, no hover
@@ -381,7 +395,12 @@ function loadSettings() {
         settings.aiDebaitModel = res.aiDebaitModel || settings.aiModel || '';
         settings.tldwEnabled = res.tldwEnabled !== false;
         settings.huntMode = Boolean(res.huntMode);
-        settings.chipRescue = Boolean(res.chipRescue);
+        // Absent key means ON: the chip-bar mitigation is on by default (see the settings
+        // default), so an existing install that never touched the toggle keeps it.
+        settings.chipRescue = res.chipRescue !== false;
+        // Absent key means ON (see the settings default): an empty home feed is exactly the
+        // state this exists for, so existing installs keep the safety net.
+        settings.feedFallback = res.feedFallback !== false;
         settings.newToYouAuto = Boolean(res.newToYouAuto);
         settings.extensionEnabled = res.extensionEnabled !== false;
         settings.keywordExceptions = res.keywordExceptions && typeof res.keywordExceptions === 'object' ? res.keywordExceptions : {};
@@ -473,6 +492,77 @@ function injectBlacklistStyles() {
         box-shadow: 0 2px 8px rgba(0,0,0,.35);
       }
       #nyt-chip-rescue:hover { filter: brightness(1.1); }
+      #nyt-feed-stuck {
+        position: fixed;
+        right: 16px;
+        bottom: 64px;
+        z-index: 2147483647;
+        border: none;
+        border-radius: 18px;
+        padding: 10px 16px;
+        background: var(--yt-spec-call-to-action, #065fd4);
+        color: #fff;
+        font: 500 13px/1 Roboto, Arial, sans-serif;
+        cursor: pointer;
+        box-shadow: 0 2px 8px rgba(0,0,0,.35);
+      }
+      #nyt-feed-stuck:hover { filter: brightness(1.1); }
+      /* Feed Fallback panel: extension UI shown in Home's page when YouTube's recommender
+         serves an empty grid. Never hides anything — pure addition, page-styled. */
+      #nyt-feed-fallback {
+        max-width: 1100px;
+        margin: 8px auto 24px;
+        padding: 14px 16px 18px;
+        border-radius: 14px;
+        background: var(--yt-spec-menu-background, #0f0f0f);
+        color: var(--yt-spec-text-primary, #f1f1f1);
+        border: 1px solid var(--yt-spec-outline, #303030);
+      }
+      .nyt-fallback-title {
+        font: 600 15px/1.3 Roboto, Arial, sans-serif;
+        color: var(--yt-spec-text-primary, #f1f1f1);
+      }
+      .nyt-fallback-note {
+        margin-top: 4px;
+        font: 400 12px/1.5 Roboto, Arial, sans-serif;
+        color: var(--yt-spec-text-secondary, #aaaaaa);
+      }
+      .nyt-fallback-grid {
+        margin-top: 12px;
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+        gap: 14px;
+      }
+      .nyt-fallback-item {
+        display: block;
+        text-decoration: none;
+        color: inherit;
+        border-radius: 10px;
+        overflow: hidden;
+        background: var(--yt-spec-additive-background, rgba(255,255,255,0.04));
+      }
+      .nyt-fallback-item:hover { background: var(--yt-spec-additive-background, rgba(255,255,255,0.08)); }
+      .nyt-fallback-thumb {
+        width: 100%;
+        aspect-ratio: 16 / 9;
+        object-fit: cover;
+        display: block;
+        background: #1f1f1f;
+      }
+      .nyt-fallback-video-title {
+        padding: 8px 10px 2px;
+        font: 500 13px/1.35 Roboto, Arial, sans-serif;
+        color: var(--yt-spec-text-primary, #f1f1f1);
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+      }
+      .nyt-fallback-channel {
+        padding: 2px 10px 10px;
+        font: 400 11.5px/1.3 Roboto, Arial, sans-serif;
+        color: var(--yt-spec-text-secondary, #aaaaaa);
+      }
     `;
 
     style.textContent = `
@@ -968,6 +1058,51 @@ function isChannelNameText(text) {
   return /^live$/i.test(s);                   // a channel called "Live"
 }
 
+// A channel NAME out of a metadata row that also carries the view count and the timestamp.
+//
+// On several YouTube surfaces those share ONE row, so the row's text reads
+// "Some Creator • 1.2M views • 3d ago" or even "Some Creator 1.2M views 3d ago". The row
+// classifier (isViewCountOrTimeText) must still REJECT such text — that is what keeps view
+// counts and "3d ago" out of the card-key set — but rejecting the whole row also throws away
+// the channel identity that sits inside it, and a card with no channel key can never be
+// matched by a channel rule. That is the reported "I blocked that channel and it still shows
+// up": the blacklist entry is fine, the card simply exposes no identity to match against.
+//
+// So the NAME is recovered from the row instead of the row being discarded. A row that is
+// ONLY metadata ("219M 7d ago") still yields nothing, and a plain name is returned unchanged.
+function channelNameFromRowText(text) {
+  const clean = cleanChannelText(text);
+  if (!clean) return '';
+  if (isChannelNameText(clean)) return clean;
+  // 1. Delete the metadata PHRASES first ("2 hours ago", "1.5M views"), then any bare
+  //    view-count token left behind ("219M"), then split what remains on the delimiters
+  //    YouTube puts between them. Deleting whole phrases matters: the word-by-word pass
+  //    leaves "3d ago" as two surviving words ("3d", "ago") and the reassembled fragment
+  //    then reads as time text again and is dropped, which is the bug this exists to fix.
+  const stripped = clean
+    .replace(/(?:streamed\s+)?\d+\s*(?:[smhdwy]|second|minute|hour|day|week|month|year)s?\s+ago/gi, ' ')
+    .replace(/\d+(?:[.,]\d+)?\s*[kmb]?\s*(?:views?|watching)/gi, ' ')
+    .replace(/\b(?:views?|watching|subscribers?|streamed|likes?|comments?)\b/gi, ' ')
+    .replace(/\s+/g, ' ').trim();
+  const VIEW_WORD_RE = /^\d+(?:[.,]\d+)?\s*[kmb]?$/i;   // a bare "219M" / "12,4K"
+  const names = [];
+  for (const part of stripped.split(/[•·|]/)) {
+    const tidy = part.split(/\s+/)
+      .filter(w => w && !VIEW_WORD_RE.test(w))
+      .join(' ')
+      .replace(/\s*[-–—,;:]\s*$/, '')
+      .replace(/^[\s\-–—,;:]+/, '')
+      .trim();
+    if (tidy && tidy.length > 1 && isChannelNameText(tidy)) names.push(tidy);
+  }
+  if (!names.length) return '';
+  // The channel name is the longest surviving fragment ("Live" and "4K" are badges; a real
+  // name is longer). Ties keep the first, which is the row's leading text on every surface
+  // seen so far.
+  names.sort((a, b) => b.length - a.length);
+  return names[0];
+}
+
 // Catastrophic-backtracking signatures: a group containing a nested quantifier OR an
 // alternation, itself quantified from outside — e.g. (a+)+, (a|aa)+$, (ab|a)*. Checked
 // before any user/imported regex runs.
@@ -1106,6 +1241,9 @@ function getChannelName(card) {
   const candidates = card.querySelectorAll?.(
     '#owner ytd-channel-name a, #owner #channel-name a, #owner #channel-name, ' +
     'ytd-video-owner-renderer #channel-name, #owner ytd-channel-name #text, ' +
+    'yt-lockup-metadata-view-model .ytLockupMetadataViewModelMetadataRow:first-child, ' +
+    'yt-lockup-metadata-view-model .yt-lockup-metadata-view-model-wiz__metadata-row:first-child a, ' +
+    'yt-lockup-metadata-view-model a[href*="/@"], yt-lockup-metadata-view-model a[href*="/channel/"], ' +
     'yt-content-metadata-view-model .ytContentMetadataViewModelMetadataRow:first-child, ' +
     'yt-content-metadata-view-model .ytContentMetadataViewModelMetadataText, ' +
     'yt-content-metadata-view-model .yt-content-metadata-view-model-wiz__metadata-row:first-child a, ' +
@@ -1119,8 +1257,11 @@ function getChannelName(card) {
   ) || [];
 
   for (const el of candidates) {
-    const t = cleanChannelText(el.textContent);
-    if (t && isChannelNameText(t)) {
+    // channelNameFromRowText() returns a plain name unchanged and recovers the name out of a
+    // row that also carries the view count / timestamp (see its comment) — the row's own
+    // classifier would otherwise discard the identity along with the metadata.
+    const t = channelNameFromRowText(el.textContent);
+    if (t) {
       const decomp = extractChannelNamesFromByline(t);
       // decomp[0] is the MAIN channel ("X" in "X and N more"); it is the
       // primary display name. Never return decomp[1] — that's a collaborator.
@@ -1138,6 +1279,9 @@ function getChannelName(card) {
     const title = anyChannelAnchor.getAttribute('title') || anyChannelAnchor.getAttribute('aria-label') || '';
     const cleaned = cleanChannelText(title.replace(/^go to channel\s+/i, ''));
     if (cleaned && isChannelNameText(cleaned)) return cleaned;
+    const href = anyChannelAnchor.getAttribute ? (anyChannelAnchor.getAttribute('href') || '') : '';
+    const ek = extractEntityKey(href);
+    if (ek && isChannelNameText(ek)) return ek;
   }
 
   return '';
@@ -1150,6 +1294,11 @@ function getCardChannelKeys(card) {
   const rawCandidates = card.querySelectorAll ? card.querySelectorAll(
     '#owner ytd-channel-name, #owner #channel-name, ' +
     'ytd-video-owner-renderer #channel-name, ytd-channel-name, ' +
+    'yt-lockup-metadata-view-model .ytLockupMetadataViewModelMetadataRow:first-child, ' +
+    'yt-lockup-metadata-view-model .yt-lockup-metadata-view-model-wiz__metadata-row:first-child, ' +
+    'yt-lockup-metadata-view-model .ytLockupMetadataViewModelMetadataText, ' +
+    'yt-lockup-metadata-view-model .yt-lockup-metadata-view-model-wiz__metadata-text, ' +
+    'a.yt-lockup-metadata-view-model-wiz__avatar, a.ytLockupMetadataViewModelAvatar, ' +
     'yt-content-metadata-view-model .ytContentMetadataViewModelMetadataRow:first-child, ' +
     'yt-content-metadata-view-model .ytContentMetadataViewModelMetadataText, ' +
     'yt-content-metadata-view-model .yt-content-metadata-view-model-wiz__metadata-row:first-child, ' +
@@ -1158,8 +1307,8 @@ function getCardChannelKeys(card) {
   ) : [];
 
   for (const c of rawCandidates) {
-    const t = cleanChannelText(c.textContent);
-    if (t && isChannelNameText(t)) {
+    const t = channelNameFromRowText(c.textContent);
+    if (t) {
       // Skip YouTube's multi-collaborator overlay text ("X and N more") —
       // extractChannelNamesFromByline handles decomposition; the full overlay
       // string is NOT a valid channel key.
@@ -1247,7 +1396,7 @@ function getCardChannelKeys(card) {
 }
 
 // Durable channel identities as they appear in a channel link's href.
-const CHANNEL_ENTITY_RE = /^\/(@[^/?#]+|channel\/[^/?#]+|c\/[^/?#]+|user\/[^/?#]+)/;
+const CHANNEL_ENTITY_RE = /(?:^|\/)(@[^/?#]+|channel\/[^/?#]+|c\/[^/?#]+|user\/[^/?#]+)/i;
 
 // High-CONFIDENCE channel identities — the subset of a card's keys that is safe to
 // persist as a permanent channel block.
@@ -1279,21 +1428,32 @@ function getChannelEntityKeys(card) {
     'ytd-video-owner-renderer a[href*="/@"], ytd-video-owner-renderer a[href*="/channel/"], ' +
     '#channel-name a[href*="/@"], ytd-channel-name a[href*="/@"], ' +
     'yt-content-metadata-view-model a[href*="/@"], yt-content-metadata-view-model a[href*="/channel/"], ' +
-    'yt-content-metadata-view-model a[href*="/c/"], yt-content-metadata-view-model a[href*="/user/"]'
+    'yt-content-metadata-view-model a[href*="/c/"], yt-content-metadata-view-model a[href*="/user/"], ' +
+    'yt-lockup-metadata-view-model a[href*="/@"], yt-lockup-metadata-view-model a[href*="/channel/"], ' +
+    'yt-lockup-metadata-view-model a[href*="/c/"], yt-lockup-metadata-view-model a[href*="/user/"], ' +
+    'a.yt-lockup-metadata-view-model-wiz__avatar, a.ytLockupMetadataViewModelAvatar, ' +
+    'a#avatar-link, .ytd-channel-name a[href*="/@"], .ytd-channel-name a[href*="/channel/"]'
   );
 
   for (const a of scoped) {
     const href = a.getAttribute ? (a.getAttribute('href') || '') : '';
     const m = href.match(CHANNEL_ENTITY_RE);
     if (!m) continue;
-    // If the link carries visible text it must agree with the displayed channel
-    // name; a mismatch means this is not the primary channel identity.
-    const text = cleanChannelText(a.textContent);
-    if (text && nameNorm && isChannelNameText(text) && normalizeChannel(text) !== nameNorm) continue;
     const raw = m[1];
     const norm = raw.startsWith('@')
       ? normalizeChannel(raw.slice(1))
       : normalizeChannel(raw.split('/')[1] || '');
+    // If the link carries visible text, it must be the channel's display name,
+    // its handle, or its squashed core; a completely unrelated text means this is
+    // a collaboration guest or external link, not the primary channel identity.
+    const text = cleanChannelText(a.textContent);
+    if (text && nameNorm && isChannelNameText(text)) {
+      const textNorm = normalizeChannel(text);
+      const isSameAsName = textNorm === nameNorm;
+      const isHandleText = textNorm === norm || textNorm === ('@' + norm);
+      const isSquashMatch = squashChannelKey(textNorm) === squashChannelKey(nameNorm);
+      if (!isSameAsName && !isHandleText && !isSquashMatch) continue;
+    }
     if (norm) keys.add(norm);
   }
 
@@ -1521,6 +1681,7 @@ function unhideShorts() {
 function measureFeedDiversity() {
   const cards = [];
   document.querySelectorAll(VIDEO_CARD_SELECTORS).forEach(card => {
+    if (isNestedInsideCard(card)) return;     // counted once, by the outer element
     const title = getVideoTitle(card);
     if (!title || title.length < 2) return;
     cards.push(card);
@@ -1550,6 +1711,23 @@ function measureFeedDiversity() {
 const GRID_SLOT_SELECTOR =
   'ytd-rich-item-renderer, ytd-video-renderer, ytd-compact-video-renderer, ytd-grid-video-renderer, ytd-reel-item-renderer, ytd-playlist-video-renderer';
 const COLLAPSED_SLOT_FLAG = 'nytCollapsedSlot';
+
+// Is this element merely a card NESTED inside another card?
+//
+// YouTube's modern feed renders yt-lockup-view-model INSIDE ytd-rich-item-renderer, and BOTH
+// are entries in VIDEO_CARD_SELECTORS. Every pass therefore evaluated the same video twice,
+// hid it twice, and — the visible symptom — counted it twice: the per-tab badge, the all-time
+// blocked counter and the diversity meter's "hidden by rules" all read roughly DOUBLE on any
+// modern feed, and one blacklist gesture was reported as two blocks. The OUTERMOST element
+// owns the evaluation; the inner one is part of it.
+function isNestedInsideCard(el) {
+  try {
+    const parent = el && el.parentElement;
+    return Boolean(parent && parent.closest && parent.closest(VIDEO_CARD_SELECTORS));
+  } catch (_) {
+    return false;
+  }
+}
 
 function clearHiddenStyles(el) {
   el.style.removeProperty('display');
@@ -1696,6 +1874,12 @@ function restoreHiddenByRules() {
     document.querySelectorAll('.nyt-tldw-overlay, .nyt-tldw-modal')
       .forEach(el => { if (el.parentNode) el.parentNode.removeChild(el); });
     removeChipRescueButton();
+    removeFeedStuckButton();
+    removeFeedFallbackPanel();
+    // The chip watcher and the feed health poll are background work: paused means paused.
+    stopChipRescueObserver();
+    if (chipRescueTimer) { clearTimeout(chipRescueTimer); chipRescueTimer = null; }
+    if (feedWatchTimer) { clearInterval(feedWatchTimer); feedWatchTimer = null; }
     huntStop();
   } catch (_) { }
 
@@ -2074,6 +2258,7 @@ function processFeed(force = false) {
   for (let i = 0; i < cards.length; i++) {
     const card = cards[i];
     if (!card) continue;
+    if (isNestedInsideCard(card)) continue;   // the outer element owns this video
 
     const vid = getVideoId(card);
     const channel = getChannelName(card);
@@ -2144,9 +2329,27 @@ function processFeed(force = false) {
     }
   } catch (_) { }
 
-  // Gentle feed replenishment if visible cards drop below 4 on home feed
-  if (isHomePath() && hiddenCount > 0) {
+  // Feed replenishment: on Home, ask YouTube for more whenever the feed is running thin —
+  // NOT only on a pass that happened to hide something. A dry feed is a state, not an event:
+  // the previous gate meant that once the rules were stable the extension never asked again,
+  // and the user was left with the same handful of videos.
+  if (isHomePath()) {
     checkFeedReplenishment(cards);
+  }
+
+  // Feed Fallback: if YouTube served Home with an EMPTY grid (its confirmed blank-feed
+  // failure), render the user's own subscribed-channel uploads in its place. Cached cards
+  // from HEALTHY passes keep the emergency panel warm; the throttled cache-write below is
+  // the "always be filling" half of that. (collectVisibleFeedItems returns a bare array of
+  // {title, channel, vid}.)
+  if (settings.feedFallback !== false && settings.extensionEnabled && isHomePath()) {
+    const nowMs = Date.now();
+    if (nowMs - feedFallbackLastRecord > FEED_FALLBACK_RECORD_MIN_INTERVAL_MS) {
+      feedFallbackLastRecord = nowMs;
+      recordFeedFallbackCards(collectVisibleFeedItems(40)
+        .map(it => ({ videoId: it.vid || '', title: it.title || '', channel: it.channel || '', t: nowMs })));
+    }
+    checkFeedFallback();
   }
 
   // AI Title De-Baiter pass (throttled)
@@ -2198,6 +2401,7 @@ function runAiEvaluationBatch() {
   for (let i = 0; i < cards.length && candidates.length < 6; i++) {
     const card = cards[i];
     if (!card) continue;
+    if (isNestedInsideCard(card)) continue;   // one video, one verdict
     if (card.dataset.hiddenByLocalBlacklist === 'true') continue;
 
     const vid = getVideoId(card);
@@ -2334,9 +2538,22 @@ function getVisibleCardCount(cards) {
   let count = 0;
   for (let i = 0; i < cards.length; i++) {
     const c = cards[i];
-    if (c.dataset.hiddenByLocalBlacklist !== 'true' && c.style.display !== 'none' && c.offsetHeight > 0) {
-      count++;
-    }
+    if (!c) continue;
+    // ONE VIDEO, ONE VOTE. The raw card list holds each video TWICE on the modern feed
+    // (yt-lockup-view-model is nested inside ytd-rich-item-renderer and both are card
+    // selectors), so counting every node made the visible count read roughly double. That
+    // defeated the replenishment trigger, which asks "are there fewer than N visible cards?" —
+    // with 4 real videos the count read ~8, the answer was always "no", and the extension
+    // never asked YouTube for more. Reported as "the home page only recommends the same few
+    // videos".
+    if (isNestedInsideCard(c)) continue;
+    if (c.dataset.hiddenByLocalBlacklist === 'true' || c.style.display === 'none') continue;
+    // A card inside an element we hid is not visible either (the inner node carries no flag).
+    if (c.closest && c.closest('[data-hidden-by-local-blacklist="true"]')) continue;
+    // `offsetHeight === undefined` only in the DOM stub used by the harnesses, where layout
+    // does not exist; there the element is visible unless something above flagged it.
+    const h = c.offsetHeight;
+    if (h === undefined || h > 0) count++;
   }
   return count;
 }
@@ -2361,6 +2578,7 @@ function collectVisibleFeedItems(limit = 15) {
   for (let i = 0; i < cards.length && items.length < max; i++) {
     const card = cards[i];
     if (!card || card.dataset.hiddenByLocalBlacklist === 'true') continue;
+    if (isNestedInsideCard(card)) continue;   // one video, one feed item
     addItem(getVideoTitle(card), getChannelName(card), getVideoId(card));
   }
 
@@ -2560,7 +2778,8 @@ function parseChannelPageSample(html, fallbackName) {
       const t = textOf(v.title);
       const desc = textOf(v.descriptionSnippet).replace(/\s+/g, ' ').trim();
       const len = textOf(v.lengthText).trim();
-      if (t) items.push({ title: t.trim(), description: desc, length: len });
+      const vid = v.videoId && typeof v.videoId === 'string' ? v.videoId : '';
+      if (t) items.push({ title: t.trim(), description: desc, length: len, videoId: vid });
     };
     const walk = (node, depth) => {
       if (!node || depth > 14) return;
@@ -2574,7 +2793,9 @@ function parseChannelPageSample(html, fallbackName) {
         try {
           title = textOf(lm.metadata.lockupMetadataViewModel.title);
         } catch (_) { }
-        if (title) items.push({ title: title.trim(), description: '', length: '' });
+        // lockupViewModel content carries the video id at contentId (typeof string).
+        const vid = lm.contentId && typeof lm.contentId === 'string' ? lm.contentId : '';
+        if (title) items.push({ title: title.trim(), description: '', length: '', videoId: vid });
       }
       Object.keys(node).forEach(k => walk(node[k], depth + 1));
     };
@@ -2582,7 +2803,8 @@ function parseChannelPageSample(html, fallbackName) {
     out.videos = items.slice(0, CHANNEL_SAMPLE_MAX_VIDEOS).map(v => ({
       title: v.title.slice(0, CHANNEL_SAMPLE_TITLE_CHARS),
       description: v.description.slice(0, CHANNEL_SAMPLE_DESC_CHARS),
-      length: v.length
+      length: v.length,
+      videoId: v.videoId || ''
     }));
   } catch (_) { }
   return out;
@@ -2653,19 +2875,499 @@ async function scrapeSubscriptionSamples(channels, maxChannels) {
   return { ok: true, samples: out, requested: picks.length };
 }
 
+// ------------------------------------------------------------------
+// FEED REPLENISHMENT — ask YouTube for more, then VERIFY it answered
+// ------------------------------------------------------------------
+// The home feed arrives in pages. YouTube requests the next page when its continuation
+// sentinel scrolls INTO view (an IntersectionObserver threshold crossing). Hiding a row of
+// cards moves that sentinel into view WITHOUT a crossing, so no next page is requested.
+//
+// The previous implementation could not fix that, for three reasons:
+//   1. it dispatched a synthetic 'scroll' event and moved the viewport by ONE pixel — a
+//      distance that never crosses the sentinel's threshold, so YouTube's loader never ran;
+//   2. it only ran on a pass that HID something, so it stopped the moment the feed was stable
+//      and the user was left with whatever had survived;
+//   3. its trigger compared a double-counted visible total against 4 (see
+//      getVisibleCardCount), so with the modern nested markup the answer was always "enough".
+// Together those are the reported "the home page only ever recommends the same few videos".
+//
+// The replacement does what actually crosses the threshold: it remembers the user's scroll
+// position, sweeps the viewport UP so the bottom sentinel leaves it and then BACK DOWN so it
+// re-enters, restores the position, and then CHECKS whether the card count grew. It is
+// bounded per page, rate-limited, and it stands down while the user is scrolling. When
+// YouTube genuinely has nothing more to give, it stops nudging and offers one click that
+// re-requests the home feed through YouTube's own navigation (no reload needed) — instead of
+// silently doing nothing forever.
+const FEED_MIN_VISIBLE = 8;            // below this the feed is worth refilling
+const FEED_MAX_ATTEMPTS = 6;           // per page load
+const FEED_ATTEMPT_COOLDOWN_MS = 5000; // between sweeps
+const FEED_USER_IDLE_MS = 1200;        // never fight a scrolling user
+let feedAttempts = 0;
+let feedLastAttempt = 0;
+let feedNoGrowth = 0;                  // consecutive sweeps YouTube answered with nothing
+let feedRefused = false;
+let feedStuckButton = null;
+let feedWatchTimer = null;
+let lastUserScrollAt = 0;
+
+// Pure and testable: spend an attempt asking YouTube for more feed?
+function feedReplenishDecision(opts) {
+  const o = opts || {};
+  if (!o.isHome) return { go: false, reason: 'not-home' };
+  if (!o.enabled) return { go: false, reason: 'disabled' };
+  if (o.refused) return { go: false, reason: 'refused' };
+  if (!o.total) return { go: false, reason: 'no-cards' };
+  if (Number(o.visible) || 0) { /* keep the comparison below explicit */ }
+  if (Number(o.visible) >= FEED_MIN_VISIBLE) return { go: false, reason: 'enough' };
+  if (Number(o.attempts) >= FEED_MAX_ATTEMPTS) return { go: false, reason: 'exhausted' };
+  if (Number(o.sinceAttempt) < FEED_ATTEMPT_COOLDOWN_MS) return { go: false, reason: 'cooldown' };
+  if (Number(o.sinceUserScroll) < FEED_USER_IDLE_MS) return { go: false, reason: 'user-scrolling' };
+  return { go: true, reason: 'stuck' };
+}
+
+// The home feed's scroll container. YouTube has used both the document and ytd-app as the
+// scroller, so measure the document and fall back to the app element.
+function feedScrollMetrics() {
+  const vh = window.innerHeight || 800;
+  let height = 0;
+  try { height = Math.max(document.documentElement.scrollHeight || 0, document.body ? document.body.scrollHeight : 0); } catch (_) { }
+  const y = Math.max(0, window.scrollY || document.documentElement.scrollTop || 0);
+  return { y, vh, max: Math.max(0, height - vh) };
+}
+
+// Out-of-view then back-in-view, so the sentinel's IntersectionObserver fires, then restore
+// the user's position. Two deliberate steps with a frame between them; no visible jump
+// because the position is restored before the next paint the user notices.
+function sweepForContinuation(onDone) {
+  const m = feedScrollMetrics();
+  if (m.max <= 4) {
+    // The page is shorter than the viewport: there is no scroll range, so no crossing is
+    // possible. Nothing local can request the next page — the caller offers the refresh.
+    if (typeof onDone === 'function') onDone({ swept: false, growable: false });
+    return;
+  }
+  const downTarget = Math.min(m.max, m.y + m.vh + 8);
+  const upTarget = Math.max(0, m.y - Math.round(m.vh * 0.7));
+  try {
+    window.scrollTo({ top: upTarget, behavior: 'instant' });
+  } catch (_) {
+    try { window.scrollTo(0, upTarget); } catch (__) { }
+  }
+  setTimeout(() => {
+    try {
+      window.scrollTo({ top: downTarget, behavior: 'instant' });
+    } catch (_) {
+      try { window.scrollTo(0, downTarget); } catch (__) { }
+    }
+    setTimeout(() => {
+      try {
+        window.scrollTo({ top: m.y, behavior: 'instant' });
+      } catch (_) {
+        try { window.scrollTo(0, m.y); } catch (__) { }
+      }
+      if (typeof onDone === 'function') onDone({ swept: true, growable: true });
+    }, 260);
+  }, 90);
+}
+
+function removeFeedStuckButton() {
+  if (feedStuckButton && feedStuckButton.parentNode) feedStuckButton.parentNode.removeChild(feedStuckButton);
+  feedStuckButton = null;
+}
+
+// Re-request the home feed through YouTube's OWN navigation: clicking the logo (or the guide's
+// Home entry) makes the SPA fetch a fresh page of recommendations in place — the documented
+// remedy for a home feed that has stopped paginating — without reloading the tab.
+function refetchHomeFeed() {
+  const tries = [
+    'a#logo', 'ytd-topbar-logo-renderer a#logo', '#logo a',
+    'ytd-mini-guide-entry-renderer[aria-label="Home"] a', 'a#endpoint[title="Home"]'
+  ];
+  for (const sel of tries) {
+    try {
+      const el = document.querySelector(sel);
+      if (el && typeof el.click === 'function') { el.click(); return true; }
+    } catch (_) { }
+  }
+  return false;
+}
+
+function showFeedStuckButton() {
+  if (feedStuckButton) return;
+  const btn = document.createElement('button');
+  btn.id = 'nyt-feed-stuck';
+  btn.textContent = '↻ Load more videos';
+  btn.title = 'YouTube has stopped loading new recommendations for this page. Click to re-request the home feed (a live refresh — the tab is not reloaded).';
+  btn.onclick = () => {
+    if (refetchHomeFeed()) {
+      showToast('Asked YouTube for a fresh feed…');
+      // A fresh page of recommendations resets the attempt budget so the sweep can help again.
+      feedAttempts = 0; feedNoGrowth = 0; feedRefused = false; feedLastAttempt = 0;
+      removeFeedStuckButton();
+      return;
+    }
+    showToast('Reloading YouTube to fetch a fresh feed…');
+    try { window.location.reload(); } catch (_) { }
+  };
+  document.body.appendChild(btn);
+  feedStuckButton = btn;
+}
+
 function checkFeedReplenishment(cards) {
   const now = Date.now();
-  if (now - lastSeedTime < 4000) return;
+  const visible = getVisibleCardCount(cards || []);
+  const total = (cards && cards.length) || 0;
+  const decision = feedReplenishDecision({
+    isHome: isHomePath(),
+    enabled: settings.extensionEnabled,
+    visible,
+    total,
+    attempts: feedAttempts,
+    sinceAttempt: now - feedLastAttempt,
+    sinceUserScroll: now - lastUserScrollAt,
+    refused: feedRefused
+  });
 
-  const visible = getVisibleCardCount(cards);
-  if (visible < 4 && document.body.offsetHeight < window.innerHeight * 2.5) {
-    lastSeedTime = now;
-    // Dispatch a subtle scroll event without jumping or moving the user's viewport
-    window.dispatchEvent(new Event('scroll'));
-    window.scrollBy({ top: 1, behavior: 'instant' });
-    window.scrollBy({ top: -1, behavior: 'instant' });
+  if (!decision.go) {
+    // Healthy or exhausted: make sure a stale "stuck" offer is not left on screen, but only
+    // clear it when the feed is genuinely fine (not merely between cooldowns).
+    if (decision.reason === 'enough' || decision.reason === 'not-home') removeFeedStuckButton();
+    return decision.reason;
+  }
+
+  feedAttempts++;
+  feedLastAttempt = now;
+  const before = total;
+  sweepForContinuation(() => {
+    setTimeout(() => {
+      const after = document.querySelectorAll(VIDEO_CARD_SELECTORS).length;
+      if (after > before) {
+        feedNoGrowth = 0;
+        dbg('feed replenished:', before, '->', after);
+        return;
+      }
+      feedNoGrowth++;
+      if (feedNoGrowth >= 2) {
+        // YouTube answered twice with nothing new. Stop nudging and let the user ask for a
+        // fresh feed; saying nothing here is what makes a dry feed look like a broken
+        // extension.
+        feedRefused = true;
+        showFeedStuckButton();
+        showToast('YouTube has no more videos queued for this page — use "Load more videos".');
+      }
+    }, 1200);
+  });
+  return 'swept';
+}
+
+// A cheap periodic health check while the tab is on Home and visible: the feed can run dry
+// long after the last hide (scrolling, a chip switch, YouTube re-rendering), and a
+// replenishment pass only ever ran when the extension itself hid something.
+function startFeedWatch() {
+  if (feedWatchTimer) { clearInterval(feedWatchTimer); feedWatchTimer = null; }
+  if (!settings.extensionEnabled || !isHomePath()) return;
+  feedWatchTimer = setInterval(() => {
+    if (document.visibilityState === 'hidden') return;
+    if (!settings.extensionEnabled || !isHomePath()) return;
+    const cards = document.querySelectorAll(VIDEO_CARD_SELECTORS);
+    checkFeedReplenishment(cards);
+    // The empty-feed state can arrive long after the first pass (a late SPA response), and
+    // the fallback must notice it too. Silent: the panel itself is the announcement; a toast
+    // every cooldown window would nag.
+    checkFeedFallback('silent');
+  }, 5000);
+}
+
+// The user is driving: never move their viewport under them.
+document.addEventListener('wheel', () => { lastUserScrollAt = Date.now(); }, { passive: true });
+document.addEventListener('touchstart', () => { lastUserScrollAt = Date.now(); }, { passive: true });
+document.addEventListener('scroll', () => { lastUserScrollAt = Date.now(); }, { passive: true });
+
+// ------------------------------------------------------------------
+// FEED FALLBACK — the subs grid YouTube cannot refuse
+// ------------------------------------------------------------------
+// YouTube has a confirmed failure class where Home serves an EMPTY recommendation grid
+// (September 2026 incident; sign-in state and account settings changed nothing, and the
+// Subscriptions page refused for some users too). The probe that diagnosed it showed the
+// empty response is an HTTP 200 from the recommender itself — there is nothing to retry,
+// spoof, or repair client-side.
+//
+// So the fallback supplies the cards ITSELF:
+//   1. A local cache (`nyt_feedCache`) of recent uploads per subscribed channel, built by
+//      this very tab whenever it sees those channels' cards anywhere, and persisted.
+//   2. Live top-up from each channel's own /videos page (parseChannelPageSample) — a direct
+//      per-channel fetch, NOT a recommender surface, and NOT the subscriptions page. When
+//      even those refuse, the cache still renders (dated, but never blank).
+//   3. When YouTube DOES serve cards, the same pass feeds the cache — so in normal times
+//      the fallback quietly fills up and the emergency path is warm.
+//
+// The panel is extension UI in Home's page: it never hides or rewrites anything YouTube
+// served, it appears only when YouTube served nothing, and it disappears the moment real
+// cards arrive. Server-invisible by construction: no blacklist data rides any request.
+
+const FEED_FALLBACK_STORAGE_KEY = 'nyt_feedCache';
+const FEED_FALLBACK_CACHE_CAP = 240;      // cached cards, oldest dropped
+const FEED_FALLBACK_PANEL_CAP = 40;       // cards shown in the panel
+const FEED_FALLBACK_FETCH_MAX = 12;       // channels refreshed per emergency
+const FEED_FALLBACK_TOPUP_BUDGET_MS = 20000;  // hard ceiling on a live top-up: never wedge
+const FEED_FALLBACK_RETIRE_MS = 14 * 24 * 60 * 60 * 1000;  // cache half-life warning age
+const FEED_FALLBACK_COOLDOWN_MS = 60000;  // between emergency builds
+const FEED_FALLBACK_RECORD_MIN_INTERVAL_MS = 10000;  // cache writes at most this often
+let feedFallbackPanel = null;
+let feedFallbackBusy = false;
+let feedFallbackLastBuild = 0;
+let feedFallbackLastRecord = 0;   // last healthy-feed cache write (write throttle)
+
+// Pure and testable: should the fallback fire on this pass?
+// `totalCards` is YouTube's RAW card count — the source's answer, not ours to hide.
+function feedFallbackDecision(opts) {
+  const o = opts || {};
+  if (!o.isHome) return { go: false, reason: 'not-home' };
+  if (!o.enabled) return { go: false, reason: 'disabled' };
+  if (!o.featureOn) return { go: false, reason: 'feature-off' };
+  if (o.busy) return { go: false, reason: 'busy' };
+  if (Number(o.totalCards) > 0) return { go: false, reason: 'youtube-served' };
+  const cacheOk = Array.isArray(o.cache) && o.cache.length > 0;
+  const subsOk = Array.isArray(o.subs) && o.subs.length > 0;
+  if (!cacheOk && !subsOk) return { go: false, reason: 'no-source' };
+  if (Number(o.cooldownRemaining) > 0) return { go: false, reason: 'cooldown' };
+  return { go: true, reason: cacheOk ? 'cache' : 'live-only' };
+}
+
+// Read-modify-write the cache: merge freshly seen channel cards, cap the size, persist.
+// Called with cards scraped from a HEALTHY feed, so the emergency path is always warm.
+function recordFeedFallbackCards(entries) {
+  const list = (Array.isArray(entries) ? entries : [])
+    .filter(e => e && typeof e.title === 'string' && e.title.trim() &&
+                 typeof e.channel === 'string' && e.channel.trim() &&
+                 typeof e.videoId === 'string' && e.videoId.trim())
+    .map(e => ({
+      videoId: e.videoId.trim(),
+      title: e.title.trim().slice(0, 140),
+      channel: e.channel.trim().slice(0, 80),
+      t: Number(e.t) || Date.now()
+    }));
+  if (!list.length) return 0;
+  try {
+    chrome.storage.local.get([FEED_FALLBACK_STORAGE_KEY], (store) => {
+      if (chrome.runtime?.lastError) return;
+      const cache = Array.isArray(store && store[FEED_FALLBACK_STORAGE_KEY])
+        ? store[FEED_FALLBACK_STORAGE_KEY].filter(e => e && e.videoId) : [];
+      const byId = new Map(cache.map(e => [e.videoId, e]));
+      for (const e of list) {
+        const prev = byId.get(e.videoId);
+        // A re-encounter refreshes the timestamp; a first sighting is appended.
+        byId.set(e.videoId, prev ? Object.assign({}, prev, { t: e.t }) : e);
+      }
+      const merged = [...byId.values()]
+        .sort((a, b) => (b.t || 0) - (a.t || 0))
+        .slice(0, FEED_FALLBACK_CACHE_CAP);
+      chrome.storage.local.set({ [FEED_FALLBACK_STORAGE_KEY]: merged }, () => {
+        if (chrome.runtime?.lastError) return;
+      });
+    });
+    return list.length;
+  } catch (_) {
+    return 0;
   }
 }
+
+// Read the cache, always resolving (a failed read is an empty cache, never a rejection).
+function readFeedFallbackCache() {
+  return new Promise((resolve) => {
+    try {
+      chrome.storage.local.get([FEED_FALLBACK_STORAGE_KEY], (store) => {
+        if (chrome.runtime?.lastError) { resolve([]); return; }
+        resolve(Array.isArray(store && store[FEED_FALLBACK_STORAGE_KEY])
+          ? store[FEED_FALLBACK_STORAGE_KEY].filter(e => e && e.videoId)
+          : []);
+      });
+    } catch (_) { resolve([]); }
+  });
+}
+
+// Best-effort live top-up: fetch a few subscribed channels' OWN /videos pages and merge
+// their uploads into the cache. Per-channel pages are a plain content route — they kept
+// serving during the incident (channel pages were verified working while Home refused).
+// TWO safety rails born from the diagnosis probes:
+//   * a hard WALL-CLOCK BUDGET — a hanging fetch (observed live: >20s) must not wedge the
+//     emergency build, whatever the per-fetch errors say;
+//   * PARTIAL PROGRESS IS KEPT — whatever was merged before the budget ran out is written,
+//     because a refusal mid-list is exactly the incident this exists for.
+async function feedFallbackTopUp(subs, maxChannels) {
+  const cap = Math.max(1, Math.min(Number(maxChannels) || FEED_FALLBACK_FETCH_MAX, 24));
+  const picks = interleaveChannels(subs, cap);
+  const deadline = Date.now() + FEED_FALLBACK_TOPUP_BUDGET_MS;
+  const merged = [];
+  for (const ch of picks) {
+    if (Date.now() >= deadline) break;
+    const sample = await sampleChannelTaste(ch);
+    if (sample && sample.ok && Array.isArray(sample.videos)) {
+      for (const v of sample.videos) {
+        if (!v || !v.title) continue;
+        merged.push({
+          videoId: (v.videoId && String(v.videoId)) || '',
+          title: v.title,
+          channel: sample.name || ch.name || '',
+          t: Date.now()
+        });
+      }
+    }
+  }
+  const keep = merged.filter(e => e.videoId);
+  if (keep.length) recordFeedFallbackCards(keep);
+  return keep.length;
+}
+
+// Everything the panel needs to render, in one pure function.
+function buildFeedFallbackViewModel(cache, limit) {
+  const cap = Math.max(1, Number(limit) || FEED_FALLBACK_PANEL_CAP);
+  const seen = new Set();
+  const items = [];
+  for (const e of (Array.isArray(cache) ? cache : [])) {
+    if (!e || !e.videoId || !e.title || !e.channel) continue;
+    if (seen.has(e.videoId)) continue;
+    seen.add(e.videoId);
+    items.push({
+      videoId: e.videoId,
+      title: e.title,
+      channel: e.channel,
+      ageDays: e.t ? Math.max(0, Math.round((Date.now() - e.t) / 86400000)) : null,
+      stale: e.t ? (Date.now() - e.t) > FEED_FALLBACK_RETIRE_MS : false
+    });
+    if (items.length >= cap) break;
+  }
+  return items;
+}
+
+function removeFeedFallbackPanel() {
+  if (feedFallbackPanel && feedFallbackPanel.parentNode) {
+    feedFallbackPanel.parentNode.removeChild(feedFallbackPanel);
+  }
+  feedFallbackPanel = null;
+}
+
+// The panel: a fixed card grid in Home's page, styled like the site, extension-branded.
+// Its mutations carry .nyt-fallback-item / id nyt-feed-fallback, both on the MutationObserver
+// ignore list, so the panel can never re-trigger feed processing.
+function showFeedFallbackPanel(items, meta) {
+  if (feedFallbackPanel) removeFeedFallbackPanel();
+  const panel = document.createElement('div');
+  panel.id = 'nyt-feed-fallback';
+  const head = document.createElement('div');
+  head.className = 'nyt-fallback-head';
+  const title = document.createElement('div');
+  title.className = 'nyt-fallback-title';
+  title.textContent = 'Feed Fallback — latest from your subscribed channels';
+  const note = document.createElement('div');
+  note.className = 'nyt-fallback-note';
+  note.textContent = meta && meta.stale
+    ? 'YouTube served an empty Home feed. Showing your locally cached channel uploads' +
+      (meta.cacheAgeHours != null ? ` (snapshot from ${meta.cacheAgeHours}h ago)` : '') +
+      ' — live refresh was refused too.'
+    : 'YouTube served an empty Home feed. Showing the latest uploads your subscribed channels published.';
+  head.appendChild(title);
+  head.appendChild(note);
+  const grid = document.createElement('div');
+  grid.className = 'nyt-fallback-grid';
+  for (const it of items) {
+    const a = document.createElement('a');
+    a.className = 'nyt-fallback-item';
+    a.setAttribute('href', 'https://www.youtube.com/watch?v=' + encodeURIComponent(it.videoId));
+    const img = document.createElement('img');
+    img.className = 'nyt-fallback-thumb';
+    img.loading = 'lazy';
+    img.alt = '';
+    img.setAttribute('src', 'https://i.ytimg.com/vi/' + encodeURIComponent(it.videoId) + '/mqdefault.jpg');
+    img.onerror = () => { img.style.display = 'none'; };
+    const t = document.createElement('div');
+    t.className = 'nyt-fallback-video-title';
+    t.textContent = it.title;
+    const c = document.createElement('div');
+    c.className = 'nyt-fallback-channel';
+    c.textContent = it.channel + (it.ageDays != null ? (it.ageDays === 0 ? ' · today' : ` · ${it.ageDays}d ago`) : '') + (it.stale ? ' · cached' : '');
+    a.appendChild(img);
+    a.appendChild(t);
+    a.appendChild(c);
+    grid.appendChild(a);
+  }
+  panel.appendChild(head);
+  panel.appendChild(grid);
+  document.body.appendChild(panel);
+  feedFallbackPanel = panel;
+}
+
+// One diagnosis + action pass, driven from the same watcher that drives replenishment.
+// The cache is read BEFORE the decision (a user with an empty subsSnapshot but a warm
+// cache must still fire), and YouTube's card count is re-checked after the async read —
+// it may have rendered while we waited.
+async function checkFeedFallback(trigger) {
+  const now = Date.now();
+  const cache = await readFeedFallbackCache();
+  const subs = Array.isArray(settings.subsSnapshot) ? settings.subsSnapshot : [];
+  const decide = (totalCards) => feedFallbackDecision({
+    isHome: isHomePath(),
+    enabled: settings.extensionEnabled,
+    featureOn: settings.feedFallback !== false,
+    busy: feedFallbackBusy,
+    totalCards,
+    cooldownRemaining: Math.max(0, FEED_FALLBACK_COOLDOWN_MS - (now - feedFallbackLastBuild)),
+    cache,
+    subs
+  });
+
+  const decision = decide(document.querySelectorAll(VIDEO_CARD_SELECTORS).length);
+  if (!decision.go) {
+    if (decision.reason === 'youtube-served' || decision.reason === 'not-home' || decision.reason === 'feature-off') {
+      removeFeedFallbackPanel();
+    }
+    return decision.reason;
+  }
+
+  feedFallbackBusy = true;
+  try {
+    // YouTube may have rendered cards while the storage read was in flight.
+    if (document.querySelectorAll(VIDEO_CARD_SELECTORS).length > 0) {
+      removeFeedFallbackPanel();
+      return 'youtube-served';
+    }
+
+    let items = buildFeedFallbackViewModel(cache);
+    let stale = false;
+    let cacheAgeHours = null;
+    if (items.length) {
+      const oldest = cache.reduce((min, e) => Math.min(min, Number(e && e.t) || now), now);
+      cacheAgeHours = Math.max(0, Math.round((now - oldest) / 3600000));
+      stale = items.every(it => it.stale);
+    }
+
+    // Live top-up when the cache is thin or stale — then rebuild from the merged cache.
+    if (items.length < 8 || stale) {
+      await feedFallbackTopUp(subs);
+      const merged = await readFeedFallbackCache();
+      const refreshed = buildFeedFallbackViewModel(merged);
+      if (refreshed.length) {
+        items = refreshed;
+        stale = false;
+        const oldest2 = merged.reduce((min, e) => Math.min(min, Number(e && e.t) || now), now);
+        cacheAgeHours = Math.max(0, Math.round((now - oldest2) / 3600000));
+      }
+    }
+
+    feedFallbackLastBuild = now;
+    if (items.length) {
+      showFeedFallbackPanel(items, { stale, cacheAgeHours });
+      if (trigger !== 'silent') {
+        showToast('YouTube served an empty Home feed — showing your subscribed channels instead (Feed Fallback).');
+      }
+      return 'shown' + (stale ? '-stale' : '');
+    }
+    return 'no-data';
+  } finally {
+    feedFallbackBusy = false;
+  }
+}
+
 
 // ------------------------------------------------------------------
 // 1-CLICK QUICK-BLOCK (EVENT DELEGATED HOVER BUTTON & KEYBOARD 'B')
@@ -3102,6 +3804,7 @@ function blacklistActiveChannel(targetCard) {
   let hidCount = 0;
   const allCards = document.querySelectorAll(VIDEO_CARD_SELECTORS);
   allCards.forEach(c => {
+    if (isNestedInsideCard(c)) return;      // one video, one counted block
     delete c.dataset.lastSignature;
     if (channelMatches(c, settings.channels)) {
       const wasHidden = c.dataset.hiddenByLocalBlacklist === 'true';
@@ -4266,6 +4969,7 @@ function start() {
     injectBlacklistStyles();
     initChipRescue();
     initNewToYouAuto();
+    startFeedWatch();
 
     setTimeout(() => {
       processFeed(true);
@@ -4284,7 +4988,7 @@ function start() {
         for (let j = 0; j < added.length; j++) {
           const node = added[j];
           if (node.nodeType !== 1) continue;
-          if (node.id === 'nyt-ext-toast' || node.id === 'nyt-tldw-host' || (node.classList?.contains && (
+          if (node.id === 'nyt-ext-toast' || node.id === 'nyt-tldw-host' || node.id === 'nyt-feed-fallback' || (node.classList?.contains && (
             node.classList.contains('custom-blacklist-option') ||
             node.classList.contains('nyt-quick-block-btn') ||
             node.classList.contains('nyt-debait-badge') ||
@@ -4292,6 +4996,7 @@ function start() {
             node.classList.contains('nyt-tldw-btn') ||
             node.classList.contains('nyt-tldw-overlay') ||
             node.classList.contains('nyt-tldw-modal') ||
+            node.classList.contains('nyt-fallback-item') ||
             node.classList.contains('nyt-hunt-prey') ||
             node.classList.contains('nyt-hunt-hud') ||
             node.classList.contains('nyt-hunt-ring')
@@ -4323,6 +5028,13 @@ function start() {
           injectBlacklistStyles();
           refreshSubscriptionKeySet();
           syncHuntMode();
+          document.querySelectorAll(VIDEO_CARD_SELECTORS).forEach(card => {
+            delete card.dataset.lastSignature;
+          });
+          // Coming back to the tab is exactly when a mid-session chip-bar loss and a dry feed
+          // need re-checking — the old code only re-checked the chips on a navigation.
+          initChipRescue();
+          startFeedWatch();
           processFeed(true);
         } catch (_) { }
       });
@@ -4617,7 +5329,7 @@ function syncHuntMode() {
 // ...) must NOT force a full feed re-evaluation on every open YouTube tab.
 // nyt_aiDecisions belongs here: an AI block recorded in one tab must hide the same
 // card in every other open tab, and undoing one must restore it there too.
-const RULE_KEYS = ['channels', 'keywords', 'whitelistChannels', 'subsSnapshot', 'blockShorts', 'shortsSubOnly', 'blockCommunity', 'autoDubMode', 'chipRescue', 'newToYouAuto', 'extensionEnabled', 'keywordExceptions', 'temporalRules', AI_DECISION_STORAGE_KEY];
+const RULE_KEYS = ['channels', 'keywords', 'whitelistChannels', 'subsSnapshot', 'blockShorts', 'shortsSubOnly', 'blockCommunity', 'autoDubMode', 'chipRescue', 'feedFallback', 'newToYouAuto', 'extensionEnabled', 'keywordExceptions', 'temporalRules', AI_DECISION_STORAGE_KEY];
 
 // Storage sync across tabs & popup
 if (isExtensionValid() && chrome?.storage?.onChanged) {
@@ -4625,11 +5337,18 @@ if (isExtensionValid() && chrome?.storage?.onChanged) {
     chrome.storage.onChanged.addListener((changes, areaName) => {
       if (areaName !== 'local') return;
       if (!Object.keys(changes).some((k) => RULE_KEYS.includes(k))) return;
-      if (document.visibilityState === 'hidden') return;
+      if (document.visibilityState === 'hidden') {
+        loadSettings();
+        return;
+      }
       loadSettings().then(() => {
         document.querySelectorAll(VIDEO_CARD_SELECTORS).forEach(card => {
           delete card.dataset.lastSignature;
         });
+        // A toggled chipRescue / a changed rule must take effect immediately, not on the next
+        // navigation.
+        initChipRescue();
+        startFeedWatch();
         processFeed(true);
       });
     });
@@ -4644,6 +5363,7 @@ if (isExtensionValid() && chrome?.runtime?.onMessage) {
       if (!sender || sender.id !== EXT_ID) return;
       if (msg && typeof msg === 'object' && msg.type === 'RULES_UPDATED') {
         if (document.visibilityState === 'hidden') {
+          loadSettings();
           try { sendResponse({ ok: true }); } catch (_) { }
           return;
         }
@@ -4651,6 +5371,8 @@ if (isExtensionValid() && chrome?.runtime?.onMessage) {
           document.querySelectorAll(VIDEO_CARD_SELECTORS).forEach(card => {
             delete card.dataset.lastSignature;
           });
+          initChipRescue();
+          startFeedWatch();
           processFeed(true);
           try { sendResponse({ ok: true }); } catch (_) { }
         });
@@ -4708,12 +5430,32 @@ if (isExtensionValid() && chrome?.runtime?.onMessage) {
 // ------------------------------------------------------------------
 let chipRescueTimer = null;
 let chipRescueButton = null;
+let chipRescueObserver = null;
+let chipRescueObserverTimer = null;
+let chipRescuePolls = 0;
+let chipRescueReloadStage = 0;   // 0 = offer the soft re-fetch, 1 = offer the reload
+let chipRescueAnnouncedAt = 0;
 
-// Pure, testable triage of the chip bar state.
+// Pure, testable triage of the chip bar state (contract unchanged — the harness pins it).
 function chipRescueState(hasChips, visible) {
   if (!hasChips) return { action: 'missing' };
   return visible ? { action: 'none' } : { action: 'unhide' };
 }
+
+// Pure, testable: keep watching for a while before telling the user YouTube did not serve the
+// bar. The old code judged "missing" six seconds after load and stopped looking, which is why
+// a bar that attaches late — or one YouTube re-adds after a re-render — never came back.
+function chipRescueShouldKeepWatching(polls) {
+  return Number(polls) < CHIP_RESCUE_QUIET_POLLS;
+}
+
+const CHIP_RESCUE_POLL_MS = 2500;
+const CHIP_RESCUE_QUIET_POLLS = 8;      // ~20s of silence before offering the refresh
+const CHIP_RESCUE_MAX_POLLS = 40;       // ~100s of timer-driven watching per page; the
+                                        // MutationObserver and navigations keep re-checking
+                                        // after that, so this only stops the free-running
+                                        // timer (a content script must not poll for ever)
+const CHIP_RESCUE_HEALTHY_MS = 8000;    // slower cadence once the chips are visible
 
 function removeChipRescueButton() {
   if (chipRescueButton && chipRescueButton.parentNode) {
@@ -4722,73 +5464,184 @@ function removeChipRescueButton() {
   chipRescueButton = null;
 }
 
-// Bounded poll: never reschedule forever on a feed that never renders.
-const CHIP_RESCUE_MAX_POLLS = 8;
-let chipRescuePolls = 0;
+// Find the topic-chip bar WHEREVER YouTube put it. The old lookup knew one wrapper element
+// (`ytd-feed-filter-chip-bar-renderer, #chips-wrapper`), so a build that renders the chips
+// inside `yt-chip-cloud-renderer` — the current generation, which also carries the
+// "New to you" chip — was diagnosed as "missing" while the chips were on the page.
+function findChipBar() {
+  const direct = document.querySelector(
+    'ytd-feed-filter-chip-bar-renderer, #chips-wrapper, ytd-chip-cloud-renderer'
+  );
+  if (direct) return direct;
+  const anyChip = document.querySelector('ytd-browse yt-chip-cloud-chip-renderer, ytd-browse yt-chip-cloud-renderer');
+  if (!anyChip) return null;
+  return anyChip.closest('yt-chip-cloud-renderer, ytd-feed-filter-chip-bar-renderer, #chips-wrapper') || anyChip;
+}
+
+// Robust visibility test. `offsetParent !== null` (the old test) is false for anything inside
+// a positioned ancestor, which made the rescue try to "unhide" a bar that was already visible
+// and then report success.
+function chipBarVisible(el) {
+  if (!el) return false;
+  try { if (el.getAttribute && el.getAttribute('hidden') !== null) return false; } catch (_) { }
+  try {
+    const cs = getComputedStyle(el);
+    if (cs.display === 'none' || cs.visibility === 'hidden') return false;
+    if (cs.opacity !== '' && cs.opacity !== undefined && Number(cs.opacity) === 0) return false;
+  } catch (_) { return true; }
+  try { if (el.getBoundingClientRect && el.getBoundingClientRect().height > 0) return true; } catch (_) { }
+  return el.offsetHeight > 0 || el.offsetParent !== null;
+}
+
+// Unhide the bar and the couple of ancestors it can be hidden behind. VERIFYING afterwards is
+// the part the old implementation skipped: it forced `display:flex !important` and toasted
+// "restored" whether or not anything had actually become visible.
+function unhideChipBar(el) {
+  if (!el) return false;
+  let node = el;
+  for (let i = 0; i < 3 && node && node.style; i++) {
+    try { node.removeAttribute('hidden'); } catch (_) { }
+    ['display', 'visibility', 'opacity', 'pointer-events', 'max-height', 'height', 'top', 'transform']
+      .forEach((prop) => { try { node.style.removeProperty(prop); } catch (_) { } });
+    const parent = node.parentElement;
+    if (!parent) break;
+    const tag = String(parent.tagName || '').toUpperCase();
+    if (tag === 'BODY' || tag === 'YTD-APP' || tag === 'YTD-BROWSE') break;
+    node = parent;
+  }
+  return true;
+}
+
+// The offer is deliberately two-stage: first re-request the home feed through YouTube's own
+// navigation (a live SPA refresh that re-renders the chip bar without losing the tab), and
+// only if that fails, offer the reload.
+function ensureChipRescueButton() {
+  if (chipRescueButton) return;
+  const btn = document.createElement('button');
+  btn.id = 'nyt-chip-rescue';
+  const soft = chipRescueReloadStage === 0;
+  btn.textContent = soft ? '↻ Restore chips' : '↻ Reload YouTube (chips missing)';
+  btn.title = soft
+    ? 'YouTube did not serve the topic-chip bar. Click to re-request the home feed through YouTube\'s own navigation (the tab is not reloaded).'
+    : 'Re-requesting the home feed did not bring the chips back. Click to reload the page — the bar is re-rendered on a full load.';
+  btn.onclick = () => {
+    if (chipRescueReloadStage === 0) {
+      chipRescueReloadStage = 1;
+      if (refetchHomeFeed()) {
+        showToast('Asked YouTube for the home feed again — watching for the chips…');
+        chipRescuePolls = 0;
+        removeChipRescueButton();
+        chipRescueTimer = setTimeout(chipRescueCheck, 3000);
+        return;
+      }
+    }
+    showToast('Reloading YouTube to re-render the chips…');
+    try { window.location.reload(); } catch (_) { }
+  };
+  document.body.appendChild(btn);
+  chipRescueButton = btn;
+}
+
+function stopChipRescueObserver() {
+  if (chipRescueObserverTimer) { clearTimeout(chipRescueObserverTimer); chipRescueObserverTimer = null; }
+  if (chipRescueObserver) { try { chipRescueObserver.disconnect(); } catch (_) { } chipRescueObserver = null; }
+}
+
+// While the bar is missing or hidden, watch the page: YouTube attaches and re-renders the chip
+// bar long after load, and the old implementation only ever looked again on a navigation — so
+// a bar lost mid-session (switching topics, scrolling, a header re-render) never came back.
+function startChipRescueObserver() {
+  if (chipRescueObserver) return;
+  try {
+    const target = document.querySelector('ytd-browse') || document.body;
+    if (!target || typeof MutationObserver === 'undefined') return;
+    chipRescueObserver = new MutationObserver(() => {
+      if (chipRescueObserverTimer) return;
+      chipRescueObserverTimer = setTimeout(() => {
+        chipRescueObserverTimer = null;
+        chipRescueCheck();
+      }, 900);
+    });
+    chipRescueObserver.observe(target, { childList: true, subtree: true });
+  } catch (_) { }
+}
+
+// One diagnosis + action pass. Module-scoped so the button's own retry timer can call it.
+function chipRescueCheck() {
+  if (chipRescueTimer) { clearTimeout(chipRescueTimer); chipRescueTimer = null; }
+  if (!settings.extensionEnabled || !settings.chipRescue || !isHomePath()) {
+    removeChipRescueButton();
+    stopChipRescueObserver();
+    return;
+  }
+
+  const bar = findChipBar();
+  const hasChips = !!bar;
+  const visible = hasChips ? chipBarVisible(bar) : false;
+  const state = chipRescueState(hasChips, visible);
+
+  if (state.action === 'none') {
+    chipRescuePolls = 0;
+    chipRescueReloadStage = 0;
+    removeChipRescueButton();
+    stopChipRescueObserver();
+    chipRescueTimer = setTimeout(chipRescueCheck, CHIP_RESCUE_HEALTHY_MS);
+    return;
+  }
+
+  // Something is wrong (missing or hidden) — watch closely, and keep looking.
+  startChipRescueObserver();
+  chipRescuePolls++;
+
+  if (state.action === 'unhide') {
+    unhideChipBar(bar);
+    // VERIFY on the next frame: only claim a fix that happened.
+    setTimeout(() => {
+      const nowVisible = chipBarVisible(bar);
+      if (nowVisible) {
+        const now = Date.now();
+        if (now - chipRescueAnnouncedAt > 30000) {
+          chipRescueAnnouncedAt = now;
+          showToast('YouTube had hidden the topic chips — restored.');
+        }
+        chipRescuePolls = 0;
+        removeChipRescueButton();
+        stopChipRescueObserver();
+        chipRescueTimer = setTimeout(chipRescueCheck, CHIP_RESCUE_HEALTHY_MS);
+      } else {
+        // Still invisible: stop pretending and offer the refresh.
+        ensureChipRescueButton();
+        if (chipRescuePolls > CHIP_RESCUE_QUIET_POLLS) {
+          chipRescueTimer = setTimeout(chipRescueCheck, CHIP_RESCUE_POLL_MS);
+        }
+      }
+    }, 120);
+    return;
+  }
+
+  // state.action === 'missing'
+  if (chipRescueShouldKeepWatching(chipRescuePolls)) {
+    // Keep quiet and keep watching: the bar routinely attaches after the grid.
+    chipRescueTimer = setTimeout(chipRescueCheck, CHIP_RESCUE_POLL_MS);
+    return;
+  }
+  ensureChipRescueButton();
+  // The offer is on screen; keep the timer running only for a bounded window. After that the
+  // MutationObserver, the next navigation and the next visibilitychange still re-check, so a
+  // bar that shows up later is still caught — without a content script polling for ever.
+  if (chipRescuePolls <= CHIP_RESCUE_MAX_POLLS) {
+    chipRescueTimer = setTimeout(chipRescueCheck, CHIP_RESCUE_POLL_MS);
+  }
+}
 
 function initChipRescue() {
   removeChipRescueButton();
+  stopChipRescueObserver();
   if (chipRescueTimer) { clearTimeout(chipRescueTimer); chipRescueTimer = null; }
   chipRescuePolls = 0;
   if (!settings.extensionEnabled || !settings.chipRescue || !isHomePath()) return;
-
-  const check = () => {
-    if (!settings.extensionEnabled || !settings.chipRescue || !isHomePath()) return;
-    // Only judge once the home feed rendered — YouTube can attach chips a beat late.
-    const feedCards = document.querySelectorAll(VIDEO_CARD_SELECTORS).length;
-    if (!feedCards) {
-      if (chipRescuePolls++ < CHIP_RESCUE_MAX_POLLS) {
-        chipRescueTimer = setTimeout(check, 4000);
-      }
-      return;
-    }
-
-    const chipsBar = document.querySelector('ytd-feed-filter-chip-bar-renderer, #chips-wrapper');
-    const hasChips = !!chipsBar;
-    let visible = false;
-    if (hasChips) {
-      try {
-        visible = chipsBar.offsetParent !== null &&
-          chipsBar.getAttribute('hidden') === null &&
-          getComputedStyle(chipsBar).display !== 'none' &&
-          getComputedStyle(chipsBar).visibility !== 'hidden';
-      } catch (_) { visible = true; }
-    }
-
-    const state = chipRescueState(hasChips, visible);
-
-    if (state.action === 'none') {
-      removeChipRescueButton();
-      return;
-    }
-
-    if (state.action === 'unhide') {
-      try {
-        chipsBar.removeAttribute('hidden');
-        chipsBar.style.setProperty('display', 'flex', 'important');
-        chipsBar.style.setProperty('visibility', 'visible', 'important');
-        showToast('YouTube hid the topic chips — restored.');
-      } catch (_) { }
-      return;
-    }
-
-    // action === 'missing': offer the verified fix (page reload), never auto-reload.
-    if (!chipRescueButton) {
-      const btn = document.createElement('button');
-      btn.textContent = '↻ Restore chips';
-      btn.id = 'nyt-chip-rescue';
-      btn.title = 'YouTube failed to render the topic chips (known bug). Click to reload the page — the verified fix.';
-      btn.onclick = () => {
-        showToast('Restoring topic chips …');
-        try { window.location.reload(); } catch (_) { }
-      };
-      document.body.appendChild(btn);
-      chipRescueButton = btn;
-      showToast('YouTube didn\'t render the topic chips — use the Restore chips button.');
-    }
-  };
-
-  chipRescueTimer = setTimeout(check, 6000);
+  // First look after the grid has had a chance to render, then every few seconds.
+  chipRescueTimer = setTimeout(chipRescueCheck, 2500);
 }
 
 // ------------------------------------------------------------------
@@ -4858,18 +5711,30 @@ window.addEventListener('yt-navigate-finish', () => {
   document.querySelectorAll(VIDEO_CARD_SELECTORS).forEach(card => {
     delete card.dataset.lastSignature;
   });
+  // A new page is a new feed: give the replenishment its full attempt budget again, and clear
+  // the "YouTube said no more" latch so it can help on this page too. The fallback panel
+  // belongs to the page that spawned it: a navigation away removes it, and the fresh page's
+  // own passes decide whether it is needed again.
+  feedAttempts = 0; feedNoGrowth = 0; feedRefused = false; feedLastAttempt = 0;
+  removeFeedStuckButton();
+  removeFeedFallbackPanel();
   scheduleFeedProcessing(200);
   checkCurrentWatchPageVideo();
   initChipRescue();
   initNewToYouAuto();
+  startFeedWatch();
 });
 
 window.addEventListener('popstate', () => {
   stopMenuObserver();
+  feedAttempts = 0; feedNoGrowth = 0; feedRefused = false; feedLastAttempt = 0;
+  removeFeedStuckButton();
+  removeFeedFallbackPanel();
   scheduleFeedProcessing(200);
   checkCurrentWatchPageVideo();
   initChipRescue();
   initNewToYouAuto();
+  startFeedWatch();
 });
 
 if (document.readyState === 'loading') {
@@ -4885,6 +5750,12 @@ if (typeof module !== 'undefined' && module.exports) {
     keywordRulesHidden,
     normalizeChannel,
     cleanChannelText,
+    isChannelNameText,
+    channelNameFromRowText,
+    isNestedInsideCard,
+    getVisibleCardCount,
+    feedReplenishDecision,
+    chipRescueShouldKeepWatching,
     hasWordBoundaryKeyword,
     extractEntityKey,
     extractChannelNamesFromByline,

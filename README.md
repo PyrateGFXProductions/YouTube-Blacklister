@@ -219,6 +219,8 @@ Always New To You is built natively against WebExtensions standards and compiled
 
 > [!IMPORTANT]
 > **Zen Browser & Firefox Notice:** Firefox and Zen enforce strict add-on signature verification. Loading the repository directly via `about:debugging` creates a temporary instance whose `chrome.storage.local` is **deleted when the browser closes**. Use the permanent installation methods below to ensure your rules persist forever.
+>
+> **If loading temporarily for testing:** In `about:debugging` &rarr; **Load Temporary Add-on...**, select **`zen-unpacked/manifest.json`** or the root **`blacklist-firefox.zip`** (do not select the repository root `manifest.json`, which contains Chromium's `service_worker` field and will trigger `background.service_worker is currently disabled`).
 
 #### Method 1: Signed XPI (Recommended — works on every Firefox-family build)
 Zen is a **release-branded** Gecko build, so it enforces add-on signing *regardless* of the

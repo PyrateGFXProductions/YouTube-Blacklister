@@ -298,7 +298,13 @@ let data = {
   aiDebaitModel: '',
   tldwEnabled: true,
   huntMode: false,
-  chipRescue: false,
+  // ON by default — matches content.js. YouTube sometimes serves Home with no topic-chip bar,
+  // which strands the user on one thin feed with no way back.
+  chipRescue: true,
+  // ON by default — matches content.js. When YouTube serves an empty Home grid (its
+  // confirmed blank-feed failure), the content script renders the user's subscribed
+  // channels' latest uploads from a local cache instead of a blank page.
+  feedFallback: true,
   newToYouAuto: false,
   // MASTER SWITCH. false = the extension is paused everywhere (content script
   // restores everything it hid and stops acting). Absent key = enabled.
@@ -341,6 +347,7 @@ function load() {
       'tldwEnabled',
       'huntMode',
       'chipRescue',
+      'feedFallback',
       'newToYouAuto',
       'extensionEnabled',
       'keywordExceptions',
@@ -375,7 +382,8 @@ function load() {
       data.aiDebaitModel = res.aiDebaitModel || res.aiModel || '';
       data.tldwEnabled = res.tldwEnabled !== false;
       data.huntMode = Boolean(res.huntMode);
-      data.chipRescue = Boolean(res.chipRescue);
+      data.chipRescue = res.chipRescue !== false;   // absent key means ON (see defaults)
+      data.feedFallback = res.feedFallback !== false;   // absent key means ON (see defaults)
       data.newToYouAuto = Boolean(res.newToYouAuto);
       data.extensionEnabled = res.extensionEnabled !== false;
       data.keywordExceptions = res.keywordExceptions && typeof res.keywordExceptions === 'object' ? res.keywordExceptions : {};
@@ -415,6 +423,7 @@ async function save() {
     tldwEnabled: data.tldwEnabled,
     huntMode: data.huntMode,
     chipRescue: data.chipRescue,
+    feedFallback: data.feedFallback,
     newToYouAuto: data.newToYouAuto,
     extensionEnabled: data.extensionEnabled,
     keywordExceptions: data.keywordExceptions,
@@ -615,6 +624,8 @@ function renderList(listEl, items, filterText, emptyMsg, onRemove, onEdit) {
 }
 
 function renderAll() {
+  renderBlacklistWhitelistOverlap();
+
   renderList(
     document.getElementById('channelList'),
     data.channels,
@@ -628,7 +639,16 @@ function renderAll() {
       // Same canonicalization the add path applies (lowercased, URL/handle
       // normalized) — otherwise an edited rule is stored in a different string
       // form than a typed one and never matches the matcher or the dedupe.
-      replaceRule(data.channels, oldV, extractEntityFromInput(newV));
+      const canonical = extractEntityFromInput(newV);
+      replaceRule(data.channels, oldV, canonical);
+      if (canonical) {
+        const normIt = String(canonical).trim().toLowerCase();
+        const noAt = normIt.replace(/^@/, '');
+        data.whitelistChannels = data.whitelistChannels.filter(w => {
+          const normW = String(w).trim().toLowerCase();
+          return normW !== normIt && normW.replace(/^@/, '') !== noAt;
+        });
+      }
       save(); renderAll(); setStatus('Channel rule updated.');
     }
   );
@@ -927,6 +947,12 @@ function initToggles() {
     chipRescueToggle.onchange = () => { data.chipRescue = chipRescueToggle.checked; save(); };
   }
 
+  const feedFallbackToggle = document.getElementById('toggleFeedFallback');
+  if (feedFallbackToggle) {
+    feedFallbackToggle.checked = data.feedFallback !== false;
+    feedFallbackToggle.onchange = () => { data.feedFallback = feedFallbackToggle.checked; save(); };
+  }
+
   const newToYouToggle = document.getElementById('toggleNewToYou');
   if (newToYouToggle) {
     newToYouToggle.checked = Boolean(data.newToYouAuto);
@@ -1160,17 +1186,29 @@ function purgeManipulators() {
 // ------------------------------------------------------------------
 
 // Shared rule-injection used by BOTH the Mind Reader and the Subscription Synthesizer.
-// Keywords are lowercased; regex patterns are preserved verbatim. Dedupes against data.keywords.
+//
+// Every candidate goes through the extension's ONE keyword gate — nytKwFilterRules() in
+// shared-tables.js, which is loaded ahead of this file — so a synthesizer can never store a
+// rule the key-icon extraction would refuse. That gate was MISSING here: this function used
+// to lowercase and dedupe and nothing else, so one "synthesize" run could fill the blacklist
+// with the ordinary words a model offers when it has nothing specific to say (`day`,
+// `coverage`, `testing`, `truth`) — which is the reported complaint. Rules the user typed by
+// hand are untouched: the gate applies only to what a synthesiser proposes.
+//
+// Returns what was added AND what was refused, so the result box can NAME the skipped rules
+// instead of dropping them silently (a silent drop makes a considered refusal look like a
+// broken feature).
 function injectRulesIntoBlacklist(rules) {
+  const proposed = (rules && Array.isArray(rules.keywords)) ? rules.keywords : [];
+  const gate = nytKwFilterRules(proposed, 32);
+  const refused = gate.refused.slice();
+
   let added = 0;
-  if (rules && Array.isArray(rules.keywords)) {
-    rules.keywords.forEach(k => {
-      const clean = canonicalKeyword(k);
-      if (clean && !data.keywords.includes(clean)) {
-        data.keywords.push(clean);
-        added++;
-      }
-    });
+  for (const clean of gate.kept) {
+    if (!data.keywords.includes(clean)) {
+      data.keywords.push(clean);
+      added++;
+    }
   }
   if (rules && Array.isArray(rules.regex)) {
     rules.regex.forEach(r => {
@@ -1195,7 +1233,7 @@ function injectRulesIntoBlacklist(rules) {
       }
     });
   }
-  return added;
+  return { added, refused };
 }
 
 const SUBSCRIPTIONS_URL = 'https://www.youtube.com/feed/channels';
@@ -1326,6 +1364,57 @@ function renderRuleChips(keywords, regex) {
   const body = `${kwChips} ${rxChips}`.trim();
   if (!body) return '';
   return `<div style="max-height:120px;overflow-y:auto;margin-top:6px;padding:6px 8px;background:rgba(255,255,255,0.03);border:1px solid rgba(148,163,184,0.18);border-radius:8px;line-height:1.6;">${body}</div>`;
+}
+
+// The rules a synthesiser PROPOSED but the shared gate refused, named. A silent drop makes a
+// considered refusal indistinguishable from a broken feature ("why did it pick THOSE?"), and
+// the user's own complaint was a keyword list made of ordinary words — saying which ones were
+// skipped is the honest half of fixing that.
+function renderRefusedRows(refused) {
+  const list = Array.isArray(refused) ? refused.filter(Boolean) : [];
+  if (!list.length) return '';
+  const shown = list.slice(0, 6).join(', ') + (list.length > 6 ? ` (+${list.length - 6} more)` : '');
+  return `<div style="margin-top:5px;font-size:10.5px;color:#ffb400;line-height:1.45;">` +
+    `⚠️ Skipped ${list.length} too-generic rule${list.length > 1 ? 's' : ''} (they would hide unrelated videos): ${escapeHtml(shown)}</div>`;
+}
+
+// Channels sitting in BOTH lists are the single most confusing silent state this extension
+// can be in: the whitelist is tested first in the matcher, so a channel the user explicitly
+// blocked keeps appearing and nothing in the UI says why. The popup owns the whitelist, so
+// the overlap is surfaced here with a one-click resolution that lets the BLACKLIST win —
+// matching the invariant the auto-protect path already claims ("a channel the user explicitly
+// blocked is never auto-whitelisted"). It is never resolved silently: only this button
+// removes a whitelist entry.
+function renderBlacklistWhitelistOverlap() {
+  const host = document.getElementById('channelOverlapWarning');
+  if (!host) return;
+  const norm = (v) => String(v == null ? '' : v).trim().replace(/^@+/, '').toLowerCase();
+  const squash = (v) => norm(v).replace(/[^a-z0-9]/g, '');
+  const wl = Array.isArray(data.whitelistChannels) ? data.whitelistChannels : [];
+  const bl = Array.isArray(data.channels) ? data.channels : [];
+  const blocked = new Set();
+  bl.forEach(c => { const n = norm(c); const s = squash(c); if (n) blocked.add(n); if (s) blocked.add(s); });
+  const overlaps = wl.filter(w => {
+    const n = norm(w); const s = squash(w);
+    return (n && blocked.has(n)) || (s && blocked.has(s));
+  });
+  if (!overlaps.length) { host.innerHTML = ''; host.style.display = 'none'; return; }
+  host.style.display = 'block';
+  host.innerHTML =
+    `<div style="font-size:11px;color:#ffb400;line-height:1.5;">⚠️ ${overlaps.length} channel${overlaps.length > 1 ? 's are' : ' is'} in BOTH lists: ` +
+    `<b>${escapeHtml(overlaps.slice(0, 5).join(', '))}</b>${overlaps.length > 5 ? ` (+${overlaps.length - 5} more)` : ''}. ` +
+    `The whitelist is checked first, so these stay visible despite being blocked.</div>` +
+    `<button class="ai-action-btn" id="resolveOverlapBtn" style="margin-top:6px;font-size:11px;padding:4px 10px;">🚫 Let the blacklist win (remove from whitelist)</button>`;
+  const btn = host.querySelector('#resolveOverlapBtn');
+  if (btn) {
+    btn.addEventListener('click', () => {
+      const drop = new Set(overlaps.map(x => String(x).trim().toLowerCase()));
+      data.whitelistChannels = wl.filter(w => !drop.has(String(w).trim().toLowerCase()));
+      save();
+      renderAll();
+      setStatus(`Removed ${overlaps.length} channel${overlaps.length > 1 ? 's' : ''} from the whitelist — the blacklist now applies.`);
+    });
+  }
 }
 
 // Jump from a synthesis success box to the Keywords tab, where every keyword rule lives.
@@ -1518,7 +1607,8 @@ function runSubscriptionSynthesize() {
           return;
         }
 
-      const added = injectRulesIntoBlacklist({ keywords: aiRes.keywords, regex: aiRes.regex });
+      const injected = injectRulesIntoBlacklist({ keywords: aiRes.keywords, regex: aiRes.regex });
+      const added = injected.added;
       // Seed the Autonomous Guardian's persona with the inferred taste profile.
       data.aiSubscriptionProfile = `${aiRes.profile || 'Subscription Insights'} (${count} subs)`;
       // Persist the scanned identities — powers the Feed Diversity Meter and Shorts: Subscribed Only.
@@ -1543,6 +1633,7 @@ function runSubscriptionSynthesize() {
           (sampleNotes ? `<div style="font-size:10.5px;color:#9ca3af;margin-top:4px;font-style:italic;">${escapeHtml(sampleNotes)}</div>` : '') +
           `<div style="font-size:11.5px;color:#4ade80;margin-top:6px;">${aiRes.isFallback ? '⚡ Heuristic' : '🧠 AI'} synthesis — ${added} new precision rules injected${sampled ? ` (from ${sampled} sampled channels)` : ''}:</div>` +
           renderRuleChips(aiRes.keywords, aiRes.regex) +
+          renderRefusedRows((aiRes.refusedKeywords || []).concat(injected.refused)) +
           `<div style="margin-top:8px;"><button class="ai-action-btn" id="gotoKeywordsBtn" style="font-size:11px;padding:5px 10px;">📋 Show rules in Keywords tab</button></div>` +
           renderConflictRows(aiRes.conflicts) +
           renderProtectAction(res.channels);
@@ -1739,6 +1830,12 @@ async function init() {
     const items = parseBulkInput(val);
     items.forEach(it => {
       if (!data.channels.includes(it)) data.channels.push(it);
+      const normIt = String(it).trim().toLowerCase();
+      const noAt = normIt.replace(/^@/, '');
+      data.whitelistChannels = data.whitelistChannels.filter(w => {
+        const normW = String(w).trim().toLowerCase();
+        return normW !== normIt && normW.replace(/^@/, '') !== noAt;
+      });
     });
   });
 
@@ -2007,7 +2104,8 @@ function initAiGuardian() {
         }
 
         if (res && res.ok && Array.isArray(res.keywords)) {
-          const added = injectRulesIntoBlacklist({ keywords: res.keywords, regex: res.regex });
+          const injected = injectRulesIntoBlacklist({ keywords: res.keywords, regex: res.regex });
+          const added = injected.added;
 
           save();
           renderAll();
@@ -2021,6 +2119,7 @@ function initAiGuardian() {
               `<div style="font-size:11.5px;color:#e2e8f0;line-height:1.45;margin-bottom:6px;">${escapeHtml(res.rationale || '')}</div>` +
               `<div style="font-size:11.5px;color:#4ade80;font-weight:600;margin-bottom:4px;">✅ Synthesized & injected ${added} new precision rules:</div>` +
               renderRuleChips(res.keywords, res.regex) +
+              renderRefusedRows((res.refusedKeywords || []).concat(injected.refused)) +
               `<div style="margin-top:8px;"><button class="ai-action-btn" id="gotoKeywordsBtn" style="font-size:11px;padding:5px 10px;">📋 Show rules in Keywords tab</button></div>`;
             const gkBtn = resultBox.querySelector('#gotoKeywordsBtn');
             if (gkBtn) gkBtn.addEventListener('click', gotoKeywordsTab);

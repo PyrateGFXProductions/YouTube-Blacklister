@@ -146,6 +146,11 @@ After editing any source file:
   install directory. Re-apply, or move to Route A.
 - **Temporary installs need no signature** but wipe your rules on restart — use them only as a
   smoke test, never as your permanent install.
+- **"background.service_worker is currently disabled. Add background.scripts" on temporary load:**
+  You selected the root `manifest.json`, which includes Chromium's `service_worker` field. In
+  `about:debugging` &rarr; **Load Temporary Add-on...**, select **`zen-unpacked/manifest.json`**
+  (or the root **`blacklist-firefox.zip`** / **`blacklist-firefox.xpi`**). These builds contain
+  Gecko's dedicated `background.scripts` manifest.
 - **Rules missing after install?** Export a backup **before** switching methods
   (popup → Settings → **Export Backup**) and import once after. The extension's storage is
   keyed to the installed add-on, so a temporary instance's data is not carried over

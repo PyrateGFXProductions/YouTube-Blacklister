@@ -17,9 +17,10 @@ let data = {
   aiAutonomous: false, aiSensitivity: 'balanced', aiModel: '', aiTastePrompt: '',
   aiSubscriptionProfile: '', tasteLikedChannels: [], tasteDislikedChannels: [],
   aiLog: [], aiDebaitTitles: false, aiDebaitModel: '',
-  tldwEnabled: true, huntMode: false, chipRescue: false, newToYouAuto: false,
+  tldwEnabled: true, huntMode: false, chipRescue: false, feedFallback: true, newToYouAuto: false,
   extensionEnabled: true,
   keywordExceptions: {}, feedHealthLog: [], communityPacks: [], temporalRules: [],
+  feedCache: [],
   // Persisted AI verdicts (content.js: nyt_aiDecisions). They are user-visible block
   // state — a restore that dropped them visibly un-hid every AI-blocked video.
   aiDecisions: []
@@ -32,7 +33,7 @@ function load() {
       'blockShorts','shortsSubOnly','blockCommunity','autoDubMode','enableQuickBlock',
       'triggerServerFeedback','nyt_totalBlocked','aiAutonomous','aiSensitivity',
       'aiModel','aiTastePrompt','aiSubscriptionProfile','tasteLikedChannels','tasteDislikedChannels','aiLog',
-      'aiDebaitTitles','aiDebaitModel','tldwEnabled','huntMode','chipRescue','newToYouAuto',
+      'aiDebaitTitles','aiDebaitModel','tldwEnabled','huntMode','chipRescue','feedFallback','newToYouAuto',
       'extensionEnabled',
       'keywordExceptions','feedHealthLog','communityPacks','temporalRules',
       'nyt_aiDecisions'
@@ -61,6 +62,9 @@ function load() {
       data.tldwEnabled = res.tldwEnabled !== false;
       data.huntMode = Boolean(res.huntMode);
       data.chipRescue = Boolean(res.chipRescue);
+      // Absent key means ON — mirrors popup.js / content.js. (backup.js's own data default
+      // is true, but the exported value must reflect what the user actually runs.)
+      data.feedFallback = res.feedFallback !== false;
       data.newToYouAuto = Boolean(res.newToYouAuto);
       data.extensionEnabled = res.extensionEnabled !== false;
       data.keywordExceptions = (res.keywordExceptions && typeof res.keywordExceptions === 'object') ? res.keywordExceptions : {};
@@ -85,6 +89,10 @@ const PRESERVED_KEYS = {
   aiLog: ['aiLog', (v) => (Array.isArray(v) ? v : [])],
   aiSubscriptionProfile: ['aiSubscriptionProfile', (v) => (typeof v === 'string' ? v : '')],
   subsSnapshot: ['subsSnapshot', (v) => (Array.isArray(v) ? v : [])],
+  // The Feed Fallback cache is written continuously by the content script as the user
+  // browses. Re-reading it at write time means an import never restores a stale snapshot
+  // over a fresher cache; an import that explicitly carries one passes it in `pinned`.
+  nyt_feedCache: ['feedCache', (v) => (Array.isArray(v) ? v.filter(e => e && e.videoId) : [])],
   // AI verdicts are written continuously by the content script as the user browses.
   // Re-reading them at write time (instead of writing this page's open-time copy)
   // means an import can never silently resurrect videos the AI blocked meanwhile;
@@ -112,6 +120,7 @@ function saveToStorage(pinned) {
         aiDebaitTitles: data.aiDebaitTitles,
         aiDebaitModel: data.aiDebaitModel, tldwEnabled: data.tldwEnabled,
         huntMode: data.huntMode, chipRescue: data.chipRescue,
+        feedFallback: data.feedFallback,
         newToYouAuto: data.newToYouAuto,
         extensionEnabled: data.extensionEnabled,
         keywordExceptions: data.keywordExceptions,
@@ -218,6 +227,7 @@ function buildPayload() {
     communityPacks: data.communityPacks,
     temporalRules: data.temporalRules,
     aiDecisions: data.aiDecisions,
+    feedCache: Array.isArray(data.feedCache) ? data.feedCache : [],
     // Must stay in lockstep with the import path: every key the popup persists under
     // `settings` has to be here, or a backup → wipe → import round-trip silently resets
     // the missing ones to their defaults (which reads as "my settings changed themselves").
@@ -233,6 +243,7 @@ function buildPayload() {
       tasteLikedChannels: data.tasteLikedChannels, tasteDislikedChannels: data.tasteDislikedChannels,
       aiDebaitTitles: data.aiDebaitTitles, aiDebaitModel: data.aiDebaitModel,
       tldwEnabled: data.tldwEnabled, huntMode: data.huntMode, chipRescue: data.chipRescue,
+      feedFallback: data.feedFallback,
       newToYouAuto: data.newToYouAuto, extensionEnabled: data.extensionEnabled
     }
   };
@@ -403,6 +414,7 @@ async function runImportFile(file) {
     if ('tldwEnabled' in s) data.tldwEnabled = Boolean(s.tldwEnabled);
     if ('huntMode' in s) data.huntMode = Boolean(s.huntMode);
     if ('chipRescue' in s) data.chipRescue = Boolean(s.chipRescue);
+    if ('feedFallback' in s) data.feedFallback = s.feedFallback !== false;
     if ('newToYouAuto' in s) data.newToYouAuto = Boolean(s.newToYouAuto);
     if ('extensionEnabled' in s) data.extensionEnabled = Boolean(s.extensionEnabled);
     if ('aiSubscriptionProfile' in s) pinned.aiSubscriptionProfile = data.aiSubscriptionProfile;
@@ -429,6 +441,13 @@ async function runImportFile(file) {
   if (Array.isArray(json.aiDecisions) && json.aiDecisions.length) {
     data.aiDecisions = json.aiDecisions;
     pinned.nyt_aiDecisions = data.aiDecisions;
+  }
+  // The Feed Fallback cache: only pinned when the file actually carried entries — same
+  // rule as the AI decisions, so importing an older backup never rolls the emergency
+  // cache back to a thinner snapshot than the user already has.
+  if (Array.isArray(json.feedCache) && json.feedCache.length) {
+    data.feedCache = json.feedCache.filter(e => e && e.videoId);
+    pinned.nyt_feedCache = data.feedCache;
   }
 
   const saveErr = await saveToStorage(pinned);

@@ -388,9 +388,14 @@ function heuristicSynthesize(prompt) {
 
   const dedupedKeywords = [...new Set(keywords.map(k => k.trim().toLowerCase()).filter(Boolean))];
   const dedupedRegex = [...new Set(regex.map(normalizeRegexRule).filter(Boolean))];
+  // The heuristic is the other half of the same gate: its directive parser splits a phrase
+  // into single words ("block all low effort crypto channels" also pushes `effort`), and the
+  // shared gate is what stops those from being presented as rules. See nytKwFilterRules.
+  const gated = nytKwFilterRules(dedupedKeywords, 24);
 
   return {
-    keywords: dedupedKeywords,
+    keywords: gated.kept,
+    refusedKeywords: gated.refused,
     regex: dedupedRegex.length ? dedupedRegex : ['/\\b(vlog|prank)\\s*#?\\d+/i'],
     rationale: isSports
       ? 'Synthesized precision rules to eradicate ball sports and athletic match coverage from your feed.'
@@ -424,9 +429,14 @@ async function synthesizeRulesWithAi(prompt, modelChoice, customUrl) {
       if (parsed && Array.isArray(parsed.keywords) && parsed.keywords.length) {
         const rawRegex = Array.isArray(parsed.regex) ? parsed.regex : [];
         const validRegex = rawRegex.map(normalizeRegexRule).filter(Boolean);
+        // A taste prompt is not licence to fill the blacklist with ordinary words. The
+        // model's list goes through the SAME gate the key-icon extraction uses, and what it
+        // refused is returned so the popup can name it (see nytKwFilterRules).
+        const gated = nytKwFilterRules(parsed.keywords, 24);
         return {
           ok: true,
-          keywords: parsed.keywords.map(k => String(k).trim().toLowerCase()).filter(Boolean),
+          keywords: gated.kept,
+          refusedKeywords: gated.refused,
           regex: validRegex,
           rationale: parsed.rationale || 'Synthesized by local neural model.',
           modelUsed: res.modelUsed
@@ -661,6 +671,7 @@ async function synthesizeSubscriptionRulesWithAi(channels, modelChoice, customUr
 
   let keywords = [];
   let regex = [];
+  let refusedKeywords = [];
   let rationale = '';
   let profile = '';
   let styleLikes = [];
@@ -705,6 +716,12 @@ async function synthesizeSubscriptionRulesWithAi(channels, modelChoice, customUr
           const clean = String(k).trim().toLowerCase();
           if (clean && clean.length > 1 && !forbidden.has(clean)) keywords.push(clean);
         });
+        // ...and the SAME generic-word gate every other keyword writer runs. A model asked
+        // for "keywords for clickbait that rides your topics" answers with topic words
+        // (`day`, `tech`, `coverage`) when the evidence is thin, and those are not rules.
+        const gatedSub = nytKwFilterRules(keywords, 24);
+        keywords = gatedSub.kept;
+        refusedKeywords = gatedSub.refused;
 
         const rawRegex = Array.isArray(parsed.regex) ? parsed.regex : [];
         regex = rawRegex.map(normalizeRegexRule).filter(Boolean);
@@ -745,7 +762,7 @@ async function synthesizeSubscriptionRulesWithAi(channels, modelChoice, customUr
   // Semantic audit: which of the user's own subscriptions could these rules surface?
   const conflicts = auditKeywordConflicts([...keywords, ...regex], cleanChannels);
 
-  return { ok: true, keywords, regex, rationale, profile, styleLikes, styleDislikes, sampleNotes, sampled: samples.length, conflicts, isFallback };
+  return { ok: true, keywords, regex, rationale, profile, styleLikes, styleDislikes, sampleNotes, sampled: samples.length, conflicts, refusedKeywords, isFallback };
 }
 
 // Evaluate candidate videos in batch.
@@ -1286,11 +1303,11 @@ function sanitizeKeywordList(raw, existing, limit, otherTitles) {
   const hitsLimit = nytKwFeedHitsLimit(corpus);
   for (const item of (Array.isArray(raw) ? raw : [])) {
     if (typeof item !== 'string') continue;
-    const kw = item.trim().toLowerCase().replace(/\s+/g, ' ')
-      .replace(/^["'`]+/, '').replace(/["'`.,;:!?]+$/, '');
-    if (kw.length < 3 || kw.length > 48) continue;
-    if (kw.split(' ').length > KW_SUGGEST_MAX_WORDS) continue;
-    if (nytKwIsGenericRule(kw)) continue;
+    // Shape + generic-word discipline come from the SHARED gate (shared-tables.js), so this
+    // path and the popup's synthesizers can never disagree about what is storable.
+    const kw = nytKwNormalizeRule(item);
+    if (!kw) continue;
+    if (!nytKwRuleIsStorable(kw)) continue;
     if (nytKwFeedHits(kw, corpus) >= hitsLimit) continue;
     if (seen.has(kw)) continue;
     seen.add(kw);

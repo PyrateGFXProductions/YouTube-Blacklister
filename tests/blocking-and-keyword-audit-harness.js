@@ -9,12 +9,22 @@
  *      that title through the real matcher, must never be a word that describes nothing,
  *      and must not be able to blank the whole feed.
  *
+ * Sections: A/B keyword + row/identity primitives, C/D channel rules + keyword exceptions,
+ * E extraction, F temporal expiry, G end-to-end hiding, I the block gesture, K the reported
+ * "it hid what I wanted" inversion, L channel taste sampling, M the MODERN
+ * yt-lockup-view-model card (the markup YouTube actually serves now, captured from a live
+ * channel page) — M8/M9 are the reported "blacklisted channel still shows up".
+ *
+ * The selector stub's attribute operators (*=, ^=, $=) used to be captured but never
+ * compared, so every `a[href*="/@"]` matched every anchor and href-based channel identity was
+ * never really exercised. Fixed before any result here was trusted.
+ *
  * content.js runs in a vm with a DOM stub that is faithful where it matters — an attribute
  * map (so `a[href*="/@"]` matches), `#id` / `.class` / substring attribute selectors, and a
  * synchronous in-memory chrome.storage. Every assertion runs against the REAL functions.
  *
  * RED/GREEN seam: CONTENT_JS_PATH=... pointing at a pre-fix copy (git show HEAD:content.js)
- * must FAIL — A8-A10, B4/B5, C9/C12/C13, D3, F1, G4/G5 are the regressions it pins.
+ * must FAIL — A8-A10, B4/B5, C9/C12/C13, D3, F1, G4/G5 and M1-M9 are the regressions it pins.
  *
  * Section H is static + functional cross-file wiring: the state keys ride content
  * RULE_KEYS, the content load list, the popup load list, the popup save payload and the
@@ -75,8 +85,13 @@ function matchCompound(el, compound) {
     const actual = el.getAttribute(name);
     if (actual == null) return false;
     if (!op) continue;
+    // The operator the regex captures INCLUDES the '=' ('*=', '^=', '$='); comparing the
+    // capture against a bare '*' / '^' / '$' never matched, so every substring/prefix/suffix
+    // attribute selector silently passed for EVERY element with that attribute. That made
+    // `a[href*="/@"]` match every anchor in the card — the harness could not tell a channel
+    // link from a video link, and href-based channel identity was never really exercised.
     if (op === '=' && actual !== val) return false;
-    if (op === '*' && !actual.includes(val)) return false;
+    if (op === '*=' && !actual.includes(val)) return false;
     if (op === '^=' && !actual.startsWith(val)) return false;
     if (op === '$=' && !actual.endsWith(val)) return false;
   }
@@ -617,6 +632,205 @@ const script = `
     ok('L13: interleave handles limit > list length', interleaveChannels([{ name: 'a' }], 10).length === 1);
   }
 
+  // ===================== M. THE MODERN yt-lockup-view-model CARD =====================
+  // Every card fixture above is the LEGACY shape (#owner > ytd-channel-name). YouTube's feed
+  // and channel pages now render ytd-rich-item-renderer > yt-lockup-view-model with the
+  // camelCase lockup classes, and until this section existed nothing in the suite exercised
+  // it — so a blacklisted channel could lose its identity on the LIVE markup while the whole
+  // suite stayed green. The markup below is the real one, captured from a channel page.
+  //
+  // M6 is the reported failure: when the channel name shares ONE metadata row with the view
+  // count and the timestamp ("Some Creator 1.2M views 3d ago"), the row classifier rejects the
+  // whole row as metadata, the card ends up with NO channel identity, and the channel rule
+  // never fires — "I blocked that channel and it still shows up".
+  const hasRowName = typeof channelNameFromRowText === 'function';
+  // Guarded like the rest of this harness: a pre-fix file has no isNestedInsideCard(), and an
+  // unguarded call would crash the vm and hide WHICH invariant broke.
+  const hasNestedGuard = typeof isNestedInsideCard === 'function';
+  const nestedOf = (el) => (hasNestedGuard ? isNestedInsideCard(el) : 'missing');
+
+  // Pure function first (no DOM): which part of a metadata row is the channel?
+  const rowName = (v) => (hasRowName ? channelNameFromRowText(v) : undefined);
+  ok('M1: a name-plus-metadata row yields the NAME ("Some Creator • 1.2M views • 3d ago")',
+    rowName('Some Creator \u2022 1.2M views \u2022 3d ago') === 'Some Creator',
+    'got=' + JSON.stringify(rowName('Some Creator \u2022 1.2M views \u2022 3d ago')));
+  ok('M2: ...including when no delimiter separates them ("Some Creator 1.2M views 3d ago")',
+    rowName('Some Creator 1.2M views 3d ago') === 'Some Creator',
+    'got=' + JSON.stringify(rowName('Some Creator 1.2M views 3d ago')));
+  ok('M3: a metadata-ONLY row still yields nothing (no poisoned channel key)',
+    rowName('219M 7d ago') === '' && rowName('8d ago 1.5M views') === '' && rowName('') === '',
+    'got=' + JSON.stringify([rowName('219M 7d ago'), rowName('8d ago 1.5M views'), rowName('')]));
+  ok('M4: a plain channel name is returned unchanged',
+    rowName('Graham Hancock') === 'Graham Hancock' && rowName('Live') === 'Live',
+    'got=' + JSON.stringify([rowName('Graham Hancock'), rowName('Live')]));
+
+  // Add a nested-pair assertion here too: the modern card nests yt-lockup-view-model inside
+  // ytd-rich-item-renderer and BOTH are card selectors, so counting must not double.
+
+  // The real card shape: ytd-rich-item-renderer > #content > yt-lockup-view-model >
+  // yt-lockup-metadata-view-model > h3.ytLockupMetadataViewModelHeadingReset > a.Title, plus
+  // the metadata row. opts.mergedRow puts the channel name INSIDE the views/timestamp row,
+  // with no channel anchor anywhere, which is the surface the report describes.
+  function buildLockupCard(opts) {
+    const card = makeEl('ytd-rich-item-renderer');
+    card.dataset.videoId = opts.vid || 'plN7JMbadRg';
+    const content = makeEl('div');
+    content.setAttribute('id', 'content');
+    card.appendChild(content);
+    const lockup = makeEl('yt-lockup-view-model');
+    content.appendChild(lockup);
+
+    const thumbLink = makeEl('a');
+    thumbLink.className = 'ytLockupViewModelContentImage';
+    thumbLink.setAttribute('href', '/watch?v=' + card.dataset.videoId);
+    thumbLink.textContent = '57:59';
+    lockup.appendChild(thumbLink);
+
+    const md = makeEl('div');
+    md.className = 'ytLockupViewModelMetadata';
+    lockup.appendChild(md);
+    const lockupMd = makeEl('yt-lockup-metadata-view-model');
+    lockupMd.className = 'ytLockupMetadataViewModelHost ytLockupMetadataViewModelVertical';
+    md.appendChild(lockupMd);
+
+    const textContainer = makeEl('div');
+    textContainer.className = 'ytLockupMetadataViewModelTextContainer';
+    lockupMd.appendChild(textContainer);
+
+    const h3 = makeEl('h3');
+    h3.className = 'ytLockupMetadataViewModelHeadingReset';
+    textContainer.appendChild(h3);
+    const titleLink = makeEl('a');
+    titleLink.className = 'ytLockupMetadataViewModelTitle';
+    titleLink.setAttribute('href', '/watch?v=' + card.dataset.videoId);
+    const titleSpan = makeEl('span');
+    titleSpan.className = 'ytAttributedStringHost';
+    titleSpan.textContent = opts.title || '';
+    titleLink.appendChild(titleSpan);
+    h3.appendChild(titleLink);
+
+    const mdWrap = makeEl('div');
+    mdWrap.className = 'ytLockupMetadataViewModelMetadata';
+    textContainer.appendChild(mdWrap);
+    const rowHost = makeEl('yt-content-metadata-view-model');
+    rowHost.className = 'ytContentMetadataViewModelHost';
+    mdWrap.appendChild(rowHost);
+    const row = makeEl('div');
+    row.className = 'ytContentMetadataViewModelMetadataRow';
+    row.setAttribute('role', 'group');
+    rowHost.appendChild(row);
+
+    const addText = (cls, text, href) => {
+      const el = href ? makeEl('a') : makeEl('span');
+      if (href) el.setAttribute('href', href);
+      el.className = 'ytAttributedStringHost ytContentMetadataViewModelMetadataText' +
+        (cls ? ' ' + cls : '');
+      el.textContent = text;
+      row.appendChild(el);
+      return el;
+    };
+    if (opts.mergedRow) {
+      // ONE span carrying the channel plus the metadata, exactly as the combined row renders.
+      addText('', opts.name + ' ' + (opts.views || '1.2M views') + ' ' + (opts.age || '3d ago'));
+    } else {
+      addText('', opts.name, opts.handle ? '/@' + String(opts.handle).replace(/^@/, '') : null);
+      const delim = makeEl('span');
+      delim.className = 'ytContentMetadataViewModelDelimiter';
+      delim.textContent = ' \u2022 ';
+      row.appendChild(delim);
+      addText('ytContentMetadataViewModelMetadataTextLastPart', opts.views || '1.2M views');
+      const delim2 = makeEl('span');
+      delim2.className = 'ytContentMetadataViewModelDelimiter';
+      delim2.textContent = ' \u2022 ';
+      row.appendChild(delim2);
+      addText('ytContentMetadataViewModelMetadataTextLastPart', opts.age || '3d ago');
+    }
+    document.body.appendChild(card);
+    return card;
+  }
+
+  clearFeed();
+  resetSettings();
+  let locked = buildLockupCard({ name: 'Some Creator', handle: '@somecreator', title: 'A plain feed video' });
+  ok('M5: the modern lockup card still yields its title through the real selector list',
+    getVideoTitle(locked) === 'A plain feed video', 'title=' + JSON.stringify(getVideoTitle(locked)));
+  ok('M6: ...and its channel name',
+    getChannelName(locked) === 'Some Creator', 'channel=' + JSON.stringify(getChannelName(locked)));
+  settings.channels = ['Some Creator'];
+  const lockedHidden = processFeed(true);
+  ok('M7: a blacklisted channel hides the modern lockup card end to end',
+    lockedHidden === 1 && locked.dataset.hiddenByLocalBlacklist === 'true',
+    'hidden=' + lockedHidden + ' keys=' + JSON.stringify(getCardChannelKeys(locked)));
+  // The nested lockup is part of the SAME video: evaluated once, counted once. Without this
+  // the badge, the all-time counter and the diversity meter all read double on every modern
+  // feed, and one gesture is reported as two blocks.
+  ok('M7b: the nested lockup is not treated as a second card',
+    hasNestedGuard &&
+    nestedOf(locked.querySelector('yt-lockup-view-model')) === true &&
+    nestedOf(locked) === false,
+    'outer=' + nestedOf(locked) + ' inner=' + nestedOf(locked.querySelector('yt-lockup-view-model')));
+
+  // THE REPORTED SURFACE: no channel anchor, and the name shares the row with the metadata.
+  clearFeed();
+  resetSettings();
+  let merged = buildLockupCard({ name: 'Ancient History Guy', title: 'The Pyramids Explained', mergedRow: true });
+  ok('M8: a name-plus-metadata row still yields the channel identity on the card',
+    getChannelName(merged) === 'Ancient History Guy',
+    'channel=' + JSON.stringify(getChannelName(merged)) + ' keys=' + JSON.stringify(getCardChannelKeys(merged)));
+  settings.channels = ['ancient history guy'];
+  const mergedHidden = processFeed(true);
+  ok('M9: ...so a blacklisted channel is hidden on that surface too',
+    mergedHidden === 1 && merged.dataset.hiddenByLocalBlacklist === 'true',
+    'hidden=' + mergedHidden + ' keys=' + JSON.stringify(getCardChannelKeys(merged)));
+
+  // Control: the card must not become hideable for the WRONG reason — a card whose only
+  // metadata is views/time still exposes no channel identity, so no channel rule can fire.
+  clearFeed();
+  resetSettings();
+  let metaOnly = buildLockupCard({ name: '', title: 'Some other video', mergedRow: true });
+  ok('M10: a card with ONLY metadata in the row exposes no channel identity (control for M8/M9)',
+    getChannelName(metaOnly) === '' && !getCardChannelKeys(metaOnly).some(k => k === '3d ago' || k === '1.2m views'),
+    'channel=' + JSON.stringify(getChannelName(metaOnly)) + ' keys=' + JSON.stringify(getCardChannelKeys(metaOnly)));
+  settings.channels = ['some creator'];
+  const metaHidden = processFeed(true);
+  ok('M11: ...so an unrelated channel rule does not hide it',
+    metaHidden === 0 && metaOnly.dataset.hiddenByLocalBlacklist !== 'true', 'hidden=' + metaHidden);
+  resetSettings();
+
+  // ===================== N. the visible-card COUNT (the reported "same 4 videos") =========
+  // The feed health pass asks "are there fewer than N visible cards?" and only then asks
+  // YouTube for more. Counting the raw card list made each video count TWICE on the modern
+  // markup (yt-lockup-view-model nested inside ytd-rich-item-renderer), so with 4 real videos
+  // the count read ~8, the answer was always "enough", and the extension never requested
+  // another page — the reported "the home page only recommends the same 4 videos".
+  //
+  // WHAT THIS STUB PROVES: the nesting guard and the hidden-ancestor guard (no layout is
+  // modelled here, so offsetHeight is undefined, and the count is driven by identity and flags
+  // only). The real-layout half of the claim was measured in a browser instead: one
+  // ytd-rich-item-renderer with a yt-lockup-view-model inside it yields 2 card nodes, the OLD
+  // expression counted 2, the new guard counts 1.
+  clearFeed();
+  resetSettings();
+  const nCard = buildLockupCard({ name: 'Some Creator', handle: '@somecreator', title: 'One video' });
+  const countNodes = () => document.querySelectorAll(VIDEO_CARD_SELECTORS).length;
+  ok('N1: the fixture really does expose two card nodes for one video (control for N2)',
+    countNodes() === 2, 'nodes=' + countNodes());
+  ok('N2: the visible count counts that video ONCE',
+    getVisibleCardCount(document.querySelectorAll(VIDEO_CARD_SELECTORS)) === 1,
+    'visible=' + getVisibleCardCount(document.querySelectorAll(VIDEO_CARD_SELECTORS)) + ' nodes=' + countNodes());
+
+  const nLegacy = buildCard({ name: 'News Channel', handle: '@news', title: 'Two videos' });
+  ok('N3: a second, legacy card is counted too',
+    getVisibleCardCount(document.querySelectorAll(VIDEO_CARD_SELECTORS)) === 2,
+    'visible=' + getVisibleCardCount(document.querySelectorAll(VIDEO_CARD_SELECTORS)));
+
+  hideCardElement(nCard);
+  ok('N4: a hidden card (and its nested lockup) is not visible',
+    getVisibleCardCount(document.querySelectorAll(VIDEO_CARD_SELECTORS)) === 1,
+    'visible=' + getVisibleCardCount(document.querySelectorAll(VIDEO_CARD_SELECTORS)));
+  unhideCardElement(nLegacy);
+  resetSettings();
+
   return out;
 })()
 `;
@@ -674,16 +888,56 @@ for (const k of RULE_KEYS_EXPECTED) {
   staticOk('H: "' + k + '" rides every bus', absent.length === 0, 'missing from: ' + absent.join(', '));
 }
 
+// Feed Fallback wiring: the empty-Home safety net spans content (decision + cache + panel),
+// popup (defaults, load list, save payload, toggle) and backup (export + import branch).
+// Any leg missing and the feature half-exists: a panel that never fires, or a toggle that
+// silently vanishes on the next export/import round trip.
+const backupSrc = fs.readFileSync(path.join(REPO, 'backup.js'), 'utf8');
+const feedFallbackWiring = [
+  ['content declares the feature flag with an ON default', /feedFallback:\s*true/.test(contentSrc)],
+  ['content reads the flag with absent-means-ON', contentSrc.includes("settings.feedFallback = res.feedFallback !== false")],
+  ['content gates on the flag in processFeed', contentSrc.includes('settings.feedFallback !== false')],
+  ['content has a pure decider', /function feedFallbackDecision\(/.test(contentSrc)],
+  ['the decider refuses when YouTube served cards', /totalCards\) > 0\) return \{ go: false, reason: 'youtube-served' \}/.test(contentSrc)],
+  ['content caches cards under the namespaced key', contentSrc.includes("FEED_FALLBACK_STORAGE_KEY = 'nyt_feedCache'")],
+  ['content renders a panel ignored by the MutationObserver', contentSrc.includes("node.id === 'nyt-feed-fallback'") && contentSrc.includes("node.classList.contains('nyt-fallback-item')")],
+  ['pause tears the panel down', /restoreHiddenByRules[\s\S]{0,2500}removeFeedFallbackPanel\(\)/.test(contentSrc)],
+  ['navigation removes the panel', /yt-navigate-finish'[\s\S]{0,800}removeFeedFallbackPanel\(\)/.test(contentSrc)],
+  ['popup defaults the flag ON', /feedFallback:\s*true/.test(popupJs)],
+  ['popup reads the flag with absent-means-ON', popupJs.includes('data.feedFallback = res.feedFallback !== false')],
+  ['popup saves the flag', /feedFallback:\s*data\.feedFallback/.test(popupJs)],
+  ['popup exposes the toggle', popupHtml.includes('id="toggleFeedFallback"')],
+  ['popup wires the toggle to data', popupJs.includes("getElementById('toggleFeedFallback')")],
+  ['backup reads the flag', backupSrc.includes('feedFallback')],
+  ['backup import branch handles the flag', backupSrc.includes("s.feedFallback !== false")]
+];
+for (const [name, cond] of feedFallbackWiring) staticOk('H: feedFallback — ' + name, cond);
+// The cache key is not a RULE_KEY (no full feed re-eval needed when it changes), but it MUST
+// ride the backup export/import so a restore keeps the emergency cache warm.
+staticOk('H: nyt_feedCache is exported by backup (a restore keeps the fallback warm)',
+  backupSrc.includes('nyt_feedCache'));
+staticOk('H: a fresh checkFeedFallback exists and is async (storage-read before deciding)',
+  /async function checkFeedFallback\(/.test(contentSrc));
+
 // Every control the audited popup features query must exist in the markup.
 const CONTROL_IDS = [
   'toggleExtensionEnabled', 'exceptionKeyword', 'exceptionChannel', 'addKeywordException',
   'keywordExceptionsList', 'temporalKeyword', 'temporalExpires', 'temporalReason',
   'addTemporalRule', 'temporalRulesList', 'communityPackUrl', 'addCommunityPack', 'communityPacksList',
-  'tasteLikedInput', 'tasteDislikedInput'
+  'tasteLikedInput', 'tasteDislikedInput',
+  // The blacklist ∩ whitelist warning: the whitelist is tested first, so a channel in both
+  // lists stays visible and nothing else in the UI explains why.
+  'channelOverlapWarning'
 ];
 for (const id of CONTROL_IDS) {
   staticOk('H: popup.html exposes #' + id, popupHtml.includes('id="' + id + '"'));
 }
+
+// ...and the overlap must actually be computed and offered for resolution.
+staticOk('H: the popup detects blacklist ∩ whitelist overlaps',
+  /function renderBlacklistWhitelistOverlap\(\)/.test(popupJs) && popupJs.includes('resolveOverlapBtn'));
+staticOk('H: renderAll() runs the overlap check (so it is visible without hunting)',
+  /function renderAll\(\)[\s\S]{0,1200}?renderBlacklistWhitelistOverlap\(\)/.test(popupJs));
 
 // The subscription synthesizer's style-sampling path is a 4-file contract: the popup asks the
 // content script to sample, the content script answers a message the worker's synthesizer

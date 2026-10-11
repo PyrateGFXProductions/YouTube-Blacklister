@@ -233,3 +233,6 @@ if (fail) {
     'If A2/A3 failed, unhideShorts() is un-hiding ordinary blacklisted cards again.');
   process.exit(1);
 }
+// Exit explicitly: content.js's feed-health/chip watchers schedule timers for the life of a
+// page, and a harness that waits for them to drain reads as a hang rather than a pass.
+process.exit(0);

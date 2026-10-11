@@ -24,7 +24,7 @@ Object.defineProperty(global, 'navigator', { value: {}, configurable: true, writ
 global.location = global.window.location;
 
 const src = require(path.join(__dirname, '..', 'content.js'));
-const { watchPageBlockDecision, keywordRulesHidden, normalizeChannel, isAutoDubBadgeText, autoDubHideDecision, chipRescueState, shouldAutoEnterNewToYou } = src;
+const { watchPageBlockDecision, keywordRulesHidden, normalizeChannel, isAutoDubBadgeText, autoDubHideDecision, chipRescueState, shouldAutoEnterNewToYou, chipRescueShouldKeepWatching, feedReplenishDecision } = src;
 
 let pass = 0, fail = 0;
 const errors = [];
@@ -206,6 +206,32 @@ check('32: chips present + hidden -> unhide', chipRescueState(true, false), { ac
 // 33. chips completely missing -> offer the restore button (never auto-reload)
 check('33: chips missing -> missing', chipRescueState(false, false), { action: 'missing' });
 check('34: chips missing (visible arg irrelevant) -> missing', chipRescueState(false, true), { action: 'missing' });
+
+console.log('CHIP RESCUE patience (a bar that arrives late must not be declared missing):');
+// 34b/34c. The old rescue judged "missing" six seconds after load and stopped looking, so a bar
+// YouTube attaches a beat later — or re-adds after a re-render mid-session — never came back.
+check('34b: early polls keep watching instead of offering the refresh',
+  chipRescueShouldKeepWatching(0) && chipRescueShouldKeepWatching(3) && chipRescueShouldKeepWatching(7), true);
+check('34c: after the quiet window the offer is allowed to appear',
+  chipRescueShouldKeepWatching(8) && chipRescueShouldKeepWatching(50), false);
+
+console.log('FEED REPLENISHMENT decisions (the reported "same 4 videos"):');
+const feedState = (over) => Object.assign({
+  isHome: true, enabled: true, visible: 4, total: 20,
+  attempts: 0, sinceAttempt: 99999, sinceUserScroll: 99999, refused: false
+}, over || {});
+// 34d. the reported state: four visible videos on Home, budget available -> ask for more
+check('34d: a thin Home feed asks YouTube for more', feedReplenishDecision(feedState()).go, true);
+check('34e: ...and says why', feedReplenishDecision(feedState()).reason, 'stuck');
+// 34f-34l. every reason NOT to act
+check('34f: a healthy feed is left alone', feedReplenishDecision(feedState({ visible: 12 })).reason, 'enough');
+check('34g: never while the user is scrolling', feedReplenishDecision(feedState({ sinceUserScroll: 300 })).reason, 'user-scrolling');
+check('34h: rate-limited between sweeps', feedReplenishDecision(feedState({ sinceAttempt: 1000 })).reason, 'cooldown');
+check('34i: the per-page budget is finite', feedReplenishDecision(feedState({ attempts: 6 })).reason, 'exhausted');
+check('34j: once YouTube says no more, stop nudging', feedReplenishDecision(feedState({ refused: true })).reason, 'refused');
+check('34k: not on the home feed', feedReplenishDecision(feedState({ isHome: false })).reason, 'not-home');
+check('34l: a paused extension does nothing', feedReplenishDecision(feedState({ enabled: false })).reason, 'disabled');
+check('34m: no cards at all is not a thin feed, it is an unrendered one', feedReplenishDecision(feedState({ total: 0 })).reason, 'no-cards');
 
 console.log('NEW TO YOU auto-start (closest native "not promoted" surface):');
 // 35. chip present + active chip is "All" -> click it

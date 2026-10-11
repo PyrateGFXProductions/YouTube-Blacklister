@@ -155,7 +155,7 @@ const NYT_KW_STOP_WORDS = new Set([
   'with', 'from', 'as', 'this', 'that', 'these', 'those', 'your', 'you', 'we', 'our',
   'be', 'been', 'was', 'are', 'were', 'so', 'if', 'no', 'not', 'but', 'than', 'then',
   'will', 'can', 'just', 'more', 'what', 'how', 'why', 'when', 'where', 'which', 'who',
-  'new', 'now', 'has', 'have', 'had', 'do', 'does', 'did', 'going', 'video', 'videos',
+  'now', 'has', 'have', 'had', 'do', 'does', 'did', 'going', 'video', 'videos',
   'youtube', 'channel', 'content', 'feat', 'ft', 'vs', 'vs.', 'very', 'really', 'still',
   'ever', 'never', 'too', 'also', 'such', 'much', 'many', 'most', 'least', 'best',
   'worst', 'better', 'worse', 'thing', 'things', 'part', 'episode', 'full', 'official',
@@ -187,6 +187,16 @@ const NYT_KW_WEAK_ALONE = new Set([
   'easy', 'high', 'low', 'true', 'real', 'actually', 'literally', 'entire', 'whole',
   'every', 'nothing', 'something', 'everything', 'anything', 'someone', 'old',
   'young', 'right', 'left', 'wrong', 'less', 'little', 'crazy', 'insane', 'wild',
+  // HTML editors refuse these for the same reason: they are the SUBJECT-LESS words a title
+  // leans on. Observed live from the key-icon extraction: 'Testing 5 Crazy Gadgets From
+  // Amazon' offered `testing`, 'The Truth About The Titanic' offered `truth`, 'Ancient
+  // Aliens: The Evidence' offered `evidence`, 'Prison-Break Story' offered `break`, and
+  // 'First Day At My New Job' offered `job` — each one a word that matches a huge slice of
+  // YouTube while describing nothing. They stay in the token stream so real phrases
+  // ('summer break', 'day job') can still form.
+  'truth', 'evidence', 'proof', 'break', 'job', 'jobs', 'career', 'bang', 'buck',
+  'test', 'tests', 'tested', 'testing', 'try', 'tries', 'tried', 'trying',
+  'ate', 'eat', 'eats', 'eating', 'drank', 'drink', 'sleep', 'slept',
   'epic', 'huge', 'massive', 'side', 'main', 'trying', 'tried', 'spent', 'spend',
   'spending', 'getting', 'making', 'doing', 'used', 'using', 'kept', 'put', 'left',
   'found', 'called', 'asked', 'told', 'became', 'become', 'turned', 'ended',
@@ -195,7 +205,58 @@ const NYT_KW_WEAK_ALONE = new Set([
   'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'hundred',
   'thousand', 'million', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday',
   'saturday', 'sunday', 'january', 'february', 'march', 'april', 'may', 'june',
-  'july', 'august', 'september', 'october', 'november', 'december'
+  'july', 'august', 'september', 'october', 'november', 'december',
+  // Pronouns, indefinites, reflexive words
+  'nobody', 'everyone', 'everybody', 'anyone', 'anybody', 'somebody', 'noone',
+  'yourself', 'myself', 'himself', 'herself', 'themselves', 'itself', 'ourselves',
+  'another', 'others', 'each',
+  // Common action, reporting, clickbait verbs
+  'quit', 'quits', 'quitting', 'failed', 'fails', 'failing', 'failure', 'killing', 'killed', 'kills',
+  'wants', 'wanting', 'admit', 'admits', 'admitting', 'moving', 'moved', 'moves',
+  'fixing', 'fixed', 'fixes', 'fix', 'buying', 'buys', 'bought', 'ruined', 'ruining', 'ruins',
+  'leak', 'leaks', 'leaked', 'leaking',
+  'hates', 'hating', 'hated', 'stops', 'stopping', 'leaving', 'leaves',
+  'knows', 'knowing', 'says', 'saying', 'said', 'telling', 'tells', 'told',
+  'shows', 'showing', 'showed', 'shown', 'feels', 'feeling', 'felt',
+  'believes', 'believing', 'believed', 'thinks', 'thinking',
+  'getting', 'gets', 'gotten', 'makes', 'making', 'doing', 'takes', 'taking', 'giving', 'gives',
+  'looks', 'looking', 'comes', 'coming', 'going', 'goes', 'sees', 'seeing', 'hears', 'hearing',
+  // Modals / auxiliaries
+  'should', 'would', 'could', 'must', 'might', 'shall',
+  // Common adverbs / discourse markers
+  'finally', 'really', 'actually', 'probably', 'away', 'already', 'here', 'there',
+  'everywhere', 'anywhere', 'nowhere', 'somewhere', 'anymore', 'instead',
+  'maybe', 'perhaps', 'almost', 'nearly', 'quite', 'simply', 'barely', 'hardly',
+  'surely', 'definitely', 'honestly', 'secretly', 'totally', 'completely', 'absolutely', 'literally',
+  // Clickbait filler nouns
+  'problem', 'problems', 'reason', 'reasons', 'secret', 'secrets', 'mistake', 'mistakes',
+  // Topical modifiers (fine in phrases like 'new york', weak alone)
+  'new'
+]);
+
+// Words that must never sit at the start or end of a multi-word phrase rule.
+// A rule ending in a verb ("cars nobody wants"), pronoun ("sink pipe yourself"),
+// or adverb ("apple finally killing") is a truncated sentence fragment rather than
+// a topic subject.
+const NYT_KW_NON_EDGE_WORDS = new Set([
+  'nobody', 'everyone', 'everybody', 'anyone', 'anybody', 'someone', 'somebody', 'noone',
+  'yourself', 'myself', 'himself', 'herself', 'themselves', 'itself', 'ourselves',
+  'another', 'others', 'each',
+  'quit', 'quits', 'quitting', 'failed', 'fails', 'failing', 'killing', 'killed', 'kills',
+  'wants', 'wanting', 'wanted', 'admit', 'admits', 'admitting', 'moving', 'moved', 'moves',
+  'fixing', 'fixed', 'fixes', 'fix', 'buying', 'buys', 'bought', 'ruined', 'ruining', 'ruins',
+  'leak', 'leaks', 'leaked', 'leaking',
+  'hates', 'hating', 'hated', 'stops', 'stopping', 'stopped', 'leaving', 'leaves',
+  'knows', 'knowing', 'says', 'saying', 'said', 'telling', 'tells', 'told',
+  'shows', 'showing', 'showed', 'shown', 'feels', 'feeling', 'felt',
+  'believes', 'believing', 'believed', 'thinks', 'thinking',
+  'getting', 'gets', 'gotten', 'makes', 'making', 'doing', 'takes', 'taking', 'giving', 'gives',
+  'looks', 'looking', 'comes', 'coming', 'going', 'goes', 'sees', 'seeing', 'hears', 'hearing',
+  'should', 'would', 'could', 'must', 'might', 'shall',
+  'finally', 'really', 'actually', 'probably', 'away', 'already', 'here', 'there',
+  'everywhere', 'anywhere', 'nowhere', 'somewhere', 'anymore', 'instead',
+  'maybe', 'perhaps', 'almost', 'nearly', 'quite', 'simply', 'barely', 'hardly',
+  'surely', 'definitely', 'honestly', 'secretly', 'totally', 'completely', 'absolutely', 'literally'
 ]);
 
 // FRAME / CATEGORY words: they describe the shape of a video, not what it is about, and
@@ -223,7 +284,12 @@ const NYT_KW_FRAME_WORDS = new Set([
   // genre framings
   'documentary', 'documentaries', 'history', 'ancient', 'mystery', 'mysteries',
   'conspiracy', 'paranormal', 'science', 'facts', 'top', 'trending', 'viral', 'shorts',
-  'news', 'update', 'updates', 'reaction', 'reactions', 'reacts'
+  'news', 'update', 'updates', 'reaction', 'reactions', 'reacts',
+  // presentation framings — how the video is packaged, never what it is about. Observed
+  // live: 'Our House Tour 2026' offered `tour` and 'LIVE: Rocket Launch Coverage' offered
+  // `coverage`; a rule built from either hides half the site.
+  'coverage', 'report', 'recap', 'roundup', 'overview', 'walkthrough', 'breakdown',
+  'comparison', 'ranking', 'countdown', 'tour', 'visit', 'highlights', 'montage'
 ]);
 
 // Where a candidate came from decides what it is worth. The creator's own tags are a
@@ -314,6 +380,59 @@ function nytKwIsGenericRule(term) {
   }
   return !words.some(w => !NYT_KW_WEAK_ALONE.has(w) && !NYT_KW_STOP_WORDS.has(w) &&
     !NYT_KW_FRAME_WORDS.has(w));
+}
+
+// ------------------------------------------------------------------
+// THE GATE EVERY KEYWORD-RULE WRITER MUST CONSULT
+// ------------------------------------------------------------------
+// Five places can put a keyword rule into the user's blacklist: the key-icon extraction and
+// the TL;DW keyword lab (content.js), the worker's suggestion path, and the popup's TWO
+// synthesizers — the "Mind Reader" taste prompt and the subscription mirror. Only the first
+// three ran a gate. `injectRulesIntoBlacklist()` pushed whatever the model returned straight
+// into the blacklist, so a synthesizer run could fill the list with ordinary words, which is
+// exactly the reported complaint ("it makes keyword lists from ordinary words"). One
+// normalizer, one predicate, every writer.
+const NYT_KW_RULE_MIN_CHARS = 3;
+const NYT_KW_RULE_MAX_CHARS = 48;
+const NYT_KW_RULE_MAX_WORDS = 4;
+
+// Canonical storable form of a candidate rule ('' when it can never be stored).
+function nytKwNormalizeRule(raw) {
+  let kw = String(raw == null ? '' : raw).trim().toLowerCase().replace(/\s+/g, ' ');
+  if (!kw) return '';
+  // A regex rule (/pattern/flags) keeps its own shape — only the length bound applies, and
+  // the browser compiles it at match time.
+  if (kw.startsWith('/') && kw.lastIndexOf('/') > 0) return kw.length <= 200 ? kw : '';
+  kw = kw.replace(/^["'`]+/, '').replace(/["'`.,;:!?]+$/, '');
+  if (kw.length < NYT_KW_RULE_MIN_CHARS || kw.length > NYT_KW_RULE_MAX_CHARS) return '';
+  if (kw.split(' ').length > NYT_KW_RULE_MAX_WORDS) return '';
+  return kw;
+}
+
+// Is this candidate storable as a keyword rule? The single refusal point, so a rule the
+// extraction engine would refuse can never be smuggled in by a model or a synthesizer.
+function nytKwRuleIsStorable(raw) {
+  const kw = nytKwNormalizeRule(raw);
+  if (!kw) return false;
+  if (kw.startsWith('/') && kw.lastIndexOf('/') > 0) return true;
+  return !nytKwIsGenericRule(kw);
+}
+
+// Filters a candidate list down to storable rules, reporting what was refused so the
+// caller can say so instead of silently dropping it.
+function nytKwFilterRules(raw, limit) {
+  const cap = Math.max(1, Number(limit) || 32);
+  const kept = [];
+  const refused = [];
+  const seen = new Set();
+  for (const item of (Array.isArray(raw) ? raw : [])) {
+    const kw = nytKwNormalizeRule(item);
+    if (!kw || seen.has(kw)) continue;
+    seen.add(kw);
+    if (!nytKwRuleIsStorable(kw)) { refused.push(kw); continue; }
+    if (kept.length < cap) kept.push(kw);
+  }
+  return { kept, refused };
 }
 
 // Positioned tokens: [{ t, start, end, clean }] over the ORIGINAL (lowercased) string, so
@@ -445,6 +564,8 @@ function rankKeywordCandidates(sources, limit, otherTitles, dropped) {
             // "cool tech") — the exact noise this gate exists to remove. One real word
             // is enough to make it specific ("ancient rome", "cool tech deals").
             if (!words.some(w => !NYT_KW_WEAK_ALONE.has(w) && !NYT_KW_FRAME_WORDS.has(w))) continue;
+            // Reject phrases with dangling verbs, pronouns, modals or adverbs at boundaries
+            if (NYT_KW_NON_EDGE_WORDS.has(words[0]) || NYT_KW_NON_EDGE_WORDS.has(words[words.length - 1])) continue;
             const phrase = words.join(' ');
             if (phrase.length < 5) continue;
             bump(phrase, weight * NYT_KW_PHRASE_BONUS);

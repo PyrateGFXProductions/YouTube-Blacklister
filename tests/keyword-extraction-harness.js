@@ -324,6 +324,33 @@ const script = `
     !nytKwIsGenericRule('ancient rome') && nytKwIsGenericRule('tech'),
     'framed=' + j(['cool tech', 'maya civilization', 'ancient rome', 'tech'].map(nytKwIsGenericRule)));
 
+  const electricRes = rankKeywordCandidates({ title: 'The Problem with Electric Cars Nobody Wants to Admit' }, 8);
+  ok('K6e: "Electric Cars Nobody Wants to Admit" yields subject, never nobody/wants/admit/problem',
+    electricRes.includes('electric cars') && !electricRes.includes('nobody') && !electricRes.includes('wants') &&
+    !electricRes.includes('admit') && !electricRes.includes('problem') && !electricRes.includes('electric cars nobody'),
+    'got ' + j(electricRes));
+
+  const nyRes = rankKeywordCandidates({ title: 'Why Everyone is Moving Away from New York City' }, 8);
+  ok('K6f: "Moving Away from New York City" yields new york city/new york, never everyone/moving/away',
+    (nyRes.includes('new york city') || nyRes.includes('new york')) && !nyRes.includes('everyone') &&
+    !nyRes.includes('moving') && !nyRes.includes('away') && !nyRes.includes('moving away'),
+    'got ' + j(nyRes));
+
+  const sinkRes = rankKeywordCandidates({ title: 'How to Fix a Leaking Kitchen Sink Pipe Yourself' }, 8);
+  ok('K6g: "Fix a Leaking Kitchen Sink Pipe Yourself" yields kitchen sink/sink pipe, never yourself/leaking',
+    (sinkRes.includes('kitchen sink') || sinkRes.includes('sink pipe')) && !sinkRes.includes('yourself') &&
+    !sinkRes.includes('leaking') && !sinkRes.includes('sink pipe yourself'),
+    'got ' + j(sinkRes));
+
+  const appleRes = rankKeywordCandidates({ title: 'Is Apple Finally Killing the iPad?' }, 8);
+  ok('K6h: "Is Apple Finally Killing the iPad?" yields apple/ipad, never finally/killing',
+    appleRes.includes('apple') && appleRes.includes('ipad') && !appleRes.includes('finally') && !appleRes.includes('killing'),
+    'got ' + j(appleRes));
+
+  const quitRes = rankKeywordCandidates({ title: '10 Reasons Why You Should Never Quit Your Job' }, 8);
+  ok('K6i: filler title with no subject yields empty candidate list, never reasons/should/quit',
+    quitRes.length === 0, 'got ' + j(quitRes));
+
   // A3c. Tag lists must not fuse into phrases no title contains.
   ok('K2e: separate tags do not fuse into a fake phrase',
     !rankKeywordCandidates({ tags: ['prison', 'reentry', 'documentary'] }, 5).includes('prison reentry documentary') &&
@@ -482,6 +509,25 @@ const script = `
   ok('K5d: and it says so instead of silently doing nothing',
     /No distinctive keyword/i.test(lastToast()), 'toast=' + j(lastToast()));
 
+  // K6. THE REPORTED COMPLAINT, in its own words: "the keyword blacklister is making keyword
+  // lists from ordinary words". Every ordinary word a synthesiser or a model can offer has to
+  // be refused by the ONE shared gate (nytKwFilterRules, shared-tables.js) — the popup's two
+  // synthesizers had NO gate at all before, which is how such words reached the blacklist.
+  const goodRules = ['prison', 'maya', 'log cabin', 'sourdough', 'titanic'];
+  const junkRules = ['day', 'first', 'cool', 'tech', 'inside', 'city', 'testing', 'coverage',
+    'truth', 'evidence', 'tour', 'break', 'job', 'bang', 'buck', 'house tour', 'cool tech',
+    'first day', 'the'];
+  const g6 = nytKwFilterRules(junkRules.concat(goodRules), 32);
+  ok('K6: every ordinary word a synthesizer could propose is refused by the shared gate',
+    g6.refused.length === junkRules.length && junkRules.every(k => g6.refused.includes(k)),
+    'kept=' + j(g6.kept) + ' refused=' + j(g6.refused));
+  ok('K6b: ...while every real subject word survives the same gate',
+    goodRules.every(k => g6.kept.includes(k)) && goodRules.every(k => !g6.refused.includes(k)),
+    'kept=' + j(g6.kept));
+  ok('K6c: the gate is ONE shared implementation (shape + generic-word discipline together)',
+    typeof nytKwFilterRules === 'function' && typeof nytKwRuleIsStorable === 'function' &&
+    typeof nytKwNormalizeRule === 'function');
+
   // Leave nothing for the 250ms re-scan persistKeywords() schedules.
   CARDS.length = 0;
   return out;
@@ -501,6 +547,8 @@ new Promise((resolve) => resolve(results)).then((results) => {
   const contentSrc = fs.readFileSync(CONTENT_PATH, 'utf8');
   const bgSrc = fs.readFileSync(path.join(ROOT, 'background.js'), 'utf8');
   const sharedSrc = fs.readFileSync(path.join(ROOT, 'shared-tables.js'), 'utf8');
+  const popupSrc = fs.readFileSync(path.join(ROOT, 'popup.js'), 'utf8');
+  const popupHtml = fs.readFileSync(path.join(ROOT, 'popup.html'), 'utf8');
 
   const fileChecks = [
     ['C1: extractKeywordsFromCard ranks the title instead of slicing it positionally',
@@ -513,8 +561,23 @@ new Promise((resolve) => resolve(results)).then((results) => {
       contentSrc.includes('function selectKeywordRules(') &&
       contentSrc.includes('nytKwIsGenericRule(norm)') &&
       contentSrc.includes('nytKwFeedHits(norm, otherTitles)')],
-    ['C4: background.js gates model output through the same generic + feed checks',
-      bgSrc.includes('nytKwIsGenericRule(kw)') && bgSrc.includes('nytKwFeedHits(kw, corpus)')],
+    // DELIBERATE SHAPE CHANGE: the gate is now a single shared predicate
+    // (nytKwRuleIsStorable, applied in bulk by nytKwFilterRules), so "contains
+    // nytKwIsGenericRule(kw)" no longer describes it. The product decision is unchanged —
+    // worker-side model output must clear the generic-word discipline AND the
+    // feed-specificity check — and the assertion is now STRONGER: it also pins that both
+    // AI synthesizers are gated, which is the reported defect (their output used to reach
+    // the blacklist unchecked).
+    ['C4: background.js gates model output through the shared gate + feed checks',
+      bgSrc.includes('nytKwRuleIsStorable(kw)') && bgSrc.includes('nytKwFeedHits(kw, corpus)') &&
+      (bgSrc.match(/nytKwFilterRules\(/g) || []).length >= 2],
+    ['C8: the popup can resolve the shared gate (shared-tables.js loads before popup.js)',
+      popupHtml.indexOf('<script src="shared-tables.js">') !== -1 &&
+      popupHtml.indexOf('<script src="shared-tables.js">') < popupHtml.indexOf('<script src="popup.js">')],
+    ['C9: the popup synthesizers write keyword rules through that gate',
+      /function injectRulesIntoBlacklist\(rules\)[\s\S]{0,900}?nytKwFilterRules\(proposed/.test(popupSrc) &&
+      popupSrc.includes('renderRefusedRows(') &&
+      !/injectRulesIntoBlacklist\([\s\S]{0,600}?data\.keywords\.push\(canonicalKeyword/.test(popupSrc)],
     ['C5: background.js no longer fuses the sources into one string (the dead-phrase bug)',
       /rankKeywordCandidates\(\{/.test(bgSrc) && !/keywordCandidates\(\[title, note/.test(bgSrc)],
     ['C6: the new tables live only in shared-tables.js',

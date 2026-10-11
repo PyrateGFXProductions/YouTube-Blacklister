@@ -1024,6 +1024,10 @@
         <div class="empty-state">No channels blacklisted yet. Click the 3 dots or quick-block button on any video.</div>
       </div>
 
+      <!-- Channels that are ALSO whitelisted: the whitelist is tested first, so they stay
+           visible despite being blocked. Filled by renderBlacklistWhitelistOverlap(). -->
+      <div id="channelOverlapWarning" class="ai-result-box" style="display:none;margin-top:8px;"></div>
+
       <div class="add-section">
         <div class="input-row">
           <input type="text" id="channelInput" aria-label="Add a channel to the blacklist" placeholder="Channel name, @handle, or video URL (comma/newline separated)…" />
@@ -1397,10 +1401,21 @@
         <div class="setting-item">
           <div class="setting-label">
             <span class="setting-title">🩹 Chip Rescue</span>
-            <span class="setting-desc">YouTube's known bug where the Comedy/Tourism/… topic-chip bar vanishes and needs endless refreshes. When on, present-but-hidden chips are shown again automatically, and a completely missing bar gets a small "Restore chips" button (one click reloads the page — never automatic).</span>
+            <span class="setting-desc">YouTube's known bug where the Comedy/Tourism/… topic-chip bar vanishes — and with it any way to switch topics. ON by default: the bar is re-shown when YouTube has only hidden it, the page is watched for a late-arriving or mid-session-disappearing bar (up to ~10 minutes), and if YouTube simply did not serve it, a small "Restore chips" button re-requests the home feed through YouTube's own navigation (with a page reload as the fallback). It never reloads on its own.</span>
           </div>
           <label class="switch">
             <input type="checkbox" id="toggleChipRescue" aria-label="Chip Rescue" />
+            <span class="slider"></span>
+          </label>
+        </div>
+
+        <div class="setting-item">
+          <div class="setting-label">
+            <span class="setting-title">🛟 Feed Fallback (empty Home)</span>
+            <span class="setting-desc">When YouTube serves Home with an EMPTY recommendation grid — a confirmed YouTube-side failure where signing out/in and history settings change nothing — show your subscribed channels' latest uploads in its place instead of a blank page. Built from a local cache your browsing keeps warm, topped up live from each channel's own page; it never depends on the recommender, hides nothing YouTube served, and disappears the moment real cards arrive. ON by default.</span>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="toggleFeedFallback" aria-label="Feed Fallback for an empty home feed" />
             <span class="slider"></span>
           </label>
         </div>
@@ -1495,6 +1510,7 @@
     </div>
   </footer>
 
+  <script src="shared-tables.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>

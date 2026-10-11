@@ -33,7 +33,7 @@ const TABLE_NAMES = [
   // used the shared one, so the same video produced different rules depending on which
   // engine answered — and the content-script copy (missing 'day', 'got', 'out') is what
   // filled the blacklist with junk. Pinning them here keeps that from coming back.
-  'NYT_KW_STOP_WORDS', 'NYT_KW_WEAK_ALONE', 'NYT_KW_FRAME_WORDS', 'NYT_KW_SOURCE_WEIGHTS', 'NYT_KW_PHRASE_BONUS',
+  'NYT_KW_STOP_WORDS', 'NYT_KW_WEAK_ALONE', 'NYT_KW_FRAME_WORDS', 'NYT_KW_NON_EDGE_WORDS', 'NYT_KW_SOURCE_WEIGHTS', 'NYT_KW_PHRASE_BONUS',
   'NYT_CHANNEL_SQUASH_MIN',
   'NYT_KW_MAX_PHRASE_WORDS', 'NYT_KW_FEED_MIN_CORPUS', 'NYT_KW_FEED_DF_RATIO', 'NYT_KW_FEED_MIN_HITS'
 ];
@@ -220,3 +220,9 @@ ok(contentCtx.heuristicDebaitTitle('SHOCKING FOOTAGE EXPOSED!!') !== 'SHOCKING F
   'sensational title not neutralized');
 
 console.log(`\nAll ${checks} shared-tables checks passed. ✅`);
+
+// Exit explicitly. content.js now runs feed-health and chip watchers for the life of a page;
+// those timers would otherwise keep Node's event loop alive after the assertions are printed
+// (a harness that never exits reads as a hang, not as a pass). A failed assertion above has
+// already thrown out of assert().
+process.exit(0);
