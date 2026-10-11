@@ -35,6 +35,10 @@ const path = require('path');
 
 const ROOT = path.join(__dirname, '..');
 const CONTENT_PATH = process.env.CONTENT_JS_PATH || path.join(ROOT, 'content.js');
+// The ranking logic lives in shared-tables.js, so a pre-fix seam MUST be able to point at a
+// pre-fix copy of THAT file too. Without this override the seam silently loads the FIXED
+// shared file and every ranking assertion passes for the wrong reason.
+const SHARED_PATH = process.env.SHARED_TABLES_PATH || path.join(ROOT, 'shared-tables.js');
 if (!fs.existsSync(CONTENT_PATH)) {
   console.error('content.js not found at ' + CONTENT_PATH);
   process.exit(1);
@@ -144,7 +148,7 @@ const context = {
 };
 vm.createContext(context);
 // The manifest injects shared-tables.js ahead of content.js — do the same.
-vm.runInContext(fs.readFileSync(path.join(ROOT, 'shared-tables.js'), 'utf8'), context, { filename: 'shared-tables.js' });
+vm.runInContext(fs.readFileSync(SHARED_PATH, 'utf8'), context, { filename: 'shared-tables.js' });
 vm.runInContext(fs.readFileSync(CONTENT_PATH, 'utf8'), context, { filename: CONTENT_PATH });
 
 // ------------------------------------------------------------- test script --
@@ -337,8 +341,11 @@ const script = `
     'got ' + j(nyRes));
 
   const sinkRes = rankKeywordCandidates({ title: 'How to Fix a Leaking Kitchen Sink Pipe Yourself' }, 8);
-  ok('K6g: "Fix a Leaking Kitchen Sink Pipe Yourself" yields kitchen sink/sink pipe, never yourself/leaking',
-    (sinkRes.includes('kitchen sink') || sinkRes.includes('sink pipe')) && !sinkRes.includes('yourself') &&
+  // Same product decision as K3a: the ranking now prefers the LONGEST specific phrase, so
+  // the answer is "kitchen sink pipe" rather than a shorter prefix of it. Both are correct
+  // rules; the longer one is strictly more specific and subsumes the shorter.
+  ok('K6g: "Fix a Leaking Kitchen Sink Pipe Yourself" yields the full subject phrase, never yourself/leaking',
+    sinkRes.includes('kitchen sink pipe') && !sinkRes.includes('yourself') &&
     !sinkRes.includes('leaking') && !sinkRes.includes('sink pipe yourself'),
     'got ' + j(sinkRes));
 
@@ -350,6 +357,31 @@ const script = `
   const quitRes = rankKeywordCandidates({ title: '10 Reasons Why You Should Never Quit Your Job' }, 8);
   ok('K6i: filler title with no subject yields empty candidate list, never reasons/should/quit',
     quitRes.length === 0, 'got ' + j(quitRes));
+
+  // K6j. THE REPORTED CASE (possessive modifier + the phrase-vs-singles inversion).
+  //     "America's New Home Market" used to yield america/home/market — three broad words,
+  //     each of which blocks a huge slice of YouTube on its own, while the specific rule the
+  //     user actually wanted ("new home market") lost the 3-slot cap to its own components.
+  //     Two separate defects, pinned separately below.
+  const homeRes = rankKeywordCandidates({ title: "America's New Home Market" }, 8);
+  ok('K6j: the possessive MODIFIER is not offered as a rule (america alone blocks a continent)',
+    !homeRes.includes('america') && !homeRes.includes("america's"),
+    'got ' + j(homeRes));
+  ok('K6k: the specific PHRASE outranks and subsumes its own component words',
+    homeRes[0] === 'new home market' && !homeRes.includes('market') && !homeRes.includes('home'),
+    'got ' + j(homeRes));
+  ok('K6l: a phrase is never scored below the single words inside it (the inversion that caused this)',
+    (function () {
+      const r = rankKeywordCandidates({ title: 'Ancient Rome The Fall Of An Empire' }, 8);
+      // The phrase is present AND the bare component word is gone (subsumed), which is the
+      // stronger form of "never ranked below": the coarse rule is not offered at all.
+      return r.indexOf('ancient rome') !== -1 && r.indexOf('rome') === -1;
+    })(),
+    j(rankKeywordCandidates({ title: 'Ancient Rome The Fall Of An Empire' }, 8)));
+  ok('K6m: a bare modifier word is refused by the gate, its phrase is not',
+    nytKwIsGenericRule('national') && nytKwIsGenericRule('america') &&
+    !nytKwIsGenericRule('new home market') && !nytKwIsGenericRule('home market'),
+    'gate=' + j(['national', 'america', 'new home market', 'home market'].map(nytKwIsGenericRule)));
 
   // A3c. Tag lists must not fuse into phrases no title contains.
   ok('K2e: separate tags do not fuse into a fake phrase',
@@ -371,10 +403,16 @@ const script = `
     'Cheap DIY kitchen renovation', 'Airport security secrets', 'Cast iron skillet care', 'Kayaking rivers'];
   const guarded = rankKeywordCandidates({ title: 'Prison Release Day' }, 8, crowded);
   const unguarded = rankKeywordCandidates({ title: 'Prison Release Day' }, 8, clean);
-  ok('K3a: a candidate already matching 3 other cards on screen is refused',
-    !guarded.includes('prison') && guarded.includes('release'), 'got ' + j(guarded));
-  ok('K3b: the same candidate survives an unrelated feed (the guard is not a blunt ban)',
-    unguarded.includes('prison'), 'got ' + j(unguarded));
+  // NOTE (product decision changed): this title's best rule is now the 3-word phrase
+  // "prison release day", not the bare word "release". A phrase out-ranks its own words
+  // by design (see NYT_KW_PHRASE_BONUS_BY_LEN) because a phrase carries the same subject
+  // with strictly less false-positive surface — "release" alone matches every release of
+  // anything. The feed guard's job is unchanged; what it is measured against is.
+  ok('K3a: the phrase is kept and the bare feed-flooded word inside it is not offered',
+    j(guarded) === j(['prison release day']) && !guarded.includes('prison') && !guarded.includes('release'),
+    'got ' + j(guarded));
+  ok('K3b: the same title survives an unrelated feed (the guard is not a blunt ban)',
+    unguarded.includes('prison release day'), 'got ' + j(unguarded));
   ok('K3c: too small a corpus disables the guard instead of guessing',
     nytKwFeedHitsLimit(['a', 'b']) === Infinity && nytKwFeedHitsLimit(crowded) === Math.max(3, Math.ceil(crowded.length * 0.12)),
     'small=' + nytKwFeedHitsLimit(['a', 'b']) + ' big=' + nytKwFeedHitsLimit(crowded));

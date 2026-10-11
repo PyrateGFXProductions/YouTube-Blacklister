@@ -305,10 +305,46 @@ const NYT_KW_SOURCE_WEIGHTS = {
   channel: 0.5
 };
 
-// A phrase is more precise than the bare word inside it but matches far less, so it
-// scores below its own words while still outranking a weak single word.
-const NYT_KW_PHRASE_BONUS = 0.9;
+// A phrase is more precise than the bare word inside it, and a rule that fires on
+// "new home market" is worth far more than one that fires on "market" (which matches a
+// huge slice of YouTube). The old model scored a phrase BELOW its own words, so the
+// broad singles always won the 3-slot cap and the specific phrase never got stored —
+// the reported "America's New Home Market" -> america/home/market.
+//
+// New model, and the reason for each part:
+//   * the length nudge is capped at +0.24 (was +1.44). A 16-character word should not
+//     out-score a 3-word phrase purely for being long; the doc says a nudge, never a
+//     deciding factor, and the old cap made it one.
+//   * a phrase is scored on its STRONGEST word, times a bonus that GROWS with word
+//     count (×0.95 for 2 words, ×1.15 for 3). So a phrase out-ranks every single word
+//     inside it and a 3-word phrase beats a 2-word prefix of itself — which is exactly
+//     the "prefer the longer, more specific rule" ordering the user asked for.
+const NYT_KW_PHRASE_BONUS_BY_LEN = { 2: 0.95, 3: 1.15 };
+const NYT_KW_WORD_BONUS_MAX = 0.24;           // length nudge ceiling (was effectively 1.44)
 const NYT_KW_MAX_PHRASE_WORDS = 3;
+
+// MODIFIER words: they qualify a following noun but mean nothing alone, so a rule built
+// from one hides far more than it describes. They are refused as SINGLE rules (see
+// nytKwIsGenericRule) but stay in the token stream, because they are the difference
+// between a subject and a section heading: "new home market" is the subject, while
+// "market" alone matches every market on the site.
+const NYT_KW_MODIFIER_WORDS = new Set([
+  'new', 'old', 'next', 'last', 'first', 'second', 'third', 'final', 'current', 'former',
+  'recent', 'modern', 'latest', 'coming', 'upcoming', 'original', 'entire', 'whole',
+  'other', 'another', 'same', 'different', 'every', 'each', 'any', 'some', 'many', 'most',
+  'real', 'true', 'actual', 'main', 'major', 'minor', 'top', 'big', 'small', 'great',
+  'good', 'bad', 'best', 'worst', 'biggest', 'largest', 'smallest',
+  'nation', 'national', 'america', 'american', 'britain', 'british', 'china', 'chinese',
+  'japan', 'japanese', 'korea', 'korean', 'europe', 'european', 'africa', 'african',
+  'world', 'global', 'local', 'this', 'that', 'these', 'those', 'my', 'our', 'your'
+]);
+
+// A word glued to a possessive/contraction marker is a MODIFIER of what follows, never the
+// subject: "America's New Home Market" is about the home market, and a rule of `america`
+// would hide every America-related video on the site. Unlike a bare MODIFIER word, a
+// possessive may not even sit INSIDE a phrase — "america's new home market" is a heading,
+// not a topic.
+const NYT_KW_POSSESSIVE_RE = /['\u2019](s|s'|re|ve|ll|d|m|t)\b/;
 
 // Feed-specificity guard. `otherTitles` is the list of the OTHER cards on screen at
 // the moment of the click: a local corpus that costs nothing. A candidate appearing
@@ -376,7 +412,7 @@ function nytKwIsGenericRule(term) {
   if (!words.length) return true;
   if (words.length === 1) {
     return NYT_KW_WEAK_ALONE.has(words[0]) || NYT_KW_STOP_WORDS.has(words[0]) ||
-      NYT_KW_FRAME_WORDS.has(words[0]);
+      NYT_KW_FRAME_WORDS.has(words[0]) || NYT_KW_MODIFIER_WORDS.has(words[0]);
   }
   return !words.some(w => !NYT_KW_WEAK_ALONE.has(w) && !NYT_KW_STOP_WORDS.has(w) &&
     !NYT_KW_FRAME_WORDS.has(w));
@@ -455,7 +491,11 @@ function nytKwTokensWithPositions(text) {
     const before = start > 0 ? s[start - 1] : '';
     const after = end < s.length ? s[end] : '';
     const clean = !/^[a-z0-9_]$/.test(before) && !/^[a-z0-9_]$/.test(after);
-    out.push({ t: m[0], start, end, clean });
+    // A word immediately followed by an apostrophe-s (or another contraction marker) is a
+    // MODIFIER of the next word, not the subject — see NYT_KW_MODIFIER_WORDS. Checked on
+    // the raw slice so "america's" and "america\u2019s" are both recognised.
+    const poss = NYT_KW_POSSESSIVE_RE.test(s.slice(end, end + 3));
+    out.push({ t: m[0], start, end, clean, poss });
   }
   return out;
 }
@@ -492,7 +532,10 @@ function nytKwRuns(text) {
       if (run.length) runs.push(run);
       run = [];
     }
-    run.push(tok.t);
+    // A word carrying a possessive marker is a MODIFIER of what follows ("america's new
+    // home market"): it may not begin a phrase, and it may not be offered as a single.
+    // It still occupies the stream so the phrase it modifies can form.
+    run.push({ t: tok.t, poss: !!tok.poss });
     prev = tok;
   }
   if (run.length) runs.push(run);
@@ -500,9 +543,10 @@ function nytKwRuns(text) {
 }
 
 // Longer words tend to be the specific ones ("astrophysics" vs "thing"). A nudge, not
-// a deciding factor — nothing here is positional.
+// a deciding factor — nothing here is positional. The ceiling keeps a long word from
+// out-scoring a multi-word phrase purely on length (see NYT_KW_PHRASE_BONUS_BY_LEN).
 function nytKwWordBonus(token) {
-  return 1 + Math.max(0, Math.min(token.length, 16) - 4) * 0.12;
+  return 1 + Math.min(Math.max(0, String(token).length - 4) * 0.12, NYT_KW_WORD_BONUS_MAX);
 }
 
 // Keyword candidates from arbitrary text, best-first.
@@ -550,25 +594,44 @@ function rankKeywordCandidates(sources, limit, otherTitles, dropped) {
       const flat = line.replace(/\s+/g, ' ').trim();
       if (!flat) continue;
       for (const run of nytKwRuns(flat)) {
-        for (const token of run) {
+        for (const tok of run) {
           // Weak-alone words ("day", "first") carry no topic but are fine inside a
           // phrase. FRAME words ("cool", "tech", "inside", "city", "lost", "built",
           // "humans") are not the subject in any form, so they are never offered at all.
-          if (NYT_KW_WEAK_ALONE.has(token) || NYT_KW_FRAME_WORDS.has(token)) continue;
-          bump(token, weight * nytKwWordBonus(token));
+          // A POSSESSIVE word ("america's") is a modifier of what follows, never the
+          // subject — offering it as a rule hides everything about that place/person.
+          // A bare MODIFIER word ("new", "national", "big") is refused by the storable
+          // gate anyway, so it must not take a slot here either; it stays in the run so
+          // phrases like "new home market" can still form.
+          if (NYT_KW_WEAK_ALONE.has(tok.t) || NYT_KW_FRAME_WORDS.has(tok.t) ||
+              NYT_KW_MODIFIER_WORDS.has(tok.t)) continue;
+          if (tok.poss) continue;
+          bump(tok.t, weight * nytKwWordBonus(tok.t));
         }
         for (let n = 2; n <= NYT_KW_MAX_PHRASE_WORDS; n++) {
           for (let i = 0; i + n <= run.length; i++) {
-            const words = run.slice(i, i + n);
+            const slice = run.slice(i, i + n);
+            const words = slice.map(w => w.t);
             // A phrase of nothing but weak/frame words is a stock phrase ("first day",
             // "cool tech") — the exact noise this gate exists to remove. One real word
             // is enough to make it specific ("ancient rome", "cool tech deals").
             if (!words.some(w => !NYT_KW_WEAK_ALONE.has(w) && !NYT_KW_FRAME_WORDS.has(w))) continue;
             // Reject phrases with dangling verbs, pronouns, modals or adverbs at boundaries
             if (NYT_KW_NON_EDGE_WORDS.has(words[0]) || NYT_KW_NON_EDGE_WORDS.has(words[words.length - 1])) continue;
+            // A phrase may not contain a POSSESSIVE modifier at all: "america's new home
+            // market" is a section heading, not a topic, so the run stops at the possessive
+            // and the phrase forms from what follows it ("new home market" — the rule the
+            // user asked for). Bare MODIFIER words are fine anywhere in a phrase.
+            if (slice.some(w => w.poss)) continue;
             const phrase = words.join(' ');
             if (phrase.length < 5) continue;
-            bump(phrase, weight * NYT_KW_PHRASE_BONUS);
+            // Score on the phrase's STRONGEST word, times a bonus that grows with word
+            // count — so a phrase out-ranks every single word inside it, and the longest
+            // (most specific) phrase wins. This is the part that was backwards before:
+            // phrases scored BELOW their own words, so "market" beat "new home market".
+            const bestWord = Math.max.apply(null, words.map(w => nytKwWordBonus(w)));
+            const bonus = NYT_KW_PHRASE_BONUS_BY_LEN[n] || 1;
+            bump(phrase, weight * bestWord * bonus);
           }
         }
       }
@@ -591,7 +654,24 @@ function rankKeywordCandidates(sources, limit, otherTitles, dropped) {
     b.score - a.score ||
     b.term.length - a.term.length ||
     (a.term < b.term ? -1 : a.term > b.term ? 1 : 0));
-  return ranked.slice(0, max).map(r => r.term);
+
+  // SUBSUMPTION: a candidate whose words are a strict subset of a HIGHER-RANKED phrase is
+  // the same rule at a coarser granularity, and it is strictly worse — it matches every
+  // video the phrase matches plus a pile of unrelated ones. Storing both is what the user
+  // reported: `new home market` (correct) alongside `market` (blocks anything about any
+  // market). Only subsumed when the phrase outranks the single, so a title whose subject
+  // word IS the best rule ("prison" over "prison release") keeps it.
+  const kept = [];
+  for (const r of ranked) {
+    const words = r.term.split(' ');
+    const covered = kept.some(k => {
+      if (k.term.length <= r.term.length) return false;
+      const kw = new Set(k.term.split(' '));
+      return words.every(w => kw.has(w));
+    });
+    if (!covered) kept.push(r);
+  }
+  return kept.slice(0, max).map(r => r.term);
 }
 
 // Convenience entry point for a caller holding a single blob of text (treated as the
