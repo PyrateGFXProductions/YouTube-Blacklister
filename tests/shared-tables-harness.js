@@ -78,8 +78,19 @@ console.log('Test 3: packaging covers shared-tables.js for both browsers');
 const ps1 = read('package-extension.ps1');
 ok(/scripts\s*=\s*@\(\s*"shared-tables\.js"\s*,\s*"background\.js"\s*\)/.test(ps1),
   'the Firefox manifest must load shared-tables.js before background.js in background.scripts');
-const copies = (ps1.match(/"shared-tables\.js"/g) || []).length;
-ok(copies >= 3, `shared-tables.js must be listed in both packager file arrays (found ${copies} mentions)`);
+// The real invariant: shared-tables.js is in the SINGLE shipping list ($packageFiles), which
+// every artifact and the build-dependency check are derived from. (The old assertion counted
+// raw mentions and expected 3 because the file was ALSO duplicated into a separate
+// "essential files" array — a list that no longer exists, since a file must not be a hard
+// build dependency unless it actually ships.)
+const shipStart = ps1.indexOf('$packageFiles = @(');
+const shipEnd = ps1.indexOf(')', shipStart);
+const shippingList = shipStart === -1 ? '' : ps1.slice(shipStart, shipEnd);
+ok(/"shared-tables\.js"/.test(shippingList),
+  'shared-tables.js must be in the packager shipping list ($packageFiles)');
+// And the phantom list is gone: nothing may be a build dependency that is not shipped.
+ok(!/\$essentialFiles\b/.test(ps1),
+  'the duplicate $essentialFiles list must not come back (build deps are derived from the shipping list)');
 
 // 4. The two engine bodies must stay identical.
 console.log('Test 4: the de-bait / sensationalism bodies match across contexts');

@@ -2,8 +2,12 @@
 # Builds every browser target from the single universal manifest.json:
 #   - Chromium family (Chrome/Edge/Brave/Opera/Vivaldi): unpacked + store zip
 #   - Firefox family (Firefox/Zen/LibreWolf): unpacked + .xpi/.zip, plus the
-#     zen-unpacked/ folder and blacklist-firefox.* files referenced by ZEN-INSTALL.md
+#     zen-unpacked/ folder and blacklist-firefox.* files used by the Zen install route
 # Generates a clean .zip distribution package suitable for GitHub Releases or Chrome Web Store.
+#
+# The shipped file set lives in ONE place ($packageFiles below); every artifact and the
+# build-dependency check are derived from it, so no file can be a hard build dependency
+# unless it actually ships.
 
 param (
     # Default to the script's own folder instead of the caller's CWD, so artifacts
@@ -31,46 +35,17 @@ $extVersion = $manifest.version
 Write-Host "`n[OK] Extension: $extName" -ForegroundColor Green
 Write-Host "[OK] Version  : $extVersion" -ForegroundColor Green
 
-# 2. Verify Essential Files
-# Files that must EXIST IN THE REPO. This is a completeness check on the checkout, not a
-# statement about what ships: the docs and the Windows loader are repo-only and are
-# deliberately kept out of every published artifact (see $packageFiles below).
-$essentialFiles = @(
-    "manifest.json",
-    "background.js",
-    "content.js",
-    "shared-tables.js",
-    "popup.html",
-    "popup.js",
-    "backup.html",
-    "backup.js",
-    "icon16.png",
-    "icon48.png",
-    "icon128.png",
-    "LICENSE",
-    "PRIVACY.md",
-    "README.md",
-    "CHANGELOG.md",
-    "CONTRIBUTING.md",
-    "ZEN-INSTALL.md",
-    "install.bat"
-)
-
-Write-Host "`n[i] Verifying essential package files..." -ForegroundColor Yellow
-foreach ($file in $essentialFiles) {
-    $filePath = Join-Path $PSScriptRoot $file
-    if (-not (Test-Path $filePath)) {
-        Write-Error "Missing required file: $file"
-        exit 1
-    }
-    Write-Host "  - Found $file" -ForegroundColor Gray
-}
-
-# 3. Derive per-browser manifests from the universal manifest.json
-# The runtime files that make up the extension itself. This is the ONLY file list any
-# published artifact is built from, so the browser builds and the release zip cannot drift
-# apart. The repo docs (README/CHANGELOG/CONTRIBUTING/ZEN-INSTALL) and the Windows loader
-# (install.bat) live in the repo only — the release archive is the extension, nothing else.
+# 2. THE SINGLE SHIPPING LIST.
+# Every published artifact (dist/chromium, dist/firefox, zen-unpacked, the release zip) is
+# built from THIS list and nothing else, so the browser builds and the release zip cannot
+# drift apart. It is declared first because the build-dependency check below is DERIVED
+# from it — a file can never be a hard build dependency unless it actually ships.
+#
+# Deliberately NOT here: README.md, CHANGELOG.md, CONTRIBUTING.md, ZEN-INSTALL.md and
+# install.bat. Those are repo-only prose and a Windows dev loader; a downloader gets the
+# extension, not a copy of the repository's docs. Because they are absent from this list
+# they are also absent from the build-dependency check, so deleting any of them can never
+# break a release.
 $packageFiles = @(
     "background.js",
     "content.js",
@@ -83,6 +58,8 @@ $packageFiles = @(
     "icon48.png",
     "icon128.png",
     # Bundled in-browser AI provider (transformers.js + onnxruntime-web, vendored).
+    # background.js imports this at runtime via chrome.runtime.getURL('bundled-ai.js'),
+    # so a build that dropped it would ship a broken AI path.
     "bundled-ai.js",
     "vendor/transformers.web.js",
     "vendor/ort.min.mjs",
@@ -94,6 +71,37 @@ $packageFiles = @(
     "PRIVACY.md",
     "LICENSE"
 )
+
+# 3. Verify the files the BUILD depends on.
+# Derived from $packageFiles plus the manifest it is derived from — so the check can only
+# ever cover files that ship. A missing entry here means the artifact would be broken
+# (a manifest-less or runtime-less extension), which is the one condition worth aborting on.
+$buildFiles = @("manifest.json") + $packageFiles
+
+Write-Host "`n[i] Verifying build dependencies (derived from the shipping list)..." -ForegroundColor Yellow
+$missingBuild = @()
+foreach ($file in $buildFiles) {
+    $filePath = Join-Path $PSScriptRoot $file
+    if (-not (Test-Path $filePath)) {
+        $missingBuild += $file
+        Write-Host "  - MISSING $file" -ForegroundColor Red
+    } else {
+        Write-Host "  - Found $file" -ForegroundColor Gray
+    }
+}
+if ($missingBuild.Count -gt 0) {
+    Write-Error "Cannot build: $($missingBuild.Count) shipped file(s) are missing from the repo: $($missingBuild -join ', ')"
+    exit 1
+}
+
+# Repo-only prose and the dev loader. Their absence is NOT a build failure — it only means
+# this checkout is a source-only tree. Reported as a non-fatal note so a maintainer still
+# sees it, without a missing README being able to break a release.
+$repoOnlyFiles = @("README.md", "CHANGELOG.md", "CONTRIBUTING.md", "ZEN-INSTALL.md", "install.bat")
+$absentRepoOnly = @($repoOnlyFiles | Where-Object { -not (Test-Path (Join-Path $PSScriptRoot $_)) })
+if ($absentRepoOnly.Count -gt 0) {
+    Write-Host "[i] Repo-only files not present (not a build dependency, build continues): $($absentRepoOnly -join ', ')" -ForegroundColor DarkGray
+}
 
 $chromiumManifest = $manifest | ConvertTo-Json -Depth 10 | ConvertFrom-Json
 $chromiumManifest.PSObject.Properties.Remove("browser_specific_settings")
