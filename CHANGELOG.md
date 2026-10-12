@@ -10,6 +10,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+
+### Removed
+- **The rebuilt topic-chip bar is deleted outright** (reported twice: selecting a rebuilt chip ran a generic site-wide search, and then '3x the chips' with no chip filtering anything — 'all I get is the same video cards over and over').
+  - Root cause of the duplication (measured live): `extractChipsFromDom()` read `yt-chip-cloud-chip-renderer` across the WHOLE document, not the Home topic bar, so one capture merged several unrelated chip sets (topic bar + shelf headers) into one list; the 'keep the richer capture' rule then guaranteed the bloated list won and the bar rendered every merged chip.
+  - Root cause of the dead chips: a topic chip only filters Home if YouTube's OWN chip exists to click. When YouTube serves no chip data (the state this feature targeted) there is, by definition, no real chip — so every rebuilt chip could only ever re-request the same Home feed. The premise of the feature was wrong.
+  - Deleted per the laziness/attack-the-premise protocols: the entire capture/rebuild/click subsystem (`nyt_chipBarCache` cache, `buildChipBarElement`, `insertRebuiltChipBar`, `tryRebuildChipBar`, `clickChipByLabel`/`realChipByLabel`/`clickRealChip`, `chipRebuildDecision`, the capture in the healthy path, the chip-bar harness, the 14 chipBar wiring gates, and every `chipBarCache` bus in backup.js).
+  - What survives: the chip rescue still UNHIDES a bar YouTube rendered, and when YouTube serves no chips at all it now quietly re-requests Home ONCE through YouTube's own SPA navigation (the same thing the user's manual refreshing was doing) before offering the refresh button — bounded, one per page, reset on navigation.
+
 - **Rebuilt topic chips navigated to a generic YouTube search** (reported: selecting 'New to you' or 'Comedy' triggered a site-wide search for that word). A Home topic chip is a **feed filter**, not a search — the wrong pattern, now gone entirely.
   - Clicking a rebuilt chip now goes through `clickChipByLabel()`: it finds **YouTube's own chip** for that topic in the real bar and clicks it, which filters the Home grid in place (SPA) exactly like the native bar. If no real bar exists yet, it re-requests Home through YouTube's own navigation and clicks the matching chip when it renders (bounded watch, 10 rounds). If the topic genuinely is not on your feed, it says so — an honest no-op instead of a wrong navigation.
   - The `/results?search_query=` fallback is deleted; a wiring gate in the audit harness now fails the suite if any code path ever navigates a chip to a search, and the chip-bar harness drives the real-chip click contract end to end (find by exact label, click the right chip, never touch `location`).

@@ -1942,9 +1942,8 @@ function restoreHiddenByRules() {
     removeChipRescueButton();
     removeFeedStuckButton();
     removeFeedFallbackPanel();
-    removeRebuiltChipBar();
-    // A pending chip-click watch is background work: paused means paused.
-    if (chipClickWatchTimer) { clearTimeout(chipClickWatchTimer); chipClickWatchTimer = null; }
+    // Reset the one-per-page auto re-request so a re-enabled extension retries it.
+    chipRescueAutoFetchDone = false;
     // The chip watcher and the feed health poll are background work: paused means paused.
     stopChipRescueObserver();
     if (chipRescueTimer) { clearTimeout(chipRescueTimer); chipRescueTimer = null; }
@@ -5058,7 +5057,7 @@ function start() {
           const node = added[j];
           if (node.nodeType !== 1) continue;
           if (node.id === 'nyt-ext-toast' || node.id === 'nyt-tldw-host' || node.id === 'nyt-feed-fallback' ||
-            node.id === 'nyt-chip-cloud-rebuilt' || node.id === 'nyt-chip-rescue' || (node.classList?.contains && (
+            node.id === 'nyt-chip-rescue' || (node.classList?.contains && (
             node.classList.contains('custom-blacklist-option') ||
             node.classList.contains('nyt-quick-block-btn') ||
             node.classList.contains('nyt-debait-badge') ||
@@ -5504,6 +5503,7 @@ let chipRescueObserver = null;
 let chipRescueObserverTimer = null;
 let chipRescuePolls = 0;
 let chipRescueReloadStage = 0;   // 0 = offer the soft re-fetch, 1 = offer the reload
+let chipRescueAutoFetchDone = false;   // one silent Home re-request per page when YouTube serves no chips
 let chipRescueAnnouncedAt = 0;
 
 // Pure, testable triage of the chip bar state (contract unchanged — the harness pins it).
@@ -5655,13 +5655,6 @@ function chipRescueCheck() {
     chipRescueReloadStage = 0;
     removeChipRescueButton();
     stopChipRescueObserver();
-    // The bar is healthy: capture its DATA so a future page that YouTube serves without
-    // chips can be rebuilt from it. Throttled — this is a storage write, not a per-tick job.
-    const nowCap = Date.now();
-    if (nowCap - chipBarLastCaptureAt > CHIP_BAR_CAPTURE_MIN_INTERVAL_MS) {
-      chipBarLastCaptureAt = nowCap;
-      try { captureChipBarIfUseful(); } catch (_) { }
-    }
     chipRescueTimer = setTimeout(chipRescueCheck, CHIP_RESCUE_HEALTHY_MS);
     return;
   }
@@ -5697,43 +5690,32 @@ function chipRescueCheck() {
   }
 
   // state.action === 'missing'
-  // FIRST try to rebuild the bar from the cached capture. YouTube serving NO chip data is
-  // exactly the state this feature exists for, and a rebuild is silent and instant — only if
-  // there is nothing to rebuild from do we fall through to the (bounded) watch + reload offer.
-  if (!chipBarRebuiltThisPage) {
-    tryRebuildChipBar().then((result) => {
-      if (result === 'rebuilt') {
-        chipRescuePolls = 0;
-        chipRescueReloadStage = 0;
-        removeChipRescueButton();
-        stopChipRescueObserver();
-        chipRescueTimer = setTimeout(chipRescueCheck, CHIP_RESCUE_HEALTHY_MS);
-        return;
-      }
-      // Nothing to rebuild from — keep watching briefly, then offer the refresh as before.
-      if (chipRescueShouldKeepWatching(chipRescuePolls)) {
-        chipRescueTimer = setTimeout(chipRescueCheck, CHIP_RESCUE_POLL_MS);
-        return;
-      }
-      ensureChipRescueButton();
-      if (chipRescuePolls <= CHIP_RESCUE_MAX_POLLS) {
-        chipRescueTimer = setTimeout(chipRescueCheck, CHIP_RESCUE_POLL_MS);
-      }
-    }).catch(() => { });
+  // YouTube served NO chip bar at all. There is nothing to unhide and — measured live —
+  // nothing a client can click to filter the feed: a topic chip only filters Home if
+  // YouTube's own chip exists to click. The old approach (rebuild a fake bar from a cache)
+  // shipped buttons that could only ever re-request the same Home feed, so it is deleted
+  // (laziness protocol: the honest behavior here is to fetch the feed again, which is
+  // what the user's manual refreshing was doing).
+  // Instead: quietly re-request Home ONCE through YouTube's own navigation (the same SPA
+  // re-fetch the rescue button performs). A fresh render usually brings the bar with it.
+  // If it does not, fall through to the (bounded) watch + refresh offer as before.
+  if (chipRescueAutoFetchDone) {
+    // Already auto re-requested on this page: keep watching briefly, then offer the button.
+    if (chipRescueShouldKeepWatching(chipRescuePolls)) {
+      chipRescueTimer = setTimeout(chipRescueCheck, CHIP_RESCUE_POLL_MS);
+      return;
+    }
+    ensureChipRescueButton();
+    if (chipRescuePolls <= CHIP_RESCUE_MAX_POLLS) {
+      chipRescueTimer = setTimeout(chipRescueCheck, CHIP_RESCUE_POLL_MS);
+    }
     return;
   }
-  if (chipRescueShouldKeepWatching(chipRescuePolls)) {
-    // Keep quiet and keep watching: the bar routinely attaches after the grid.
-    chipRescueTimer = setTimeout(chipRescueCheck, CHIP_RESCUE_POLL_MS);
-    return;
+  chipRescueAutoFetchDone = true;
+  if (refetchHomeFeed()) {
+    showToast('YouTube served no topic chips — asking for the Home feed again…');
   }
-  ensureChipRescueButton();
-  // The offer is on screen; keep the timer running only for a bounded window. After that the
-  // MutationObserver, the next navigation and the next visibilitychange still re-check, so a
-  // bar that shows up later is still caught — without a content script polling for ever.
-  if (chipRescuePolls <= CHIP_RESCUE_MAX_POLLS) {
-    chipRescueTimer = setTimeout(chipRescueCheck, CHIP_RESCUE_POLL_MS);
-  }
+  chipRescueTimer = setTimeout(chipRescueCheck, CHIP_RESCUE_POLL_MS);
 }
 
 function initChipRescue() {
@@ -5747,334 +5729,6 @@ function initChipRescue() {
 }
 
 // ------------------------------------------------------------------
-// CHIP BAR PERSISTENCE — rebuild the topic bar YouTube did not serve
-// ------------------------------------------------------------------
-// The rescue above can only UNHIDE a bar YouTube rendered. Measured live: on the broken
-// state YouTube sends NO chip data at all (`chipCloudRenderer` absent from ytInitialData,
-// zero `yt-chip-cloud-chip-renderer` in the DOM), so there is nothing to unhide and the
-// only remedy the old code had was the reload button the user ends up pressing for minutes.
-//
-// So the bar's DATA is captured while YouTube IS serving it, persisted, and re-injected when
-// YouTube omits it. The chips are rebuilt from that data as a real `yt-chip-cloud-renderer`
-// carrying the SAME renderer shape YouTube itself uses (`{ chipCloudChipRenderer: { style,
-// text, navigationEndpoint, isSelected, location } }`), inserted where YouTube puts the
-// home chip bar, so the site's own chip component renders and styles it.
-//
-// Two shapes are supported because YouTube serves both: the older `chipCloudChipRenderer`
-// and the newer `chipViewModel` (live search chips use `chipViewModel` with
-// `{ style, text: { simpleText }, location }`).
-const CHIP_BAR_STORAGE_KEY = 'nyt_chipBarCache';
-const CHIP_BAR_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;   // 30 days; older is not worth trusting
-const CHIP_BAR_MAX_CHIPS = 20;
-let chipBarRebuiltThisPage = false;
-let chipBarLastCaptureAt = 0;
-const CHIP_BAR_CAPTURE_MIN_INTERVAL_MS = 60000;   // don't re-scan storage on every pass
-
-// ---- capture / persist / rebuild the chip bar -------------------------------
-// (state + constants are declared with the feature block above)
-
-function readChipBarCache() {
-  return new Promise((resolve) => {
-    try {
-      chrome.storage.local.get([CHIP_BAR_STORAGE_KEY], (store) => {
-        if (chrome.runtime?.lastError) { resolve(null); return; }
-        const v = store && store[CHIP_BAR_STORAGE_KEY];
-        resolve(v && typeof v === 'object' ? v : null);
-      });
-    } catch (_) { resolve(null); }
-  });
-}
-
-// Capture the chips while YouTube IS serving them. Called from the healthy path, so the
-// cache is always warm before the bar is ever needed. Only overwrites the cache when the
-// fresh capture is at least as good (never downgrade a real topic bar to "All").
-function captureChipBarIfUseful() {
-  const dom = extractChipsFromDom();
-  let chips = chipBarCaptureIsUseful(dom) ? dom : [];
-  if (!chips.length) {
-    try { chips = extractChipsFromInitialData(window.ytInitialData || {}); } catch (_) { }
-  }
-  if (!chipBarCaptureIsUseful(chips)) return false;
-  try {
-    chrome.storage.local.get([CHIP_BAR_STORAGE_KEY], (store) => {
-      if (chrome.runtime?.lastError) return;
-      const prev = store && store[CHIP_BAR_STORAGE_KEY];
-      const prevCount = prev && Array.isArray(prev.chips) ? prev.chips.length : 0;
-      // Keep the richer capture: a 12-chip bar beats a 3-chip one.
-      if (prevCount > chips.length && prev && prev.chips) return;
-      chrome.storage.local.set({
-        [CHIP_BAR_STORAGE_KEY]: { chips, capturedAt: Date.now(), url: location.href }
-      }, () => { if (chrome.runtime?.lastError) return; });
-    });
-  } catch (_) { }
-  return true;
-}
-
-// Build the bar as a PLAIN element this extension owns.
-//
-// VERIFIED LIVE, and this is why it is not a `yt-chip-cloud-renderer`: a hand-built Polymer
-// renderer appended into YouTube's live DOM is RECYCLED within a tick (the host renderer's
-// data-bound stamping drops children it did not create — `insertBefore` succeeds, then the
-// node is gone). A plain element is not reclaimed and is fully under our control, so the bar
-// actually stays on the page — which is the entire requirement.
-//
-// It is styled with the page's own CSS variables so it reads as part of YouTube, and each
-// chip is a real button with a real navigation target.
-function buildChipBarElement(chips) {
-  const bar = document.createElement('div');
-  bar.id = 'nyt-chip-cloud-rebuilt';
-  bar.setAttribute('role', 'toolbar');
-  bar.setAttribute('aria-label', 'Topic filters (restored by Always New To You)');
-  // Inline styles only — no dependency on YouTube's stylesheet surviving, and it cannot be
-  // stripped by the page re-rendering its own <style> blocks.
-  bar.setAttribute('style', [
-    'display:flex', 'flex-wrap:wrap', 'align-items:center', 'gap:12px',
-    'padding:12px 0 16px', 'position:relative', 'z-index:2',
-    'font-family:Roboto,Arial,sans-serif', 'font-size:14px'
-  ].join(';'));
-
-  for (const c of (Array.isArray(chips) ? chips : [])) {
-    if (!c || !c.text) continue;
-    const chip = document.createElement('button');
-    chip.className = 'nyt-rebuilt-chip';
-    chip.type = 'button';
-    chip.textContent = c.text;
-    chip.setAttribute('aria-label', c.text);
-    chip.setAttribute('style', [
-      'border:1px solid var(--yt-spec-outline, rgba(255,255,255,0.2))',
-      'border-radius:8px', 'padding:6px 12px', 'cursor:pointer',
-      'background:' + (c.isSelected
-        ? 'var(--yt-spec-text-primary, #f1f1f1)'
-        : 'var(--yt-spec-additive-background, rgba(255,255,255,0.1))'),
-      'color:' + (c.isSelected
-        ? 'var(--yt-spec-badge-chip-background, #0f0f0f)'
-        : 'var(--yt-spec-text-primary, #f1f1f1)'),
-      'font:inherit', 'white-space:nowrap'
-    ].join(';'));
-    chip.addEventListener('click', (ev) => {
-      ev.preventDefault();
-      ev.stopPropagation();
-      ev.stopImmediatePropagation();
-      clickChipByLabel(String(c.text || '').trim());
-    }, true);
-    bar.appendChild(chip);
-  }
-  return bar;
-}
-
-// Click YOUTUBE'S OWN chip for this topic. A Home topic chip is a FEED FILTER, not a search:
-// clicking "Comedy" must filter the Home grid in place (SPA), the way the real chip bar does —
-// never navigate to a generic /results?search_query= page, which serves an unrelated global
-// search. (That fallback was a wrong pattern and is gone.)
-//
-// Order of attempts:
-//   1. the real chip bar's chip whose label matches (click it — YouTube swaps the grid);
-//   2. if no real bar exists yet, re-request the home feed through YouTube's own navigation
-//      (the same SPA re-fetch the "Restore chips" path uses), then watch briefly for the bar
-//      to appear and click the matching chip when it does;
-//   3. if the topic never appears, say so — an honest no-op beats a wrong navigation.
-let chipClickWatchTimer = null;
-
-function realChipByLabel(label) {
-  if (!label) return null;
-  const want = label.trim().toLowerCase();
-  const bars = document.querySelectorAll(
-    'ytd-feed-filter-chip-bar-renderer, #chips-wrapper, yt-chip-cloud-renderer'
-  );
-  for (const bar of bars) {
-    for (const chip of bar.querySelectorAll('yt-chip-cloud-chip-renderer')) {
-      const t = (chip.querySelector('yt-formatted-string, #text')?.textContent || chip.textContent || '').trim();
-      if (t && t.toLowerCase() === want) return chip;
-    }
-  }
-  return null;
-}
-
-function clickRealChip(chip) {
-  try {
-    const clickable = chip.shadowRoot?.querySelector('button, a') ||
-      chip.querySelector('button, a') || chip;
-    clickable.click();
-    return true;
-  } catch (_) {
-    return false;
-  }
-}
-
-function clickChipByLabel(label) {
-  if (!label) return;
-  const now = realChipByLabel(label);
-  if (now) {
-    if (clickRealChip(now)) return;
-  }
-  // No real chip yet: ask YouTube for the home feed again (SPA re-fetch, no reload) and
-  // watch for the bar. The bar is the thing that was missing in the first place; a fresh
-  // Home render usually brings it with the standard chips attached.
-  if (chipClickWatchTimer) { clearTimeout(chipClickWatchTimer); chipClickWatchTimer = null; }
-  let attempts = 0;
-  const watch = () => {
-    chipClickWatchTimer = null;
-    if (!isHomePath()) return;
-    const chip = realChipByLabel(label);
-    if (chip) {
-      if (clickRealChip(chip)) {
-        showToast('Filtered Home to "' + label + '".');
-        return;
-      }
-    }
-    if (++attempts < 10) {
-      chipClickWatchTimer = setTimeout(watch, 700);
-    } else {
-      showToast('"' + label + '" is not available on your Home feed right now.');
-    }
-  };
-  if (refetchHomeFeed()) {
-    showToast('Asking YouTube for the Home feed again…');
-    chipClickWatchTimer = setTimeout(watch, 700);
-  } else {
-    watch();
-  }
-}
-
-// Insert the rebuilt bar where YouTube puts the home chip bar. Measured live, the bar sits
-// as the first child of the home grid container (`ytd-rich-grid-renderer`) inside
-// `ytd-browse`; the app-level `ytd-feed-filter-chip-bar-renderer` wrapper is the other
-// known host. The bar is inserted at the TOP of the feed so it reads as the topic bar.
-function insertRebuiltChipBar(chips) {
-  if (document.getElementById('nyt-chip-cloud-rebuilt')) return true;
-  const bar = buildChipBarElement(chips);
-  const hosts = [
-    'ytd-rich-grid-renderer',
-    'ytd-browse[page-subtype="home"] #primary',
-    'ytd-browse #primary',
-    '#primary'
-  ];
-  for (const sel of hosts) {
-    const target = document.querySelector(sel);
-    if (!target) continue;
-    try {
-      target.insertBefore(bar, target.firstChild);
-      return true;
-    } catch (_) { }
-  }
-  return false;
-}
-
-function removeRebuiltChipBar() {
-  const el = document.getElementById('nyt-chip-cloud-rebuilt');
-  if (el && el.parentNode) el.parentNode.removeChild(el);
-}
-
-// One rebuild attempt, driven from chipRescueCheck's "missing" branch.
-async function tryRebuildChipBar() {
-  if (chipBarRebuiltThisPage) return 'already-rebuilt';
-  const cache = await readChipBarCache();
-  const decision = chipRebuildDecision({
-    isHome: isHomePath(),
-    enabled: settings.extensionEnabled,
-    featureOn: settings.chipRescue,
-    alreadyRebuilt: chipBarRebuiltThisPage,
-    barPresent: !!findChipBar(),
-    cachedChips: cache && cache.chips,
-    cacheAgeMs: cache && cache.capturedAt ? (Date.now() - cache.capturedAt) : Infinity,
-    userNavigatedAway: !isHomePath()
-  });
-  if (!decision.go) return decision.reason;
-
-  if (!insertRebuiltChipBar(cache.chips)) return 'no-host';
-  chipBarRebuiltThisPage = true;
-  const now = Date.now();
-  if (now - chipRescueAnnouncedAt > 30000) {
-    chipRescueAnnouncedAt = now;
-    showToast('YouTube served no topic chips — rebuilt them from your last good session.');
-  }
-  return 'rebuilt';
-}
-
-
-// Pure, testable: is this chip array worth persisting?
-function chipBarCaptureIsUseful(chips) {
-  const list = Array.isArray(chips) ? chips : [];
-  const named = list.filter(c => c && typeof c.text === 'string' && c.text.trim().length > 0);
-  // A bar needs at least two real, labelled chips to be worth restoring — one chip is not a
-  // topic bar, and an unlabelled array is the empty shell YouTube sends with an empty feed.
-  if (named.length < 2) return false;
-  const texts = named.map(c => c.text.trim().toLowerCase());
-  // "All" alone (or All + one) is the unpersonalized shell, not a real topic bar.
-  const real = texts.filter(t => t !== 'all');
-  return real.length >= 1;
-}
-
-// Normalize ONE chip from either renderer shape into the flat form the cache stores.
-function normalizeChipEntry(raw) {
-  if (!raw || typeof raw !== 'object') return null;
-  const r = raw.chipCloudChipRenderer || raw.chipViewModel || raw;
-  const text = r.text && (r.text.simpleText ||
-    (Array.isArray(r.text.runs) ? r.text.runs.map(x => x.text || '').join('') : ''));
-  const label = String(text == null ? '' : text).trim();
-  if (!label) return null;
-  return {
-    text: label,
-    style: (r.style && r.style.styleType) || 'STYLE_HOME_FILTER',
-    endpoint: r.navigationEndpoint || null,
-    isSelected: r.isSelected === true,
-    location: r.location || 'CHIP_LOCATION_HOME'
-  };
-}
-
-// Pull the chip array out of a ytInitialData-shaped object, wherever it sits.
-function extractChipsFromInitialData(data) {
-  let cloud = null;
-  (function walk(o, depth) {
-    if (!o || typeof o !== 'object' || depth > 30 || cloud) return;
-    if (o.chipCloudRenderer && Array.isArray(o.chipCloudRenderer.chips)) { cloud = o.chipCloudRenderer; return; }
-    if (o.feedFilterChipBarRenderer && Array.isArray(o.feedFilterChipBarRenderer.chips)) { cloud = o.feedFilterChipBarRenderer; return; }
-    for (const k in o) walk(o[k], depth + 1);
-  })(data, 0);
-  if (!cloud) return [];
-  return cloud.chips.map(normalizeChipEntry).filter(Boolean).slice(0, CHIP_BAR_MAX_CHIPS);
-}
-
-// Read the chips off the RENDERED bar — works for the newer `chipViewModel` shape that the
-// initial-data walk can miss, and is the fallback capture path.
-function extractChipsFromDom() {
-  const out = [];
-  try {
-    document.querySelectorAll('yt-chip-cloud-chip-renderer').forEach((el) => {
-      if (!el || !el.tagName || el.tagName.toLowerCase() !== 'yt-chip-cloud-chip-renderer') return;
-      // Never capture from our OWN rebuilt bar: its chips may lack the navigation endpoints
-      // YouTube's carry, so re-reading them would degrade the cache a real capture filled —
-      // and once rebuilt, every later capture on this page would otherwise read only our
-      // synthetic chips.
-      if (el.closest && el.closest('#nyt-chip-cloud-rebuilt')) return;
-      const label = String(el.textContent || '').replace(/\s+/g, ' ').trim();
-      if (!label) return;
-      out.push({
-        text: label,
-        style: el.getAttribute('chip-style') || 'STYLE_HOME_FILTER',
-        endpoint: (el.data && el.data.navigationEndpoint) || null,
-        isSelected: el.hasAttribute('selected') || el.getAttribute('aria-selected') === 'true',
-        location: (el.data && el.data.location) || 'CHIP_LOCATION_HOME'
-      });
-    });
-  } catch (_) { }
-  return out.slice(0, CHIP_BAR_MAX_CHIPS);
-}
-
-// Pure, testable: should we rebuild the bar from the cache right now?
-function chipRebuildDecision(opts) {
-  const o = opts || {};
-  if (!o.isHome) return { go: false, reason: 'not-home' };
-  if (!o.enabled) return { go: false, reason: 'disabled' };
-  if (!o.featureOn) return { go: false, reason: 'feature-off' };
-  if (o.alreadyRebuilt) return { go: false, reason: 'already-rebuilt' };
-  if (o.barPresent) return { go: false, reason: 'youtube-served' };
-  const chips = Array.isArray(o.cachedChips) ? o.cachedChips : [];
-  if (!chipBarCaptureIsUseful(chips)) return { go: false, reason: 'no-cache' };
-  if (Number(o.cacheAgeMs) > CHIP_BAR_MAX_AGE_MS) return { go: false, reason: 'stale' };
-  if (o.userNavigatedAway) return { go: false, reason: 'navigated' };
-  return { go: true, reason: 'rebuild' };
-}
 
 // ------------------------------------------------------------------
 // NEW TO YOU — auto-start Home in YouTube's own discovery feed.
@@ -6152,9 +5806,7 @@ window.addEventListener('yt-navigate-finish', () => {
   removeFeedFallbackPanel();
   // A rebuilt chip bar belongs to the page that spawned it, and the rebuild budget resets on
   // a fresh page (initChipRescue below re-evaluates whether one is needed).
-  chipBarRebuiltThisPage = false;
-  removeRebuiltChipBar();
-  if (chipClickWatchTimer) { clearTimeout(chipClickWatchTimer); chipClickWatchTimer = null; }
+  chipRescueAutoFetchDone = false;
   scheduleFeedProcessing(200);
   checkCurrentWatchPageVideo();
   initChipRescue();
@@ -6167,9 +5819,7 @@ window.addEventListener('popstate', () => {
   feedAttempts = 0; feedNoGrowth = 0; feedRefused = false; feedLastAttempt = 0;
   removeFeedStuckButton();
   removeFeedFallbackPanel();
-  chipBarRebuiltThisPage = false;
-  removeRebuiltChipBar();
-  if (chipClickWatchTimer) { clearTimeout(chipClickWatchTimer); chipClickWatchTimer = null; }
+  chipRescueAutoFetchDone = false;
   scheduleFeedProcessing(200);
   checkCurrentWatchPageVideo();
   initChipRescue();

@@ -1018,35 +1018,8 @@ staticOk('H: nyt_feedCache is exported by backup (a restore keeps the fallback w
 staticOk('H: a fresh checkFeedFallback exists and is async (storage-read before deciding)',
   /async function checkFeedFallback\(/.test(contentSrc));
 
-// Chip-bar persistence wiring: the rebuilt bar spans content (capture + rebuild + teardown)
-// and backup (export + import), and its id must be on the MutationObserver ignore list or
-// inserting it re-triggers feed processing in a loop.
-const chipWiring = [
-  ['content caches the chip bar under a namespaced key', contentSrc.includes("CHIP_BAR_STORAGE_KEY = 'nyt_chipBarCache'")],
-  ['capture happens on the HEALTHY path', /state\.action === 'none'[\s\S]{0,900}captureChipBarIfUseful\(\)/.test(contentSrc)],
-  ['the missing path tries a rebuild before offering a reload', /state\.action === 'missing'[\s\S]{0,700}tryRebuildChipBar\(\)/.test(contentSrc)],
-  ['the built bar is a plain element, not a YouTube renderer', /createElement\('div'\)[\s\S]{0,200}nyt-chip-cloud-rebuilt/.test(contentSrc) && !/createElement\('yt-chip-cloud-renderer'\)/.test(contentSrc)],
-  ['capture never reads our own rebuilt bar', contentSrc.includes("closest('#nyt-chip-cloud-rebuilt')")],
-  ['pause tears the rebuilt bar down', /restoreHiddenByRules[\s\S]{0,2600}removeRebuiltChipBar\(\)/.test(contentSrc)],
-  ['navigation removes the rebuilt bar', /yt-navigate-finish'[\s\S]{0,900}removeRebuiltChipBar\(\)/.test(contentSrc)],
-  ['the rebuilt bar id is ignored by the feed MutationObserver', contentSrc.includes("node.id === 'nyt-chip-cloud-rebuilt'")],
-  ['backup exports the chip cache', backupSrc.includes('chipBarCache')],
-  ['backup import handles the chip cache', backupSrc.includes('nyt_chipBarCache')],
-  // THE FEED-FILTER CONTRACT: a Home topic chip filters the Home grid by clicking YouTube's
-  // own chip. It must NEVER navigate to a generic /results search — the reported defect
-  // ("I don't want to search all of YouTube for a broad category").
-  ['a rebuilt chip click routes through clickChipByLabel (the real-chip clicker)',
-    /addEventListener\('click'[\s\S]{0,400}?clickChipByLabel\(/.test(contentSrc)],
-  ['NO code path navigates a chip to a generic YouTube search',
-    !/search_query/.test(contentSrc.replace(/\/\/[^\n]*search_query[^\n]*/g, ''))],
-  ['the real-chip clicker looks for the chip in YouTube real bar hosts',
-    /ytd-feed-filter-chip-bar-renderer, #chips-wrapper, yt-chip-cloud-renderer/.test(contentSrc)],
-  ['pause cancels a pending chip-click watch', /restoreHiddenByRules[\s\S]{0,2900}chipClickWatchTimer\)/.test(contentSrc)]
-];
-for (const [name, cond] of chipWiring) staticOk('H: chipBar — ' + name, cond);
-staticOk('H: both caches are READ in the backup load path (or export ships them empty)',
-  /data\.feedCache = Array\.isArray\(res\.nyt_feedCache\)/.test(backupSrc) &&
-  /data\.chipBarCache = .*res\.nyt_chipBarCache/.test(backupSrc));
+staticOk('H: the feed cache is READ in the backup load path (or export ships it empty)',
+  /data\.feedCache = Array\.isArray\(res\.nyt_feedCache\)/.test(backupSrc));
 
 // Every control the audited popup features query must exist in the markup.
 const CONTROL_IDS = [
