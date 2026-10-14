@@ -1088,8 +1088,44 @@ function channelNameOfElement(el) {
   return collapseDoubledChannelText(cleanChannelText(raw));
 }
 
+// The canonical comparable form of a channel name: lowercased, badge-stripped,
+// leading @ removed, and — critically — a TRAILING metadata tail removed.
+//
+// That last step is what makes an existing rule match a card again. A rule saved
+// before this strip existed reads "mugsyboy 1m 1mo ago" while a card can present
+// either the bare "Mugsyboy" or the same polluted row, so the two only compared
+// equal by accident. Normalising BOTH sides down to the bare name repairs every
+// already-stored polluted rule with no migration and no data loss.
+//
+// The tail is stripped token by token, repeatedly, because YouTube's row carries
+// a count AND an age ("Mugsyboy 1M 1mo ago"). Only a TRAILING tail is removed and
+// only when something precedes it, so a channel genuinely named "3M", "412K" or
+// "1900" is a single token rather than a name followed by metadata and normalises
+// to itself.
+const CHANNEL_TAIL_TIME_RE = /\s\d+(?:[.,]\d+)?\s*(?:s|sec|secs|second|seconds|m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days|w|wk|wks|week|weeks|mo|mon|month|months|y|yr|yrs|year|years)\s+ago$/i;
+// A trailing count, with or without a k/m/b magnitude suffix. The suffix-less
+// form matters: YouTube renders some rows as "Mark Gilmore 259 2mo ago" where the
+// count is already abbreviated to a plain number, and leaving it behind puts
+// "259" into the comparable key so the rule still cannot match a bare-name card.
+const CHANNEL_TAIL_COUNT_RE = /\s\d+(?:[.,]\d+)?\s*[kmb]?$/i;
+
+function stripChannelMetadataTail(name) {
+  let s = name;
+  let prev;
+  do {
+    prev = s;
+    s = s.replace(CHANNEL_TAIL_TIME_RE, '').trim();
+    s = s.replace(CHANNEL_TAIL_COUNT_RE, '').trim();
+  } while (s !== prev && s);
+  return s;
+}
+
 function normalizeChannel(name) {
-  return cleanChannelText(name).toLowerCase().replace(/^@+/, '');
+  const clean = cleanChannelText(name).toLowerCase().replace(/^@+/, '');
+  const stripped = stripChannelMetadataTail(clean);
+  // Never let the strip consume a name that IS only metadata-shaped: "3M" and
+  // "412K" are single tokens, so there is nothing before the count to keep.
+  return stripped || clean;
 }
 
 function isViewCountOrTimeText(text) {
@@ -1151,17 +1187,52 @@ function isChannelNameText(text) {
 function channelNameFromRowText(text) {
   const clean = cleanChannelText(text);
   if (!clean) return '';
-  if (isChannelNameText(clean)) return clean;
-  // 1. Delete the metadata PHRASES first ("2 hours ago", "1.5M views"), then any bare
-  //    view-count token left behind ("219M"), then split what remains on the delimiters
-  //    YouTube puts between them. Deleting whole phrases matters: the word-by-word pass
-  //    leaves "3d ago" as two surviving words ("3d", "ago") and the reassembled fragment
-  //    then reads as time text again and is dropped, which is the bug this exists to fix.
+  // STRIP FIRST, THEN DECIDE. The old order asked isChannelNameText() about the
+  // RAW row and returned it untouched when the answer was yes — and a row like
+  // "Mugsyboy 1M 1mo ago" (real name + subscriber count + abbreviated age, all in
+  // one row, no bullet separators) passes that check, so the metadata was never
+  // stripped and the whole polluted string became the channel identity. That rule
+  // could then never match a card presenting the bare name, which is exactly the
+  // "I blocked it a dozen times and it still shows" report.
+  //
+  // Stripping is idempotent for a genuinely clean name: the patterns below only
+  // match metadata shapes, so "Cold Ones" or "3M" survive the pass unchanged.
   const stripped = clean
-    .replace(/(?:streamed\s+)?\d+\s*(?:[smhdwy]|second|minute|hour|day|week|month|year)s?\s+ago/gi, ' ')
+    // A full or abbreviated time-ago phrase. [smhdwy] alone misses YouTube's
+    // two-letter forms ("1mo ago", "2yr ago", "5min ago") and spelled-out
+    // "months"/"years", so those units are named explicitly.
+    .replace(/(?:streamed\s+)?\d+\s*(?:s|sec|secs|second|seconds|m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days|w|wk|wks|week|weeks|mo|mon|month|months|y|yr|yrs|year|years)\s+ago/gi, ' ')
+    // A view/subscriber count WITH its unit word ("1.2M views", "219M watching").
     .replace(/\d+(?:[.,]\d+)?\s*[kmb]?\s*(?:views?|watching)/gi, ' ')
+    // The metric words on their own, so a count the previous pass already removed
+    // does not leave the word behind ("1.2M views" -> "views" -> "").
     .replace(/\b(?:views?|watching|subscribers?|streamed|likes?|comments?)\b/gi, ' ')
     .replace(/\s+/g, ' ').trim();
+  // A BARE count token with no unit word ("1M", "412k", "2.1m") — the shape the
+  // view-count pattern above cannot catch because it requires a unit word. Only
+  // dropped when it is a trailing token: a channel genuinely named "3M" is a
+  // single-token name, not a name followed by a count, and must survive.
+  const TRAILING_COUNT_RE = /\s\d+(?:[.,]\d+)?\s*[kmb]?$/i;
+  let name = TRAILING_COUNT_RE.test(stripped) ? stripped.replace(TRAILING_COUNT_RE, '').trim() : stripped;
+  if (!name) return '';
+  // A row that was ONLY metadata must still yield nothing. The distinction from a
+  // channel genuinely named "3M": that channel's row IS the single token "3M", while
+  // a metadata row like "219M 7d ago" carries a time-ago phrase that the strip above
+  // has already consumed. So the guard fires only when the ORIGINAL row contained a
+  // time-ago phrase — that is the signature of metadata, and it is what keeps a real
+  // "3M" / "412K" channel rule intact while still refusing to emit "219M" as a key.
+  //
+  // This must run BEFORE the isChannelNameText() return, because that predicate
+  // deliberately re-admits "3M"/"412K" as real channel names and would otherwise let
+  // a leaked bare count through.
+  const ROW_HAD_TIME_RE = /(?:streamed\s+)?\d+\s*(?:s|sec|secs|second|seconds|m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days|w|wk|wks|week|weeks|mo|mon|month|months|y|yr|yrs|year|years)\s+ago/i;
+  if (ROW_HAD_TIME_RE.test(clean) && /^\d+(?:[.,]\d+)?\s*[kmb]?$/i.test(name)) return '';
+  if (isChannelNameText(name)) return name;
+  // 1. Delete any metadata still present, then split what remains on the
+  //    delimiters YouTube puts between the fragments. Deleting whole phrases
+  //    matters: the word-by-word pass leaves "3d ago" as two surviving words
+  //    ("3d", "ago") and the reassembled fragment then reads as time text again
+  //    and is dropped, which is the bug this exists to fix.
   const VIEW_WORD_RE = /^\d+(?:[.,]\d+)?\s*[kmb]?$/i;   // a bare "219M" / "12,4K"
   const names = [];
   for (const part of stripped.split(/[•·|]/)) {

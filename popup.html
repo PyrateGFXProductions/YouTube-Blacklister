@@ -1120,6 +1120,19 @@
           <button class="action-btn" id="resetAllHitCounters" style="flex: 1;">Reset All Counters</button>
         </div>
       </div>
+
+      <!-- Rule Audit & Consolidation -->
+      <div class="setting-group" id="keywordAuditSection" style="margin-top: 16px; padding: 12px; background: var(--card); border-radius: 8px; border: 1px solid var(--border);">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+          <span class="setting-title" style="font-size: 13px;">🧹 Audit &amp; Consolidate Rules</span>
+          <button class="action-btn" id="runKeywordAudit" style="font-size: 11px; padding: 4px 8px;">Analyze</button>
+        </div>
+        <div style="font-size: 11px; color: var(--muted); margin-bottom: 8px; line-height: 1.4;">
+          Finds rules that can be removed <strong>without changing what gets hidden</strong>. Nothing is
+          deleted until you approve each group, and every proposal shows its evidence.
+        </div>
+        <div id="keywordAuditResults" style="display: none; font-size: 11px;"></div>
+      </div>
     </div>
 
     <!-- Tab 3: Whitelist -->
@@ -1525,6 +1538,7 @@
   </footer>
 
   <script src="shared-tables.js"></script>
+  <script src="keyword-audit.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>

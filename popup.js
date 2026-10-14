@@ -2493,6 +2493,158 @@ async function cleanupZeroHitRules() {
   setStatus(`Removed ${zeroHitKeywords.length} zero-hit rule${zeroHitKeywords.length !== 1 ? 's' : ''}.`);
 }
 
+// ===== KEYWORD AUDIT & CONSOLIDATION =====
+/*
+ * Runs the deterministic audit in keyword-audit.js and renders its findings as
+ * approvable groups.
+ *
+ * THE RULE THIS UI ENFORCES: nothing is removed without an explicit click, and
+ * over-broad rules are shown but never offered for removal. The audit itself is
+ * pure and proven by tests/keyword-audit-harness.js; this function's only jobs
+ * are presenting evidence and calling kwaConsolidate with exactly what the user
+ * checked.
+ */
+let lastAuditReport = null;
+
+async function runKeywordAudit() {
+  const resultsEl = document.getElementById('keywordAuditResults');
+  if (!resultsEl) return;
+
+  const hits = await new Promise((resolve) => {
+    chrome.runtime.sendMessage({ type: 'GET_KEYWORD_HITS' }, (res) => {
+      resolve(res?.ok ? (res.hits || {}) : {});
+    });
+  });
+
+  const rules = (data.keywords || []).slice();
+  if (!rules.length) {
+    resultsEl.style.display = 'block';
+    resultsEl.innerHTML = '<span style="color: var(--muted);">No keyword rules to analyze.</span>';
+    return;
+  }
+
+  const report = kwaAudit(rules, hits);
+  lastAuditReport = report;
+
+  const { subsumed, dead, overBroad, brokenRegex, keep, stats, total } = report;
+  const removable = stats.subsumed + stats.dead + stats.brokenRegex;
+
+  if (!removable && !overBroad.length) {
+    resultsEl.style.display = 'block';
+    resultsEl.innerHTML = `<span style="color: var(--muted);">Nothing to consolidate — all ${total} rules are doing distinct work.</span>`;
+    return;
+  }
+
+  const group = (title, blurb, items, key, renderItem) => {
+    if (!items.length) return '';
+    const id = `audit-${key}`;
+    return `
+      <div style="margin: 8px 0; padding: 8px; border: 1px solid var(--border); border-radius: 6px; background: rgba(255,255,255,0.02);">
+        <label style="display: flex; align-items: flex-start; gap: 8px; cursor: pointer;">
+          <input type="checkbox" class="audit-group-check" data-group="${key}" style="margin-top: 2px;" />
+          <span style="flex: 1;">
+            <strong>${escapeHtml(title)}</strong>
+            <span style="color: var(--muted);"> — ${escapeHtml(blurb)}</span>
+            <div style="margin-top: 6px; display: flex; flex-direction: column; gap: 3px;">
+              ${items.map(renderItem).join('')}
+            </div>
+          </span>
+        </label>
+      </div>`;
+  };
+
+  const renderSubsumed = (s) => `
+    <div style="font-size: 10.5px; color: var(--muted);">
+      <code>${escapeHtml(s.rule)}</code>
+      <span style="opacity: 0.75;">is fully covered by</span>
+      ${s.subsumedBy.map(u => `<code>${escapeHtml(u)}</code>`).join(' <span style="opacity:0.5;">or</span> ')}
+      ${s.hits > 0 ? `<span style="opacity:0.6;">(${s.hits} hits, all duplicated)</span>` : ''}
+    </div>`;
+
+  const renderPlain = (d) => `
+    <div style="font-size: 10.5px; color: var(--muted);">
+      <code>${escapeHtml(d.rule)}</code>
+      <span style="opacity: 0.75;">— ${escapeHtml(d.reason)}</span>
+    </div>`;
+
+  // Over-broad is rendered WITHOUT a checkbox, deliberately.
+  const overBroadHtml = overBroad.length ? `
+    <div style="margin: 8px 0; padding: 8px; border: 1px solid rgba(255,180,0,0.3); border-radius: 6px; background: rgba(255,180,0,0.05);">
+      <strong>⚠️ Over-broad — review by hand, never auto-removed</strong>
+      <div style="color: var(--muted); margin-top: 2px;">Single common words that match a large share of titles. These are usually why the feed feels over-blocked, but whether one is wanted is your call.</div>
+      <div style="margin-top: 6px; display: flex; flex-direction: column; gap: 3px;">
+        ${overBroad.map(o => `
+          <div style="font-size: 10.5px;">
+            <code>${escapeHtml(o.rule)}</code>
+            <span style="color: var(--muted);">— ${o.hits} hit${o.hits !== 1 ? 's' : ''} · remove it yourself from the rule list if you don't want it</span>
+          </div>`).join('')}
+      </div>
+    </div>` : '';
+
+  resultsEl.innerHTML = `
+    <div style="margin-bottom: 8px; color: var(--muted);">
+      <strong>${total}</strong> rules analyzed ·
+      <strong>${removable}</strong> safely removable ·
+      <strong>${keep.length}</strong> kept
+    </div>
+    ${group('Redundant rules', 'covered entirely by a shorter rule you already have, so removing them hides nothing new', subsumed, 'subsumed', renderSubsumed)}
+    ${group('Never matched', '0 recorded hits and not covered by anything else', dead, 'dead', renderPlain)}
+    ${group('Broken regex', 'cannot compile, so the matcher can never run it', brokenRegex, 'brokenRegex', renderPlain)}
+    ${overBroadHtml}
+    ${removable ? `
+      <div style="display: flex; gap: 8px; margin-top: 10px; align-items: center;">
+        <button class="action-btn" id="applyKeywordAudit" style="background: var(--danger);">Apply Selected</button>
+        <button class="action-btn" id="selectAllAudit" style="font-size: 11px;">Select All</button>
+        <span id="auditStatus" style="font-size: 11px; color: var(--muted);"></span>
+      </div>` : ''}
+  `;
+  resultsEl.style.display = 'block';
+
+  const applyBtn = document.getElementById('applyKeywordAudit');
+  const selectAllBtn = document.getElementById('selectAllAudit');
+  const statusEl = document.getElementById('auditStatus');
+
+  if (selectAllBtn) {
+    selectAllBtn.addEventListener('click', () => {
+      resultsEl.querySelectorAll('.audit-group-check').forEach(cb => { cb.checked = true; });
+    });
+  }
+
+  if (applyBtn) {
+    applyBtn.addEventListener('click', async () => {
+      const checked = new Set(
+        Array.from(resultsEl.querySelectorAll('.audit-group-check'))
+          .filter(cb => cb.checked)
+          .map(cb => cb.dataset.group)
+      );
+      if (!checked.size) {
+        if (statusEl) statusEl.textContent = 'Nothing selected.';
+        return;
+      }
+      const approved = {
+        subsumed: checked.has('subsumed') ? subsumed.map(s => s.rule) : [],
+        dead: checked.has('dead') ? dead.map(d => d.rule) : [],
+        brokenRegex: checked.has('brokenRegex') ? brokenRegex.map(b => b.rule) : []
+      };
+      const removing = approved.subsumed.length + approved.dead.length + approved.brokenRegex.length;
+      if (!confirm(`Remove ${removing} rule${removing !== 1 ? 's' : ''}? This cannot be undone — export a backup first if you are unsure.`)) return;
+
+      const next = kwaConsolidate(data.keywords || [], approved);
+      const removedCount = (data.keywords || []).length - next.length;
+      data.keywords = next;
+      await save();
+      renderAll();
+      await runKeywordAudit();
+      setStatus(`Consolidated: removed ${removedCount} rule${removedCount !== 1 ? 's' : ''}.`);
+    });
+  }
+}
+
+function initKeywordAuditFeature() {
+  const btn = document.getElementById('runKeywordAudit');
+  if (btn) btn.addEventListener('click', runKeywordAudit);
+}
+
 // Initialize new features after renderAll
 function initKeywordFeatures() {
   const runTestBtn = document.getElementById('runKeywordTest');
@@ -2506,6 +2658,8 @@ function initKeywordFeatures() {
   if (refreshHitsBtn) refreshHitsBtn.addEventListener('click', loadHitCounters);
   if (cleanupBtn) cleanupBtn.addEventListener('click', cleanupZeroHitRules);
   if (resetAllBtn) resetAllBtn.addEventListener('click', resetAllHitCounters);
+  const auditBtn = document.getElementById('runKeywordAudit');
+  if (auditBtn) auditBtn.addEventListener('click', runKeywordAudit);
 
   // Load hit counters on Keywords tab activation (guard MutationObserver for test env)
   const keywordsTab = document.getElementById('keywordsTab');

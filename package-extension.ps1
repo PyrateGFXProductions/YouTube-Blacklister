@@ -50,6 +50,7 @@ $packageFiles = @(
     "background.js",
     "content.js",
     "shared-tables.js",
+    "keyword-audit.js",
     "popup.html",
     "popup.js",
     "backup.html",

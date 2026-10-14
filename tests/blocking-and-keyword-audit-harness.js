@@ -672,6 +672,7 @@ const script = `
   // whole row as metadata, the card ends up with NO channel identity, and the channel rule
   // never fires — "I blocked that channel and it still shows up".
   const hasRowName = typeof channelNameFromRowText === 'function';
+  const hasNorm = typeof normalizeChannel === 'function';
   // Guarded like the rest of this harness: a pre-fix file has no isNestedInsideCard(), and an
   // unguarded call would crash the vm and hide WHICH invariant broke.
   const hasNestedGuard = typeof isNestedInsideCard === 'function';
@@ -691,6 +692,51 @@ const script = `
   ok('M4: a plain channel name is returned unchanged',
     rowName('Graham Hancock') === 'Graham Hancock' && rowName('Live') === 'Live',
     'got=' + JSON.stringify([rowName('Graham Hancock'), rowName('Live')]));
+
+  // M5: the reported "blocked it a dozen times and it still shows" class. A row
+  // carrying a name plus a subscriber count plus an ABBREVIATED age, with no bullet
+  // separators at all ("Mugsyboy 1M 1mo ago"), must yield the bare name. The old
+  // strip missed both halves — the time pattern had no "mo"/"yr" unit and the count
+  // pattern required a "views"/"watching" word — so the whole polluted string became
+  // the channel key and could never match a card presenting the real name.
+  ok('M5: name + bare count + abbreviated age yields the bare name',
+    rowName('Mugsyboy 1M 1mo ago') === 'Mugsyboy' &&
+    rowName('mugsyboy 1m 1mo ago') === 'mugsyboy' &&
+    rowName('cold ones 2.1m 3d ago') === 'cold ones' &&
+    rowName('mark gilmore 259 2mo ago') === 'mark gilmore' &&
+    rowName('cave of programming 225k 3mo ago') === 'cave of programming',
+    'got=' + JSON.stringify([
+      rowName('Mugsyboy 1M 1mo ago'), rowName('mugsyboy 1m 1mo ago'),
+      rowName('cold ones 2.1m 3d ago'), rowName('mark gilmore 259 2mo ago'),
+      rowName('cave of programming 225k 3mo ago')
+    ]));
+
+  // M6: a channel genuinely NAMED like a count survives. "3M", "412K", "2B" and a
+  // numeric name are single tokens, not a name followed by metadata, and must never
+  // be stripped down to nothing.
+  ok('M6: a channel genuinely named like a count is not stripped away',
+    rowName('3M') === '3M' && rowName('412K') === '412K' && rowName('2B') === '2B',
+    'got=' + JSON.stringify([rowName('3M'), rowName('412K'), rowName('2B')]));
+
+  // M7: normalizeChannel() must reduce BOTH a polluted stored rule and the card's
+  // own row to the same key, so an already-saved rule starts matching again without
+  // any migration. This is the half that repairs the rules already in the user's
+  // list; M5 is the half that stops new ones being written polluted.
+  const norm = (v) => (hasNorm ? normalizeChannel(v) : undefined);
+  ok('M7: a polluted stored rule normalizes to the same key as the bare card',
+    norm('mugsyboy 1m 1mo ago') === norm('Mugsyboy') &&
+    norm('Mugsyboy 1M 1mo ago') === norm('Mugsyboy') &&
+    norm('cave of programming 225k 3mo ago') === norm('Cave of Programming') &&
+    norm('mark gilmore 259 2mo ago') === norm('Mark Gilmore'),
+    'got=' + JSON.stringify([
+      norm('mugsyboy 1m 1mo ago'), norm('Mugsyboy'), norm('Mugsyboy 1M 1mo ago'),
+      norm('cave of programming 225k 3mo ago'), norm('Cave of Programming')
+    ]));
+  // ...and a channel genuinely named like a count still normalises to itself, so
+  // the strip cannot swallow a real rule.
+  ok('M8: a count-shaped channel name survives normalisation',
+    norm('3M') === '3m' && norm('412K') === '412k' && norm('1900') === '1900' && norm('2B') === '2b',
+    'got=' + JSON.stringify([norm('3M'), norm('412K'), norm('1900'), norm('2B')]));
 
   // Add a nested-pair assertion here too: the modern card nests yt-lockup-view-model inside
   // ytd-rich-item-renderer and BOTH are card selectors, so counting must not double.
