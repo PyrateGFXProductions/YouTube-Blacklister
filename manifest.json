@@ -19,19 +19,14 @@
   ],
   "host_permissions": [
     "https://www.youtube.com/*",
-    "http://localhost:11434/*",
-    "http://127.0.0.1:11434/*",
-    "http://localhost:1234/*",
-    "http://127.0.0.1:1234/*",
-    "https://huggingface.co/*",
-    "https://cdn-lfs.huggingface.co/*"
+    "http://localhost/*",
+    "http://127.0.0.1/*"
   ],
   "background": {
-    "scripts": ["shared-tables.js", "background.js"],
     "service_worker": "background.js"
   },
   "content_security_policy": {
-    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; connect-src http://localhost:11434 http://127.0.0.1:11434 http://localhost:1234 http://127.0.0.1:1234 https://huggingface.co https://cdn-lfs.huggingface.co"
+    "extension_pages": "script-src 'self'; object-src 'self'; connect-src http://localhost:* http://127.0.0.1:*"
   },
   "action": {
     "default_popup": "popup.html",
@@ -52,7 +47,10 @@
       "matches": [
         "https://www.youtube.com/*"
       ],
-      "js": ["shared-tables.js", "content.js"],
+      "js": [
+        "shared-tables.js",
+        "content.js"
+      ],
       "run_at": "document_idle"
     }
   ]

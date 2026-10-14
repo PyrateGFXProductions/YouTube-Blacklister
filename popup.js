@@ -289,6 +289,11 @@ let data = {
   aiAutonomous: false,
   aiSensitivity: 'balanced',
   aiModel: '',
+  // Optional override for the local AI server address. '' = auto-detect Ollama then
+  // LM Studio on their standard ports. Only a local http(s) URL has any effect: the
+  // background worker re-validates whatever arrives here and falls back to the
+  // defaults for anything that is not loopback on a permitted port.
+  aiCustomUrl: '',
   aiTastePrompt: '',
   aiSubscriptionProfile: '',
   tasteLikedChannels: [],
@@ -337,6 +342,7 @@ function load() {
       'aiAutonomous',
       'aiSensitivity',
       'aiModel',
+      'aiCustomUrl',
       'aiTastePrompt',
       'aiSubscriptionProfile',
       'tasteLikedChannels',
@@ -373,6 +379,9 @@ function load() {
       data.aiAutonomous = Boolean(res.aiAutonomous);
       data.aiSensitivity = res.aiSensitivity || 'balanced';
       data.aiModel = res.aiModel || '';
+      // Stored verbatim; trimmed and validated at send time, not here, so a stale or
+      // half-typed value never blocks the popup from loading.
+      data.aiCustomUrl = typeof res.aiCustomUrl === 'string' ? res.aiCustomUrl : '';
       data.aiTastePrompt = res.aiTastePrompt || '';
       data.aiSubscriptionProfile = res.aiSubscriptionProfile || '';
       data.tasteLikedChannels = Array.isArray(res.tasteLikedChannels) ? res.tasteLikedChannels : [];
@@ -413,6 +422,7 @@ async function save() {
     aiAutonomous: data.aiAutonomous,
     aiSensitivity: data.aiSensitivity,
     aiModel: data.aiModel,
+    aiCustomUrl: data.aiCustomUrl,
     aiTastePrompt: data.aiTastePrompt,
     aiSubscriptionProfile: data.aiSubscriptionProfile,
     tasteLikedChannels: data.tasteLikedChannels,
@@ -430,11 +440,20 @@ async function save() {
     feedHealthLog: data.feedHealthLog,
     communityPacks: data.communityPacks,
     temporalRules: data.temporalRules
-  }).catch(() => {});
+  }).then(
+    // The write SUCCEEDED: it is now safe to tell the tabs to re-read. Broadcasting on a
+    // FAILED write (the old `.catch(() => {})`-then-always-broadcast) made tabs re-read
+    // stale storage and see no change, which reads as "my setting didn't save".
+    () => notifyTabsRulesUpdated(),
+    // The write FAILED (quota, storage disabled) or the popup was torn down mid-write
+    // ("Extension context invalidated"). Do NOT broadcast — there is nothing new to read.
+    () => { /* write failed or popup closing: skip the broadcast */ }
+  );
+}
 
-  // Notify active YouTube tabs to re-apply rules immediately.
-  // At this point the storage write has completed, so content scripts that
-  // receive RULES_UPDATED and re-read from storage will see the new data.
+async function notifyTabsRulesUpdated() {
+  // chrome.tabs.query can reject when the popup is torn down mid-save; the guard below
+  // turns that into a silent no-op instead of an unhandled rejection.
   try {
     const tabs = await chrome.tabs.query({ url: 'https://www.youtube.com/*' });
     await Promise.allSettled(
@@ -444,7 +463,7 @@ async function save() {
           chrome.tabs.sendMessage(tab.id, { type: 'RULES_UPDATED' }).catch(() => {})
         )
     );
-  } catch (_) {}
+  } catch (_) { /* popup torn down mid-query: nothing to notify */ }
 }
 
 function setStatus(msg) {
@@ -1058,6 +1077,18 @@ function currentAiModelChoice() {
   return (sel && sel.value) ? sel.value : (data.aiModel || '');
 }
 
+// The server address the user wants AI calls aimed at. '' = auto-detect. The value
+// is read from the control at call time (same reasoning as currentAiModelChoice)
+// and mirrored into data so save() persists it. The background worker re-validates
+// it against loopback + permitted ports and falls back to the defaults, so an
+// out-of-range value here can never make the extension talk to a remote host.
+function currentAiCustomUrl() {
+  const el = document.getElementById('aiCustomUrl');
+  const raw = (el && typeof el.value === 'string') ? el.value.trim() : '';
+  data.aiCustomUrl = raw;
+  return raw;
+}
+
 function runFeedRoast() {
   const roastBtn = document.getElementById('aiRoastBtn');
   const roastCard = document.getElementById('aiRoastResult');
@@ -1086,7 +1117,8 @@ function runFeedRoast() {
         chrome.runtime.sendMessage({
           type: 'AI_ROAST_FEED',
           items,
-          modelChoice: currentAiModelChoice()
+          modelChoice: currentAiModelChoice(),
+          customUrl: currentAiCustomUrl()
         }, (roastRes) => {
           // Consume the error explicitly (like every other sendMessage callback
           // here): leaving lastError unread logs a spurious "Unchecked
@@ -1584,6 +1616,7 @@ function runSubscriptionSynthesize() {
         type: 'AI_SYNTHESIZE_SUBSCRIPTION_RULES',
         channels: res.channels,
         modelChoice: currentAiModelChoice(),
+        customUrl: currentAiCustomUrl(),
         options: {
           samples: samples || [],
           liked: (data.tasteLikedChannels || []).slice(),
@@ -1940,7 +1973,6 @@ async function init() {
 
   initToggles();
   initAiGuardian();
-  initBundledAi();
 
   // Feed Forensic Diagnostic Roast
   const roastBtn = document.getElementById('aiRoastBtn');
@@ -1966,9 +1998,52 @@ function initAiGuardian() {
   const statusPill = document.getElementById('aiStatusPill');
   const modelSelect = document.getElementById('aiModelSelect');
   const detailEl = document.getElementById('aiStatusDetail');
+  const customUrlInput = document.getElementById('aiCustomUrl');
   const tasteInput = document.getElementById('aiTastePrompt');
   const synthBtn = document.getElementById('aiSynthesizeBtn');
   const resultBox = document.getElementById('aiResultBox');
+
+  // Seed the override field from storage so the popup reopens on what the user
+  // actually saved. A control that resets to blank on every open looks broken.
+  if (customUrlInput) customUrlInput.value = data.aiCustomUrl || '';
+
+  // One re-scan when the address settles (blur, or Enter). Typing does NOT trigger
+  // a probe: a half-typed address would fire a doomed fetch per keystroke. The
+  // change handler only persists; the blur/Enter handler is what actually looks.
+  if (customUrlInput) {
+    customUrlInput.addEventListener('change', () => { data.aiCustomUrl = customUrlInput.value.trim(); save(); });
+    const rescan = () => {
+      data.aiCustomUrl = customUrlInput.value.trim();
+      save();
+      chrome.runtime.sendMessage({ type: 'CHECK_AI_STATUS', customUrl: currentAiCustomUrl() })
+        .then((res) => {
+          if (res && res.ok && Array.isArray(res.models) && res.models.length) {
+            const providerName = res.provider === 'ollama' ? 'Ollama'
+              : res.provider === 'lmstudio' ? 'LM Studio' : 'Local server';
+            if (statusPill) { statusPill.className = 'ai-status-pill'; statusPill.textContent = `🟢 ${providerName} Online`; }
+            if (detailEl) detailEl.textContent = `${providerName} connected — ${res.models.length} model${res.models.length === 1 ? '' : 's'} ready. 100% offline, zero telemetry.`;
+            if (modelSelect) {
+              modelSelect.innerHTML = '';
+              res.models.forEach(m => {
+                const opt = document.createElement('option');
+                opt.value = m; opt.textContent = m;
+                modelSelect.appendChild(opt);
+              });
+            }
+          } else {
+            if (statusPill) { statusPill.className = 'ai-status-pill offline'; statusPill.textContent = '🟡 Offline Heuristic Mode'; }
+            if (detailEl) detailEl.textContent = 'No local LLM detected at that address — running the built-in heuristic engine.';
+            if (modelSelect) modelSelect.innerHTML = '<option value="heuristic">Built-in Heuristic</option>';
+          }
+        })
+        .catch(() => {
+          if (statusPill) { statusPill.className = 'ai-status-pill offline'; statusPill.textContent = '⚠️ AI engine unreachable'; }
+          if (detailEl) detailEl.textContent = 'Could not reach the background worker. Click the icon again to retry.';
+        });
+    };
+    customUrlInput.addEventListener('blur', rescan);
+    customUrlInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); rescan(); } });
+  }
   const autoToggle = document.getElementById('toggleAiAutonomous');
   const sensSelect = document.getElementById('aiSensitivitySelect');
 
@@ -1995,7 +2070,7 @@ function initAiGuardian() {
   // Check AI connection. Use promise form + explicit lastError consumer so a
   // rejected sendMessage (e.g. service worker not ready) never becomes an unhandled
   // rejection that bubbles into the popup.
-  chrome.runtime.sendMessage({ type: 'CHECK_AI_STATUS' })
+  chrome.runtime.sendMessage({ type: 'CHECK_AI_STATUS', customUrl: currentAiCustomUrl() })
     .then((res) => {
     // Only the two loopback engines the extension actually speaks to.
     const providerName = res && res.provider === 'ollama' ? 'Ollama'
@@ -2091,7 +2166,8 @@ function initAiGuardian() {
       chrome.runtime.sendMessage({
         type: 'AI_SYNTHESIZE_RULES',
         prompt,
-        modelChoice: chosenModel
+        modelChoice: chosenModel,
+        customUrl: currentAiCustomUrl()
       }, (res) => {
         synthBtn.disabled = false;
         synthBtn.innerHTML = '<span>🔮 Synthesize Rules from My Mind</span>';
@@ -2415,97 +2491,6 @@ async function cleanupZeroHitRules() {
   renderAll();
   await loadHitCounters();
   setStatus(`Removed ${zeroHitKeywords.length} zero-hit rule${zeroHitKeywords.length !== 1 ? 's' : ''}.`);
-}
-
-// ===== Bundled In-Browser AI Provider =====
-// No Ollama, no LM Studio, no other app — runs entirely in the browser.
-function initBundledAi() {
-  const listEl = document.getElementById('bundledAiModelList');
-  const progressEl = document.getElementById('bundledAiProgress');
-  const progressBar = document.getElementById('bundledAiProgressBar');
-  const progressLabel = document.getElementById('bundledAiProgressLabel');
-
-  if (!listEl) return;
-
-  // Fetch the model catalog from the background worker
-  chrome.runtime.sendMessage({ type: 'BUNDLED_AI_GET_MODELS' }, (res) => {
-    if (chrome.runtime?.lastError || !res || !res.ok || !Array.isArray(res.models)) {
-      listEl.innerHTML = '<div style="font-size:11px;color:var(--muted);">Could not load model catalog.</div>';
-      return;
-    }
-
-    listEl.innerHTML = '';
-    res.models.forEach(model => {
-      const row = document.createElement('div');
-      row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:6px 8px;background:#1f2937;border-radius:6px;border:1px solid #374151;';
-
-      const info = document.createElement('div');
-      info.style.cssText = 'flex:1;min-width:0;';
-      info.innerHTML = `
-        <div style="font-size:12px;font-weight:600;color:#e5e7eb;">${escapeHtml(model.label)}</div>
-        <div style="font-size:10px;color:var(--muted);">${escapeHtml(model.size)} · ${escapeHtml(model.desc)}</div>
-      `;
-
-      const btn = document.createElement('button');
-      btn.className = 'action-btn';
-      btn.style.cssText = 'padding:4px 10px;font-size:11px;white-space:nowrap;';
-      btn.dataset.modelKey = model.key;
-
-      // Check download status
-      chrome.runtime.sendMessage({ type: 'BUNDLED_AI_GET_MODEL_STATUS', modelKey: model.key }, (statusRes) => {
-        if (statusRes && statusRes.downloaded) {
-          btn.textContent = '✓ Ready';
-          btn.style.background = '#065f46';
-          btn.style.color = '#d1fae5';
-          btn.disabled = true;
-        } else if (statusRes && statusRes.downloading) {
-          btn.textContent = '⏳ Downloading…';
-          btn.disabled = true;
-        } else {
-          btn.textContent = 'Download';
-          btn.addEventListener('click', () => {
-            btn.disabled = true;
-            btn.textContent = '⏳ Downloading…';
-            if (progressEl) progressEl.style.display = 'block';
-            if (progressBar) progressBar.style.width = '0%';
-            if (progressLabel) progressLabel.textContent = `Downloading ${model.label}…`;
-
-            chrome.runtime.sendMessage({ type: 'BUNDLED_AI_DOWNLOAD_MODEL', modelKey: model.key }, (dlRes) => {
-              if (progressEl) progressEl.style.display = 'none';
-              if (dlRes && dlRes.ok) {
-                btn.textContent = '✓ Ready';
-                btn.style.background = '#065f46';
-                btn.style.color = '#d1fae5';
-                btn.disabled = true;
-              } else {
-                btn.textContent = 'Download';
-                btn.disabled = false;
-                const errMsg = dlRes && dlRes.error ? dlRes.error : 'Unknown error';
-                if (progressLabel) progressLabel.textContent = `Download failed: ${errMsg}`;
-              }
-            });
-          });
-        }
-      });
-
-      row.appendChild(info);
-      row.appendChild(btn);
-      listEl.appendChild(row);
-    });
-  });
-
-  // Listen for progress updates from the background worker
-  chrome.runtime.onMessage.addListener((msg) => {
-    if (msg.type === 'BUNDLED_AI_PROGRESS' && msg.modelKey) {
-      if (progressEl) progressEl.style.display = 'block';
-      if (progressBar) progressBar.style.width = (msg.progress || 0) + '%';
-      if (progressLabel) {
-        const statusText = msg.status === 'progress' ? 'Downloading…' :
-          msg.status === 'done' ? 'Complete!' : msg.status || 'Working…';
-        progressLabel.textContent = `${statusText} ${msg.progress || 0}%`;
-      }
-    }
-  });
 }
 
 // Initialize new features after renderAll

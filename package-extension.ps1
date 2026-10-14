@@ -57,15 +57,6 @@ $packageFiles = @(
     "icon16.png",
     "icon48.png",
     "icon128.png",
-    # Bundled in-browser AI provider (transformers.js + onnxruntime-web, vendored).
-    # background.js imports this at runtime via chrome.runtime.getURL('bundled-ai.js'),
-    # so a build that dropped it would ship a broken AI path.
-    "bundled-ai.js",
-    "vendor/transformers.web.js",
-    "vendor/ort.min.mjs",
-    "vendor/ort-wasm-simd-threaded.mjs",
-    "vendor/ort-wasm-simd-threaded.wasm",
-    "vendor/vendored-manifest.json",
     # Shipped because it is the user-facing data-flow disclosure the Chrome Web Store
     # data-safety review reads, and it is a code-relevant document rather than project meta.
     "PRIVACY.md",

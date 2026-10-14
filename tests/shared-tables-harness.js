@@ -230,6 +230,37 @@ ok(contentCtx.looksSensationalist('Building a workbench (part 3)') === false, 'b
 ok(contentCtx.heuristicDebaitTitle('SHOCKING FOOTAGE EXPOSED!!') !== 'SHOCKING FOOTAGE EXPOSED!!',
   'sensational title not neutralized');
 
+// 7. THE GATE REFUSES MATCH-EVERYTHING REGEX RULES.
+// A regex rule (/pattern/flags) is matched against every card's title, badge and channel
+// name. A pattern like /.*/i or /a*/i matches EVERYTHING, so storing it hides the whole
+// feed. The gate is the single refusal point every keyword writer consults, so this is
+// the one place the guarantee has to hold — a model, a synthesizer, or a crafted backup
+// import must not be able to smuggle a match-all pattern through it.
+// (Pre-fix: nytKwRuleIsStorable returned true for ANY /.../ under 200 chars — RED.)
+console.log('Test 7: the gate refuses match-everything and catastrophic regex rules');
+const HOSTILE_REGEX = [
+  '/.*/i', '//i', '/[\\s\\S]*/i', '/.{0,}/i', '/a*/i', '/x*/i', '/(?:)/i',
+  '/(a+)+$/i', '/(a*)*$/i', '/([a-z]+)*x/i', '/(x+x+)+y/i', '/\\w*/', '/.*/g',
+  '/(a|aa)+$/', '/(a|a?)+$/'
+];
+for (const pat of HOSTILE_REGEX) {
+  ok(contentCtx.nytKwRuleIsStorable(pat) === false,
+    `match-all/ReDoS regex accepted by the gate: ${pat}`);
+  const f = contentCtx.nytKwFilterRules([pat], 8);
+  ok(f.kept.length === 0, `match-all/ReDoS regex passed nytKwFilterRules: ${pat}`);
+}
+// A LEGITIMATE specific regex rule must still be storable (the gate is not a ban).
+const LEGIT_REGEX = ['/\\b(vlog|prank)\\s*#?\\d+/i', '/\\bgaming\\b/i'];
+for (const pat of LEGIT_REGEX) {
+  ok(contentCtx.nytKwRuleIsStorable(pat) === true,
+    `legitimate regex rule wrongly refused: ${pat}`);
+}
+// A normal literal rule that IS match-everything-shaped in the sense of matching any
+// substring is not expressible without a regex, so the literal path needs no such rule —
+// but a single-char regex that matches half of all titles must still go.
+ok(contentCtx.nytKwRuleIsStorable('/a/i') === true, // 'a' is a real letter: specific enough
+   'single-letter regex is a legitimate rule and must remain storable');
+
 console.log(`\nAll ${checks} shared-tables checks passed. ✅`);
 
 // Exit explicitly. content.js now runs feed-health and chip watchers for the life of a page;

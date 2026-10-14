@@ -145,15 +145,22 @@ assert.strictEqual(bgContext.normalizeRegexRule('[unclosed('), null);
 // Test 7: only loopback AI endpoints are accepted. This is the code-level
 // enforcement of the "nothing leaves your machine" privacy claim: customUrl rides
 // in on the message payload, so it must not be usable as an arbitrary fetch base.
+// The HOST is the boundary; any port on a loopback host is allowed, because the
+// manifest grants `http://localhost/*` / `http://127.0.0.1/*` (which per the
+// match-pattern spec covers every port) so a user's own server on any port works.
 console.log('Test 7: local-only AI endpoint validation');
 const localOnly = (v, fb) => bgContext.resolveLocalAiBaseUrl(v, fb);
 assert.strictEqual(localOnly('http://localhost:11434', null), 'http://localhost:11434');
 assert.strictEqual(localOnly('http://127.0.0.1:1234/v1', null), 'http://127.0.0.1:1234');
 assert.strictEqual(localOnly('  http://localhost:11434  ', null), 'http://localhost:11434');
-// 8080 was dropped along with the ONNX offering: it is no longer an allowed port.
-assert.strictEqual(localOnly('http://localhost:8080', 'FALLBACK'), 'FALLBACK', 'port 8080 is no longer an allowed local-AI port');
+// Any port on a loopback host is accepted — the user's own server, their choice.
+assert.strictEqual(localOnly('http://localhost:8080', null), 'http://localhost:8080', 'any local port is allowed');
+assert.strictEqual(localOnly('http://127.0.0.1:9999', null), 'http://127.0.0.1:9999', 'any local port is allowed');
+assert.strictEqual(localOnly('http://localhost', null), 'http://localhost', 'portless localhost normalizes to its origin');
+// Remote hosts are refused regardless of port — this is the privacy guarantee.
 assert.strictEqual(localOnly('http://evil.example.com', 'FALLBACK'), 'FALLBACK', 'remote host must be rejected');
 assert.strictEqual(localOnly('https://notlocalhost.com:11434', 'FALLBACK'), 'FALLBACK', 'hostname lookalike must be rejected (exact match, not suffix)');
+assert.strictEqual(localOnly('http://localhost.evil.com:8080', 'FALLBACK'), 'FALLBACK', 'loopback-prefixed remote host must be rejected');
 assert.strictEqual(localOnly('file:///etc/passwd', 'FALLBACK'), 'FALLBACK', 'non-http scheme must be rejected');
 assert.strictEqual(localOnly('not a url', 'FALLBACK'), 'FALLBACK', 'garbage must be rejected');
 assert.strictEqual(localOnly('', 'FALLBACK'), 'FALLBACK');

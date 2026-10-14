@@ -299,6 +299,52 @@ ok(typeof sandbox.init === 'function', 'init() must be defined in the popup scop
   ok(errors.length === 0,
     `popup.js logged errors during the master-switch checks: ${errors.join(' | ')}`);
 
+  // 7. The optional local-AI server address. The popup used to never send
+  //    `customUrl` at all, so the worker's loopback validation was unreachable
+  //    from the UI and a user could not aim the AI at their own server. The field
+  //    must exist, must be seeded from storage, must persist on edit, and every
+  //    AI call site must carry the address.
+  const customUrlEl = getById('aiCustomUrl');
+  ok(customUrlEl && typeof customUrlEl.value === 'string',
+    'the AI tab must expose a Server address field (#aiCustomUrl)');
+  ok(Array.isArray(customUrlEl._listeners.change) && customUrlEl._listeners.change.length >= 1,
+    'editing the server address must persist (a change handler must be registered)');
+  ok(Array.isArray(customUrlEl._listeners.blur) && customUrlEl._listeners.blur.length >= 1,
+    'settling the address must re-scan the server (a blur handler must be registered)');
+  ok(Array.isArray(customUrlEl._listeners.keydown) && customUrlEl._listeners.keydown.length >= 1,
+    'pressing Enter must re-scan the server (a keydown handler must be registered)');
+
+  // Typing an address persists it, and the stored write carries the key the
+  // content script and the worker both read.
+  customUrlEl.value = 'http://127.0.0.1:8080';
+  lastSet = null;
+  customUrlEl._listeners.blur[0]();
+  await new Promise((r) => setTimeout(r, 0));
+  ok(lastSet && lastSet.aiCustomUrl === 'http://127.0.0.1:8080',
+    `the server address must be persisted as aiCustomUrl, got ${JSON.stringify(lastSet && lastSet.aiCustomUrl)}`);
+
+  // A blank address must persist as '' (auto-detect), never as undefined/null,
+  // so the stored shape is stable and loadSettings' type check never flips it.
+  customUrlEl.value = '';
+  lastSet = null;
+  customUrlEl._listeners.blur[0]();
+  await new Promise((r) => setTimeout(r, 0));
+  ok(lastSet && Object.prototype.hasOwnProperty.call(lastSet, 'aiCustomUrl') && lastSet.aiCustomUrl === '',
+    `a blank server address must persist as '' (auto-detect), got ${JSON.stringify(lastSet && lastSet.aiCustomUrl)}`);
+
+  // Every AI call site must carry the address: a call that omits it silently
+  // targets the default server, which is the exact bug this field exists to fix.
+  const popupSrc = fs.readFileSync(POPUP_PATH, 'utf8');
+  const aiSendSites = popupSrc.match(/sendMessage\(\{\s*type:\s*'(?:AI_|CHECK_AI_STATUS)/g) || [];
+  ok(aiSendSites.length >= 3,
+    `expected the popup to make at least 3 AI-related sendMessage calls, found ${aiSendSites.length}`);
+  const withCustomUrl = popupSrc.match(/sendMessage\(\{[\s\S]{0,200}?customUrl:\s*currentAiCustomUrl\(\)/g) || [];
+  ok(withCustomUrl.length === aiSendSites.length,
+    `every AI sendMessage must carry customUrl (${withCustomUrl.length} of ${aiSendSites.length} do) — a site that omits it targets the default server`);
+
+  ok(errors.length === 0,
+    `popup.js logged errors during the server-address checks: ${errors.join(' | ')}`);
+
   console.log(`\nAll ${checks} popup.js smoke checks passed. ✅`);
 })().catch((e) => {
   console.error('\npopup.js smoke test FAILED:', e && e.message);

@@ -432,6 +432,77 @@ const NYT_KW_RULE_MIN_CHARS = 3;
 const NYT_KW_RULE_MAX_CHARS = 48;
 const NYT_KW_RULE_MAX_WORDS = 4;
 
+// ------------------------------------------------------------------
+// REGEX-RULE SAFETY (shared by the gate and every consumer)
+// ------------------------------------------------------------------
+// A regex rule is matched against EVERY card's title, badge and channel name, so two
+// classes of pattern must never be stored:
+//   1. MATCH-ALL patterns — /.*/i, /a*/i, //i, /\w*/ — that match every string and would
+//      hide the entire feed if stored (the reported "it hid everything" class).
+//   2. CATASTROPHIC-BACKTRACKING patterns — (a+)+, ([a-z]+)*x, (a|aa)+$ — that can stall
+//      the matcher per card, freezing the tab.
+// Both are refused at the single gate so a model, a synthesizer, or a crafted backup
+// import cannot smuggle one through (the gate is the one place every writer consults).
+const NYT_KW_REGEX_MAX_LEN = 200;
+
+// Catastrophic-backtracking signature: a group containing a nested quantifier OR an
+// alternation, itself quantified from outside — e.g. (a+)+, (a|aa)+$, (ab|a)*. This is
+// the ONE copy of this guard; content.js and background.js both consume it from here so
+// the two worlds can never disagree about what is safe to run.
+function nytKwIsRedoSSuspect(pattern) {
+  return /\([^()]*(?:[*+{]|\|)[^()]*\)\s*[*+{]/.test(pattern);
+}
+
+// Does this regex pattern match the empty string or effectively everything? A pattern
+// whose every branch is optional or a bare quantifier over a class/dot is match-all.
+// Deliberately conservative: it must refuse /.*/i and /a*/i, and must NOT refuse a real
+// rule like /\b(vlog|prank)\s*#?\d+/i or /\bgaming\b/i.
+function nytKwIsMatchAllPattern(pattern) {
+  const p = String(pattern == null ? '' : pattern);
+  if (!p) return true;                     // empty pattern matches everything
+  // A quantifier ( * + {n,m} ) applied to a wildcard/class at the START of the pattern,
+  // with nothing required before it, matches the empty string at every position — i.e.
+  // everything. .* .+ .{0,} [\s\S]* [^]* ... all match-all.
+  const q = '(?:[*+]|\\{\\d*,?\\d*\\})';
+  {
+    if (new RegExp('^\\s*\\.' + q).test(p)) return true;          // .* .+ .{0,}
+    if (new RegExp('^\\s*\\[[^\\]]*\\]' + q).test(p)) return true; // [\s\S]* [^]*
+  }
+  if (/^\s*[*+]/.test(p)) return true;     // leading bare quantifier
+  // An EMPTY group — (?:) or () — matches the empty string, so it is match-all whether
+  // quantified or not: /(?:)/i matches at every position.
+  if (/\((?:\?:)?\)/.test(p)) return true;   // (?:)  ()  empty group = match-all
+  if (/\((?:\?:)?\)[*+]/.test(p)) return true;  // (?:)*  ()*  quantified empty group
+  // A trailing quantifier over a SINGLE token with nothing else required = match-all,
+  // because it matches the empty string. Two shapes:
+  //   /a*/   /ab*/   — a bare char/word then * or +  (no backslash, no anchor, no group)
+  //   /\w*/  /\d+/   — an escaped class (\w \d \s .) then * or +
+  // But NOT /\ba*\b/ (anchored) or /ab*c/ (a required literal after the quantifier).
+  if (/[*+]\s*$/.test(p)) {
+    // No anchor, group, alternation or bracket anywhere: a single-token trailing quantifier.
+    if (!/\\b|\\B|[\^]|\(|\||\[/.test(p)) return true;
+    // The only backslash-escapes are class shorthands (\w \d \s \W \D \S) applied with the
+    // trailing quantifier and nothing else required: /\w*/  /\d+/
+    if (/^\\[wdsWDS][*+]$/.test(p)) return true;
+  }
+  return false;
+}
+
+// Is this regex rule safe to store AND to run? The single check both the gate and the
+// matcher consult. Refuses: won't compile, too long, match-all, catastrophic.
+function nytKwRegexRuleIsSafe(raw) {
+  const kw = String(raw == null ? '' : raw).trim();
+  if (!(kw.startsWith('/') && kw.lastIndexOf('/') > 0)) return false;
+  if (kw.length > NYT_KW_REGEX_MAX_LEN) return false;
+  const lastSlash = kw.lastIndexOf('/');
+  const pattern = kw.slice(1, lastSlash);
+  const flags = kw.slice(lastSlash + 1);
+  if (nytKwIsRedoSSuspect(pattern)) return false;
+  if (nytKwIsMatchAllPattern(pattern)) return false;
+  try { new RegExp(pattern, flags); } catch (_) { return false; }
+  return true;
+}
+
 // Canonical storable form of a candidate rule ('' when it can never be stored).
 function nytKwNormalizeRule(raw) {
   let kw = String(raw == null ? '' : raw).trim().toLowerCase().replace(/\s+/g, ' ');
@@ -439,7 +510,7 @@ function nytKwNormalizeRule(raw) {
   // A regex rule (/pattern/flags) keeps its own shape — only the length bound applies, and
   // the browser compiles it at match time.
   if (kw.startsWith('/') && kw.lastIndexOf('/') > 0) return kw.length <= 200 ? kw : '';
-  kw = kw.replace(/^["'`]+/, '').replace(/["'`.,;:!?]+$/, '');
+  kw = kw.replace(/^[\"'`]+/, '').replace(/[\"'`.,;:!?]+$/, '');
   if (kw.length < NYT_KW_RULE_MIN_CHARS || kw.length > NYT_KW_RULE_MAX_CHARS) return '';
   if (kw.split(' ').length > NYT_KW_RULE_MAX_WORDS) return '';
   return kw;
@@ -450,7 +521,10 @@ function nytKwNormalizeRule(raw) {
 function nytKwRuleIsStorable(raw) {
   const kw = nytKwNormalizeRule(raw);
   if (!kw) return false;
-  if (kw.startsWith('/') && kw.lastIndexOf('/') > 0) return true;
+  // A regex rule must ALSO clear the regex-safety check: match-all and catastrophic
+  // patterns are refused here (pre-fix: any /.../ under 200 chars was accepted, which
+  // let /.*/i hide the entire feed).
+  if (kw.startsWith('/') && kw.lastIndexOf('/') > 0) return nytKwRegexRuleIsSafe(kw);
   return !nytKwIsGenericRule(kw);
 }
 

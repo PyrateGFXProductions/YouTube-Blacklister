@@ -93,6 +93,11 @@ const PRESERVED_KEYS = {
   aiLog: ['aiLog', (v) => (Array.isArray(v) ? v : [])],
   aiSubscriptionProfile: ['aiSubscriptionProfile', (v) => (typeof v === 'string' ? v : '')],
   subsSnapshot: ['subsSnapshot', (v) => (Array.isArray(v) ? v : [])],
+  // Feed-health log and community packs are written by the popup / a background fetch,
+  // not by this page. They load once at open, so writing that copy back would clobber an
+  // entry written while this page sat idle — re-read them at write time like the rest.
+  feedHealthLog: ['feedHealthLog', (v) => (Array.isArray(v) ? v : [])],
+  communityPacks: ['communityPacks', (v) => (Array.isArray(v) ? v : [])],
   // The Feed Fallback cache is written continuously by the content script as the user
   // browses. Re-reading it at write time means an import never restores a stale snapshot
   // over a fresher cache; an import that explicitly carries one passes it in `pinned`.
@@ -145,8 +150,17 @@ function saveToStorage(pinned) {
       });
       chrome.storage.local.set(payload, () => resolve(chrome.runtime.lastError ? String(chrome.runtime.lastError.message) : null));
     };
-    if (reRead.length) chrome.storage.local.get(reRead, write);
-    else write({});
+    if (reRead.length) {
+      // A FAILED re-read (lastError) must NOT fall through to write({}) and then persist
+      // empty arrays for every preserved key — that is the one thing the re-read design
+      // exists to prevent. On read failure, keep this page's open-time copies instead.
+      chrome.storage.local.get(reRead, (stored) => {
+        if (chrome.runtime?.lastError) { write(null); return; }
+        write(stored);
+      });
+    } else {
+      write({});
+    }
   });
 }
 
@@ -185,8 +199,18 @@ function extractEntityFromInput(val) {
 }
 
 // ReDoS-suspect regex signatures are rejected at import time.
+// shared-tables.js is loaded first (see backup.html) and exposes the CANONICAL guard;
+// this page must use the same one the content script and worker use, or the three worlds
+// drift on what is safe to store (the pre-fix copies had already diverged). Fall back to
+// a local copy only if shared-tables.js somehow failed to load, so import never hard-crashes.
 function isReDoSSuspect(pattern) {
+  if (typeof nytKwIsRedoSSuspect === 'function') return nytKwIsRedoSSuspect(pattern);
   return /\([^()]*(?:[*+{]|\|)[^()]*\)\s*[*+{]/.test(pattern);
+}
+// Match-all patterns (/.*/i, /a*/i) hide the entire feed; refused at import, same as the gate.
+function isMatchAllRegexRule(pattern) {
+  if (typeof nytKwIsMatchAllPattern === 'function') return nytKwIsMatchAllPattern(pattern);
+  return false;
 }
 
 // Regex-form keywords keep their case and flags (lowercasing them silently corrupts
@@ -206,7 +230,11 @@ function sanitizeImportedKeyword(raw) {
       const pattern = s.slice(1, lastSlash);
       const flags = s.slice(lastSlash + 1);
       new RegExp(pattern, flags);
+      // A regex rule is matched against every card; refuse catastrophic patterns (which
+      // stall the matcher) AND match-all patterns (which hide the entire feed) — the same
+      // two refusals the shared gate applies, so an import can never smuggle /.*/i in.
       if (isReDoSSuspect(pattern)) return '';
+      if (isMatchAllRegexRule(pattern)) return '';
       return s;
     } catch (_) {
       return '';

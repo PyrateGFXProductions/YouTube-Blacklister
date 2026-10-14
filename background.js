@@ -16,6 +16,9 @@ try {
 const OLLAMA_DEFAULT_URL = 'http://localhost:11434';
 const LMSTUDIO_DEFAULT_URL = 'http://localhost:1234';
 let blockedCounterQueue = Promise.resolve();
+// Keyword-hit counters get the same FIFO serialization as the blocked counter: an
+// unserialized read-modify-write loses writes when two tabs increment in the same tick.
+let keywordHitQueue = Promise.resolve();
 
 // Channel-sample bounds for the subscription synthesizer prompt.
 // These mirror the values in content.js but must be defined here too —
@@ -23,32 +26,19 @@ let blockedCounterQueue = Promise.resolve();
 const CHANNEL_SAMPLE_MAX_VIDEOS = 6;
 const CHANNEL_SAMPLE_DESC_CHARS = 300;
 
-// Bundled in-browser AI provider (transformers.js + onnxruntime-web, vendored).
-// Loaded lazily on first use — no Ollama, no LM Studio, no other app required.
-let _bundledAi = null;
-let _bundledAiLoading = null;
-
-async function loadBundledAi() {
-  if (_bundledAi) return _bundledAi;
-  if (_bundledAiLoading) return _bundledAiLoading;
-  _bundledAiLoading = (async () => {
-    const mod = await import(chrome.runtime.getURL('bundled-ai.js'));
-    _bundledAi = mod.BundledAiProvider || globalThis.BundledAiProvider;
-    return _bundledAi;
-  })();
-  return _bundledAiLoading;
-}
-
 // Only loopback AI endpoints are ever contacted. `customUrl` rides in on the
 // message payload, so validating it here makes the "nothing leaves your machine"
-// guarantee a property of the code rather than a coincidence of the current popup
-// UI never populating that field. Returns `fallback` for anything that is not a
-// well-formed http(s) URL on a loopback host AND one of the two supported ports.
+// guarantee a property of the code rather than a coincidence of the popup UI
+// populating that field. Returns `fallback` for anything that is not a
+// well-formed http(s) URL on a loopback host.
+//
+// The HOST is the privacy boundary, so it is enforced here in code. The PORT is
+// not: the manifest grants `http://localhost/*` and `http://127.0.0.1/*`, which
+// (per the match-pattern spec) matches every port on those hosts, so a user's
+// own server on any port — Ollama, LM Studio, llama.cpp, vLLM, anything they run
+// themselves — works without a manifest edit. A non-loopback host is still
+// refused here no matter what the manifest allows.
 const LOCAL_AI_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
-// The ports the manifest actually grants host permissions for (Ollama, LM Studio).
-// Port 8080 was removed with the ONNX offering — pinning it here too means a
-// stale caller cannot talk us into fetching a port we no longer declare.
-const LOCAL_AI_PORTS = new Set(['11434', '1234']);
 
 function resolveLocalAiBaseUrl(candidate, fallback) {
   if (!candidate || typeof candidate !== 'string') return fallback;
@@ -56,7 +46,6 @@ function resolveLocalAiBaseUrl(candidate, fallback) {
     const parsed = new URL(candidate.trim());
     if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return fallback;
     if (!LOCAL_AI_HOSTS.has(parsed.hostname.toLowerCase())) return fallback;
-    if (!LOCAL_AI_PORTS.has(parsed.port)) return fallback;
     return parsed.origin;
   } catch (_) {
     return fallback;
@@ -887,7 +876,9 @@ async function evaluateBatchWithAi(videos, persona, sensitivity, modelChoice, cu
           const lastSlash = k.lastIndexOf('/');
           const pattern = k.slice(1, lastSlash);
           const flags = k.slice(lastSlash + 1) || 'i';
-          if (pattern.length <= 200 && !/(?:\([^()]*\[[*+{]|[\|])[^()]*\)\s*[*+{]/.test(pattern)) {
+          // Shared guard (shared-tables.js nytKwIsRedoSSuspect): the SAME check the
+          // content-script matcher runs, so the two worlds can never disagree.
+          if (pattern.length <= 200 && !nytKwIsRedoSSuspect(pattern) && !nytKwIsMatchAllPattern(pattern)) {
             if (new RegExp(pattern, flags).test(text)) return k;
           }
         } catch (_) {}
@@ -1468,63 +1459,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
 
-  // --- Bundled in-browser AI provider (no Ollama / LM Studio needed) ---
-
-  if (msg.type === 'CHECK_BUNDLED_AI_STATUS') {
-    loadBundledAi()
-      .then(ai => ai.checkBundledAiStatus())
-      .then(res => sendResponse(res))
-      .catch((err) => { try { sendResponse({ ok: false, error: String((err && err.message) || err) }); } catch (_) {} });
-    return true;
-  }
-
-  if (msg.type === 'BUNDLED_AI_GET_MODELS') {
-    loadBundledAi()
-      .then(ai => sendResponse({ ok: true, models: ai.BUNDLED_AI_MODELS }))
-      .catch((err) => { try { sendResponse({ ok: false, error: String((err && err.message) || err) }); } catch (_) {} });
-    return true;
-  }
-
-  if (msg.type === 'BUNDLED_AI_GET_MODEL_STATUS') {
-    loadBundledAi()
-      .then(ai => ai.getBundledModelStatus(msg.modelKey))
-      .then(res => sendResponse({ ok: true, ...res }))
-      .catch((err) => { try { sendResponse({ ok: false, error: String((err && err.message) || err) }); } catch (_) {} });
-    return true;
-  }
-
-  if (msg.type === 'BUNDLED_AI_DOWNLOAD_MODEL') {
-    loadBundledAi()
-      .then(ai => ai.downloadBundledModel(msg.modelKey, (p) => {
-        // Forward progress to the popup
-        try { chrome.runtime.sendMessage({ type: 'BUNDLED_AI_PROGRESS', modelKey: msg.modelKey, ...p }).catch(() => {}); } catch (_) {}
-      }))
-      .then(res => sendResponse(res))
-      .catch((err) => { try { sendResponse({ ok: false, error: String((err && err.message) || err) }); } catch (_) {} });
-    return true;
-  }
-
-  if (msg.type === 'BUNDLED_AI_QUERY') {
-    loadBundledAi()
-      .then(ai => ai.queryBundledLlm({
-        messages: msg.messages,
-        format: msg.format,
-        model: msg.model,
-        timeoutMs: msg.timeoutMs,
-      }))
-      .then(res => sendResponse(res))
-      .catch((err) => { try { sendResponse({ ok: false, error: String((err && err.message) || err) }); } catch (_) {} });
-    return true;
-  }
-
-  if (msg.type === 'BUNDLED_AI_UNLOAD') {
-    loadBundledAi()
-      .then(ai => ai.unloadBundledModel())
-      .then(() => sendResponse({ ok: true }))
-      .catch((err) => { try { sendResponse({ ok: false, error: String((err && err.message) || err) }); } catch (_) {} });
-    return true;
-  }
-
   if (msg.type === 'AI_SYNTHESIZE_RULES') {
     synthesizeRulesWithAi(msg.prompt, msg.modelChoice, msg.customUrl).then(res => sendResponse(res)).catch((err) => { try { sendResponse({ ok: false, error: String((err && err.message) || err) }); } catch (_) {} });
     return true;
@@ -1563,14 +1497,19 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === 'INCREMENT_KEYWORD_HIT') {
     const kw = String(msg.keyword || '').trim().toLowerCase();
     if (!kw) { sendResponse({ ok: false, error: 'empty keyword' }); return false; }
-    chrome.storage.local.get(['nyt_keywordHits'], (res) => {
-      if (chrome.runtime?.lastError) { sendResponse({ ok: false, error: chrome.runtime.lastError.message }); return; }
-      const hits = (res && typeof res.nyt_keywordHits === 'object' && res.nyt_keywordHits !== null) ? res.nyt_keywordHits : {};
-      hits[kw] = (hits[kw] || 0) + 1;
-      chrome.storage.local.set({ nyt_keywordHits: hits }, () => {
-        sendResponse({ ok: !chrome.runtime?.lastError, hits: hits[kw] });
+    // Serialized through the queue: two tabs incrementing in the same tick would each
+    // read the same counter map and the second write would lose the first tab's bump.
+    keywordHitQueue = keywordHitQueue.then(() => new Promise((resolve) => {
+      chrome.storage.local.get(['nyt_keywordHits'], (res) => {
+        if (chrome.runtime?.lastError) { sendResponse({ ok: false, error: chrome.runtime.lastError.message }); resolve(); return; }
+        const hits = (res && typeof res.nyt_keywordHits === 'object' && res.nyt_keywordHits !== null) ? res.nyt_keywordHits : {};
+        hits[kw] = (hits[kw] || 0) + 1;
+        chrome.storage.local.set({ nyt_keywordHits: hits }, () => {
+          sendResponse({ ok: !chrome.runtime?.lastError, hits: hits[kw] });
+          resolve();
+        });
       });
-    });
+    }));
     return true;
   }
 

@@ -1,8 +1,10 @@
 // End-to-end harness for backup.js (node). Stubs chrome + the backup page DOM,
 // then drives the REAL doImportFile / buildPayload / downloadBlob path.
+// shared-tables.js is loaded first (as backup.html does) and exposes the canonical
+// regex-safety guards; backup.js consumes them, so they must be global here.
 let saved = null;
 global.chrome = {
-  runtime: { getManifest: () => ({ version: '1.11.1' }) },
+  runtime: { getManifest: () => ({ version: '1.13.3' }) },
   storage: {
     local: {
       get: (_k, cb) => cb({}),
@@ -20,6 +22,18 @@ global.document = {
   }
 };
 const path = require('path');
+const vm = require('vm');
+// Load the canonical guards from shared-tables.js into the global scope, mirroring how
+// backup.html loads <script src="shared-tables.js"> before backup.js.
+{
+  const src = require('fs').readFileSync(path.join(__dirname, '..', 'shared-tables.js'), 'utf8');
+  const ctx = { console };
+  vm.createContext(ctx);
+  vm.runInContext(src + '\n;globalThis.nytKwIsRedoSSuspect = nytKwIsRedoSSuspect; globalThis.nytKwIsMatchAllPattern = nytKwIsMatchAllPattern; globalThis.nytKwRuleIsStorable = nytKwRuleIsStorable;', ctx);
+  global.nytKwIsRedoSSuspect = ctx.nytKwIsRedoSSuspect;
+  global.nytKwIsMatchAllPattern = ctx.nytKwIsMatchAllPattern;
+  global.nytKwRuleIsStorable = ctx.nytKwRuleIsStorable;
+}
 const B = require(path.join(__dirname, '..', 'backup.js'));
 let pass = 0, fail = 0;
 const ok = (cond, msg) => { if (cond) { pass++; console.log('  PASS ' + msg); } else { fail++; console.log('  FAIL ' + msg); } };

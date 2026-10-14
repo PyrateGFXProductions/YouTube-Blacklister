@@ -227,6 +227,12 @@ const script = `
   const hasChannelNameText = typeof isChannelNameText === 'function';
   const channelNameText = (v) => (hasChannelNameText ? isChannelNameText(v) : undefined);
 
+  // Drain the channel write queue (persistChannels serializes its read-modify-write).
+  // Falls back to a microtask flush on a pre-fix file that has no queue.
+  const drainChannelQueue = () => (typeof channelWriteQueue !== 'undefined' && channelWriteQueue && channelWriteQueue.then)
+    ? Promise.resolve(channelWriteQueue)
+    : Promise.resolve();
+
   const store = {};
   chrome.storage.local = {
     get: (keys, cb) => {
@@ -346,6 +352,23 @@ const script = `
   ok('C13: a saved rule for channel "Live" survives a reload', settings.channels.includes('Live'),
     'channels=' + JSON.stringify(settings.channels));
   ok('C14: real garbage ("3d ago") IS still dropped (control for C12/C13)', !settings.channels.includes('3d ago'),
+    'channels=' + JSON.stringify(settings.channels));
+
+  // Count-SUFFIX channel names ("3M", "2B", "5K") must survive a reload just like "1900".
+  // The old /^\d+[smhdwy]$/ regex (case-insensitive) rejected "3M" because it matched the
+  // minute-unit 'm', so a saved rule for a channel named "3M" was DELETED on every load —
+  // the same "blocked it and it came back, entry gone" class as C12. Only unambiguous
+  // time units (s/h/d/w/y) are now rejected; the count suffixes k/m/b are kept.
+  store.channels = ['3M', '2B', '5K', '3w', '5h', 'Veritasium'];
+  await loaded();
+  ok('C15: a count-suffix channel "3M" survives a reload', settings.channels.includes('3M'),
+    'channels=' + JSON.stringify(settings.channels));
+  ok('C16: count-suffix channels "2B"/"5K" survive a reload',
+    settings.channels.includes('2B') && settings.channels.includes('5K'),
+    'channels=' + JSON.stringify(settings.channels));
+  ok('C17: a real time fragment "3w" IS still dropped (control for C15)', !settings.channels.includes('3w'),
+    'channels=' + JSON.stringify(settings.channels));
+  ok('C18: a real time fragment "5h" IS still dropped (control for C15)', !settings.channels.includes('5h'),
     'channels=' + JSON.stringify(settings.channels));
 
   // ===================== D. keyword rules + per-channel exceptions =====================
@@ -502,6 +525,10 @@ const script = `
   store.channels = [];
   const gestureCard = buildCard({ name: 'Some Creator', handle: '@somecreator', title: 'A video' });
   blacklistActiveChannel(gestureCard);
+  // persistChannels now serializes its read-modify-write through a promise queue, so the
+  // write completes on a microtask even with a synchronous storage stub. Drain the queue
+  // before reading store.channels (awaiting the queue promise the vm exposes).
+  await drainChannelQueue();
   const storedKeys = Array.isArray(store.channels) ? store.channels.slice() : [];
   ok('I1: the gesture saves the display name', storedKeys.includes('some creator'), JSON.stringify(storedKeys));
   ok('I2: and the handle, so the block fires where only the handle renders',
@@ -526,6 +553,7 @@ const script = `
   store.channels = [];
   const wlCard = buildCard({ name: 'Some Creator', handle: '@somecreator', title: 'A video' });
   blacklistActiveChannel(wlCard);
+  await drainChannelQueue();
   ok('I6: the gesture still records the rule, but the whitelist still wins at match time',
     channelMatches(wlCard, settings.whitelistChannels) === true && evaluateCard(wlCard).hidden === false,
     'evaluate=' + JSON.stringify(evaluateCard(wlCard)));
@@ -996,6 +1024,12 @@ const feedFallbackWiring = [
   ['content declares the feature flag with an ON default', /feedFallback:\s*true/.test(contentSrc)],
   ['content reads the flag with absent-means-ON', contentSrc.includes("settings.feedFallback = res.feedFallback !== false")],
   ['content gates on the flag in processFeed', contentSrc.includes('settings.feedFallback !== false')],
+  // THE DEAD-TOGGLE GUARD: reading res.feedFallback is worthless unless 'feedFallback'
+  // is in the chrome.storage.local.get array — the key was omitted there, so the read
+  // always saw undefined and the assignment hard-coded ON. The get-array and the read
+  // must name the same key. (Pre-fix: absent from the array — RED.)
+  ['content REQUESTS feedFallback in the load get-array',
+    /chrome\.storage\.local\.get\(\[[^\]]*'feedFallback'[^\]]*\]/.test(contentSrc)],
   ['content has a pure decider', /function feedFallbackDecision\(/.test(contentSrc)],
   ['the decider refuses when YouTube served cards', /totalCards\) > 0\) return \{ go: false, reason: 'youtube-served' \}/.test(contentSrc)],
   ['content caches cards under the namespaced key', contentSrc.includes("FEED_FALLBACK_STORAGE_KEY = 'nyt_feedCache'")],

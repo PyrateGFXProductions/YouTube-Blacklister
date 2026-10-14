@@ -343,6 +343,7 @@ function loadSettings() {
         'aiAutonomous',
         'aiSensitivity',
         'aiModel',
+        'aiCustomUrl',
         'aiTastePrompt',
         'aiSubscriptionProfile',
         'aiDebaitTitles',
@@ -351,6 +352,7 @@ function loadSettings() {
         'huntMode',
         'chipRescue',
         'newToYouAuto',
+        'feedFallback',
         'extensionEnabled',
         'keywordExceptions',
         'temporalRules',
@@ -366,8 +368,15 @@ function loadSettings() {
             // name-shaped cases the row classifier rejects ("1900", "Live") — otherwise a rule
             // the user saved for such a channel was DELETED here on every load.
             if (!isChannelNameText(raw)) return false;
-            // Reject entries that are just digits + letters (like "3w ago" that slipped through as "3w")
-            if (/^\d+[smhdwy]$/i.test(raw)) return false;
+            // Reject a time-ago FRAGMENT that leaked in as a bare suffix — "3w" out of
+            // "3w ago", "5h" out of "5h ago", "2d" out of "2d ago", "10s", "6y". ONLY the
+            // unambiguous time units are rejected: s(second) h(hour) d(day) w(week) y(year).
+            // The letter m is deliberately NOT rejected here — it is ambiguous between a
+            // minute fragment ("3m ago") and a count suffix ("3M", "3 million"), and
+            // deleting a saved rule for a channel named "3M"/"3m" is the far worse outcome
+            // (the reported "blocked it and it came back, entry gone" class). k/m/b count
+            // suffixes are likewise kept: "3M", "2B", "5K" are legitimate channel names.
+            if (/^\d+[shdwy]$/i.test(raw)) return false;
             // Channel names can legitimately be short ("DJ", "AI") or numeric ("1900"), so
             // do NOT reject by length or bare digits — those rules dropped real channels.
             return true;
@@ -400,6 +409,9 @@ function loadSettings() {
         settings.aiAutonomous = Boolean(res.aiAutonomous);
         settings.aiSensitivity = res.aiSensitivity || 'balanced';
         settings.aiModel = res.aiModel || '';
+        // Optional local AI server override ('' = auto-detect). Sent with every AI
+        // batch so the Guardian aims at the same server the popup is configured for.
+        settings.aiCustomUrl = typeof res.aiCustomUrl === 'string' ? res.aiCustomUrl : '';
         settings.aiTastePrompt = res.aiTastePrompt || '';
         settings.aiSubscriptionProfile = res.aiSubscriptionProfile || '';
         settings.aiDebaitTitles = Boolean(res.aiDebaitTitles);
@@ -1107,14 +1119,21 @@ function isViewCountOrTimeText(text) {
 // load ("I blocked it and it came back", with the entry silently gone from the list).
 //
 // So the row classifier stays strict, and identity decisions go through this wrapper, which
-// only re-admits the two genuinely name-shaped cases.
+// only re-admits the genuinely name-shaped cases the row classifier over-rejects.
 function isChannelNameText(text) {
   if (!text) return false;
   const s = String(text).trim();
   if (!s) return false;
   if (!isViewCountOrTimeText(s)) return true;
   if (/^\d+(\.\d+)?$/.test(s)) return true;   // "1900", "24" — a numeric channel name
-  return /^live$/i.test(s);                   // a channel called "Live"
+  if (/^live$/i.test(s)) return true;          // a channel called "Live"
+  // A count-SUFFIX channel name — "3M", "2B", "5K" — is re-admitted here. The row
+  // classifier reads it as a view count ("3M views"), but a channel can legitimately be
+  // named that, and deleting a saved rule for it on every load is the reported
+  // "blocked it and it came back, entry gone" class. Only the count suffixes k/m/b are
+  // re-admitted; a bare time-unit suffix ("3w", "5h") stays rejected as a leaked fragment.
+  if (/^\d+(\.\d+)?[kmb]$/i.test(s)) return true;
+  return false;
 }
 
 // A channel NAME out of a metadata row that also carries the view count and the timestamp.
@@ -1165,7 +1184,11 @@ function channelNameFromRowText(text) {
 // Catastrophic-backtracking signatures: a group containing a nested quantifier OR an
 // alternation, itself quantified from outside — e.g. (a+)+, (a|aa)+$, (ab|a)*. Checked
 // before any user/imported regex runs.
+// shared-tables.js owns the canonical copy (nytKwIsRedoSSuspect) so this content-script
+// world and the service-worker world can never drift on what is safe to run; the local
+// fallback only exists if shared-tables.js failed to load.
 function isReDoSSuspect(pattern) {
+  if (typeof nytKwIsRedoSSuspect === 'function') return nytKwIsRedoSSuspect(pattern);
   return /\([^()]*(?:[*+{]|\|)[^()]*\)\s*[*+{]/.test(pattern);
 }
 
@@ -1173,14 +1196,16 @@ function hasWordBoundaryKeyword(text, keyword) {
   if (!text || !keyword) return false;
   if (keyword.startsWith('/') && keyword.lastIndexOf('/') > 0) {
     // Bounded: an oversized or hostile pattern must never stall every tab's title scan.
+    // Match-all patterns (/.*/i, /a*/i) are refused too — they would hide every card.
     const lastSlash = keyword.lastIndexOf('/');
     const pattern = keyword.slice(1, lastSlash);
     const flags = keyword.slice(lastSlash + 1) || 'i';
-    if (pattern.length <= 200 && !isReDoSSuspect(pattern)) {
+    if (pattern.length <= 200 && !isReDoSSuspect(pattern) && !(typeof nytKwIsMatchAllPattern === 'function' && nytKwIsMatchAllPattern(pattern))) {
       try {
         return new RegExp(pattern, flags).test(text);
       } catch (_) { }
     }
+    return false;
   }
   try {
     const cleanKw = cleanChannelText(keyword);
@@ -1534,6 +1559,15 @@ function getChannelEntityKeys(card) {
 // to storage. Any tab holding slightly stale settings — and the storage listener
 // deliberately no-ops while a tab is hidden — therefore reverted rules the popup
 // had just written. Only the `channels` key belongs to the content script.
+//
+// The read-modify-write is SERIALIZED through a promise queue: two tabs blocking
+// different channels in the same window would otherwise each read the same stale
+// list, each merge their own key, and the second set() would silently drop the
+// first tab's rule (the loser's storage listener then reloaded the winner's list
+// and un-hid the channel just blocked). This mirrors the worker's
+// incrementBlockedTotal queue — one writer, FIFO, no interleaving.
+let channelWriteQueue = Promise.resolve();
+
 function persistChannels(addKeys, removeKeys) {
   const add = (Array.isArray(addKeys) ? addKeys : []).filter(Boolean);
   const drop = new Set((Array.isArray(removeKeys) ? removeKeys : []).map(k => String(k || '')));
@@ -1546,18 +1580,20 @@ function persistChannels(addKeys, removeKeys) {
   settings.channels = optimistic;
 
   if (!isExtensionValid()) return;
-  try {
-    chrome.storage.local.get(['channels'], (res) => {
-      if (chrome.runtime?.lastError) return;
-      let current = Array.isArray(res && res.channels) ? res.channels.slice() : [];
-      current = current.filter(k => !drop.has(String(k)));
-      for (const k of add) if (!current.includes(k)) current.push(k);
-      chrome.storage.local.set({ channels: current }, () => {
-        if (chrome.runtime?.lastError) return;
-        settings.channels = current;
+  channelWriteQueue = channelWriteQueue.then(() => new Promise((resolve) => {
+    try {
+      chrome.storage.local.get(['channels'], (res) => {
+        if (chrome.runtime?.lastError) { resolve(); return; }
+        let current = Array.isArray(res && res.channels) ? res.channels.slice() : [];
+        current = current.filter(k => !drop.has(String(k)));
+        for (const k of add) if (!current.includes(k)) current.push(k);
+        chrome.storage.local.set({ channels: current }, () => {
+          if (!chrome.runtime?.lastError) settings.channels = current;
+          resolve();
+        });
       });
-    });
-  } catch (_) { }
+    } catch (_) { resolve(); }
+  }));
 }
 
 function channelMatches(card, list) {
@@ -2506,6 +2542,9 @@ function runAiEvaluationBatch() {
     persona: [settings.aiTastePrompt, settings.aiSubscriptionProfile].filter(Boolean).join(' — '),
     sensitivity: settings.aiSensitivity,
     modelChoice: settings.aiModel,
+    // Optional server override from the popup. Blank = let the worker auto-detect
+    // Ollama then LM Studio on their standard ports.
+    customUrl: settings.aiCustomUrl || '',
     keywords: settings.keywords,
     channels: settings.channels,
     // The user's protected channels: the model must never be allowed to block
