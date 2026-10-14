@@ -37,6 +37,8 @@
   - [8. Atomic Backup, Restore & Migration](#8-atomic-backup-restore--migration)
   - [9. Instant Master Pause Switch](#9-instant-master-pause-switch)
   - [10. Feed Fallback — a Home page YouTube cannot blank](#10-feed-fallback--a-home-page-youtube-cannot-blank)
+  - [11. Rule Audit & Consolidation](#11-rule-audit--consolidation)
+- [What This Cannot Do](#what-this-cannot-do)
 - [Browser Compatibility Matrix](#browser-compatibility-matrix)
 - [Installation Guide](#installation-guide)
   - [Chromium Family (Chrome, Edge, Brave, Opera, Vivaldi)](#chromium-family-chrome-edge-brave-opera-vivaldi)
@@ -52,9 +54,11 @@
 
 YouTube’s recommendation algorithm is engineered for one single metric: **perpetual session duration**. It does not care if a video provokes outrage, exploits sensationalist clickbait, recycles stale content you have seen twenty times, or floods your feed with automated AI-dubbed slop. The native "Not interested" and "Don't recommend channel" buttons are opaque, delayed, routinely ignored by the backend, and completely uninspectable.
 
-**Always New To You transforms your feed into your own private curated sanctuary.**
+YouTube also actively punishes curation. Block enough channels and the recommender quietly narrows: the same handful of cards come back, then fewer, until Home serves you nothing you have not already seen. The native buttons cannot fix this because they are advisory — YouTube's own systems decide whether to honor them, and they usually do not.
 
-Built strictly on modern **Manifest V3** with zero third-party tracking scripts, zero cloud dependencies, and zero data leakage, this extension intercepts YouTube's dynamic polymer DOM as it renders. Block creators with zero latency, filter title tropes with precision regex or word-boundary rules, whitelist the creators who earn your attention, pin YouTube's hidden "New to You" discovery surface, and summarize or de-bait sensationalist videos using local AI models running on your own machine.
+**Always New To You takes that decision out of YouTube's hands.** It filters your feed in your browser, before YouTube's cards ever reach you, so a block actually holds. It also pins YouTube's "New to You" surface — the one place built to show channels you have genuinely never encountered — which otherwise drifts back to the default feed on its own.
+
+And it does all of this on your machine. Filtering a feed server-side means telling a third party exactly what you do not want to see: a profile of your politics, your finances, your faith. No service should hold that, and this one is built so it never can.
 
 ---
 
@@ -143,7 +147,7 @@ Connect your browser directly to your own self-hosted inference engine (**Ollama
 - **Shorts Subscribed-Only Filter**: Keep the Shorts shelf visible, but filter out all algorithmic recommendations, preserving only creators you actually subscribe to.
 - **Community Posts Concealment**: Remove poll spam, text cards, and promotional channel announcements from your video stream.
 - **AI-Voiced Auto-Dubbed Triage**: Detects YouTube’s automated multi-language audio track dubs. Choose to hide all dubbed videos, keep only dubs from your subscriptions, or allow all.
-- **Topic Chip Rescue & Persistence**: Detects and repairs YouTube client bugs that cause the topic filter bar to disappear. When YouTube has only *hidden* the bar it is un-hidden; when YouTube serves **no chip data at all** (verified: the empty-feed state carries zero chips), the bar is **rebuilt into the page** from a local capture of your last good session — so you never have to sit there refreshing until the chips come back. The rebuilt bar is a plain page-styled element the extension owns (a hand-built YouTube renderer element is recycled by the page within a tick), its chips open real topics, and it disappears the moment YouTube serves its own bar again.
+- **Topic Chip Rescue**: Watches YouTube's topic filter bar and repairs it when it breaks. When YouTube has merely *hidden* its own bar, the extension un-hides it — the real one, with chips that actually filter the feed. When YouTube serves no chip bar at all, nothing a client can click exists to work with, so instead of faking one the extension quietly re-requests Home the same way your own refreshing would, then keeps watching for the bar to arrive. If it never does, there is a manual refresh offered — and nothing further, because no extension can conjure a working chip bar YouTube did not send.
 
 ### 6. Feed Diversity Meter & Subscription Scanner
 - **Privacy-Preserving Mirror**: Securely caches your subscribed channel identities (`youtube.com/feed/channels`) entirely in `chrome.storage.local`.
@@ -180,6 +184,46 @@ YouTube has a confirmed failure class where Home serves an **empty** recommendat
 - **Pure addition, never a takeover**: the panel is extension UI rendered *into* the page. It appears only when YouTube served **zero** cards, disappears the instant real cards arrive or you navigate away, and never hides or rewrites anything YouTube rendered.
 - **Honest about freshness**: a cache older than 14 days is labelled as such, so "cached" can never masquerade as "live".
 - **One switch, on by default**: **Settings → 🛟 Feed Fallback (empty Home)**. It carries no blacklist data on any request and is exported/imported with your backup.
+
+### 11. Rule Audit & Consolidation
+
+Over time a keyword list grows stale: you add `top 10`, then `top 10 list`, then a rule that never once fired. The list gets long and hard to reason about, and nothing tells you which rules are doing nothing.
+
+**Keywords → Analyze** reads your whole rule list and sorts it into groups.
+
+- **Redundant rules** — one rule's text sits entirely inside a longer one you already have. Because a rule matches any title *containing* its text, the longer rule already catches everything the shorter one does. Removing the shorter one hides nothing new. Each one is listed with the rule that covers it, so you can see the evidence rather than take it on faith.
+- **Never matched** — zero recorded hits and not covered by anything else. This is the same idea as the existing *Remove 0-Hit Rules* button, reported alongside the rest so one pass sees everything.
+- **Broken regex** — a rule like `/[unclosed(/i` that cannot compile. The matcher can never run it, so it has never hidden anything and never will.
+- **Over-broad — flagged, never removed** — single common words like `the`, `review` or `worst` that match a large share of titles. These are the usual reason a feed feels over-blocked, but whether you want one is a taste call only you can make. The audit shows them with their hit counts and **never offers to delete them**.
+
+Tick the groups you want, click **Apply Selected**, confirm. Nothing is removed without your explicit approval.
+
+**The guarantee behind it.** Consolidation never changes which titles get hidden. Every removal is proven before it is offered, by replaying both rules through the extension's own matcher — not guessed from what a rule "probably" covers. Regex rules are never consolidated at all, because whether one regex covers another cannot be decided by comparing text.
+
+The audit runs entirely in your browser (`keyword-audit.js`). No AI, no network, no model.
+
+> [!TIP]
+> **Export a backup first** (Settings → Backup & Restore). Consolidation removes rules, and while the redundant ones are provably safe, a backup makes any mistake one click from reversible.
+
+---
+
+## What This Cannot Do
+
+Worth stating plainly, so nothing here reads as a promise it cannot keep.
+
+- **It will not make YouTube show you new things forever.** YouTube's recommender narrows the longer you curate. The extension removes what you have rejected; it cannot force YouTube to serve what you have not seen. Narrowing still happens — it is just no longer silent.
+
+- **It cannot undo a narrowed feed.** Once YouTube has collapsed your recommendations, no client-side filter widens them again. What actually helps, in practice, is engaging with a channel you have never watched before — that can reset things slightly, at least for a while.
+
+- **It cannot fix a feed YouTube served empty.** If YouTube renders no cards at all, there is nothing to filter. The Feed Fallback gives you a usable page instead of a blank one, but it is a substitute for the feed, not a repair of it.
+
+- **Category chips depend on YouTube.** When YouTube's own servers omit the chip bar, a client cannot reconstruct a working one — a topic chip only filters the feed because YouTube's real chip exists to click. The extension re-requests the feed and will keep watching for the bar to arrive; if YouTube never sends it, no extension can make it appear.
+
+- **It cannot block a channel you subscribe to, by keyword.** A keyword rule deliberately never hides a video from a channel you follow. This is by design, not a bug — see §2. To block such a channel, block the channel itself rather than the keyword.
+
+- **Your blacklist protects you, not everyone.** It hides cards in *your* browser. YouTube still recommends those channels to other people, and your subscription data is never affected. Nothing here is a boycott or a takedown — it is a local filter.
+
+- **It is a client-side filter, so it is a moving target.** YouTube can change its markup at any time and break the interception until the extension is updated. That is the cost of not sending your data to anyone.
 
 ---
 

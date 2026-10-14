@@ -1121,7 +1121,15 @@ function stripChannelMetadataTail(name) {
 }
 
 function normalizeChannel(name) {
-  const clean = cleanChannelText(name).toLowerCase().replace(/^@+/, '');
+  let clean = cleanChannelText(name).toLowerCase();
+  // Strip URL path prefixes before the @ strip. A whitelist/blacklist entry saved
+  // from a channel URL reads "/@RedGreenTV" or "/channel/UCxyz", and the leading
+  // slash was never removed — so those rules normalized to "/@redgreentv" while the
+  // card presented "RedGreenTV" -> "redgreentv", and the two never compared equal.
+  // For a WHITELIST that means the protection silently does not apply; for a
+  // BLACKLIST it means the channel is not blocked. Both directions are real bugs.
+  clean = clean.replace(/^\/(?:@|channel\/|c\/|user\/)?/, '');
+  clean = clean.replace(/^@+/, '');
   const stripped = stripChannelMetadataTail(clean);
   // Never let the strip consume a name that IS only metadata-shaped: "3M" and
   // "412K" are single tokens, so there is nothing before the count to keep.

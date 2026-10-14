@@ -738,6 +738,26 @@ const script = `
     norm('3M') === '3m' && norm('412K') === '412k' && norm('1900') === '1900' && norm('2B') === '2b',
     'got=' + JSON.stringify([norm('3M'), norm('412K'), norm('1900'), norm('2B')]));
 
+  // M9: a rule saved from a channel URL must normalize to the same key as the bare
+  // name the card presents. Your whitelist stores "/@RedGreenTV"; a card presents
+  // "RedGreenTV". The leading slash was never stripped, so the whitelist entry
+  // normalized to "/@redgreentv" and silently protected nothing — and the same
+  // defect in reverse meant a blacklist entry saved the same way never blocked.
+  ok('M9: a URL-shaped rule matches the bare channel name',
+    norm('/@RedGreenTV') === norm('RedGreenTV') &&
+    norm('/@2MuchColinFurze') === norm('2MuchColinFurze') &&
+    norm('/channel/UCxyz123') === norm('UCxyz123') &&
+    norm('/c/SomeChannel') === norm('SomeChannel') &&
+    norm('/user/legacyhandle') === norm('legacyhandle'),
+    'got=' + JSON.stringify([
+      norm('/@RedGreenTV'), norm('RedGreenTV'),
+      norm('/channel/UCxyz123'), norm('UCxyz123')
+    ]));
+  // A bare name must not be damaged by the new prefix strip.
+  ok('M9b: the prefix strip never damages a plain name',
+    norm('Cold Ones') === 'cold ones' && norm('/not/a/channel') === 'not/a/channel',
+    'got=' + JSON.stringify([norm('Cold Ones'), norm('/not/a/channel')]));
+
   // Add a nested-pair assertion here too: the modern card nests yt-lockup-view-model inside
   // ytd-rich-item-renderer and BOTH are card selectors, so counting must not double.
 
