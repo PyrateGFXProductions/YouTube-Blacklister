@@ -386,6 +386,14 @@ The packager validates manifest versions, executes atomic staging, strips Chromi
 ### License
 Copyright © 2026 [PyrateGFX Productions](https://github.com/PyrateGFXProductions). Released under the [MIT License](LICENSE).
 
+### Project Documents
+- [CONTRIBUTING](CONTRIBUTING.md) — how to report bugs, run the suite, and submit changes
+- [SECURITY](SECURITY.md) — how to report a vulnerability privately, and the security boundaries this extension maintains
+- [CODE_OF_CONDUCT](CODE_OF_CONDUCT.md) — expected behavior in issues, PRs, and discussions
+- [PRIVACY](PRIVACY.md) — exactly what data the extension stores and what it never sends anywhere
+- [CHANGELOG](CHANGELOG.md) — every release, with the root cause of each fix
+- [RELEASING](RELEASING.md) — the release procedure: changelog, version bump, build, verification, signing
+
 ### Acknowledgments & Ecosystem
 - **[Ollama](https://ollama.com)** & **[LM Studio](https://lmstudio.ai)** — Enabling local, private, cloud-free AI inference.
 - **[Mozilla WebExtensions](https://developer.mozilla.org/docs/Mozilla/Add-ons/WebExtensions)** — Cross-browser extension specifications.

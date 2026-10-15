@@ -363,6 +363,13 @@ function loadSettings() {
           .filter(c => {
             const raw = String(c || '').trim();
             if (!raw) return false;
+            // A rule that still carries a glued view count — "the lewis brothersand
+            // pauly shore519k", "legion of skanks clipsand ... 22k" — can never match a
+            // card: the card presents the bare channel name, so the two keys are
+            // unequal no matter what the matcher does. 36 such rules sat in one real
+            // user's list. They are repaired in place below rather than dropped,
+            // because dropping one silently un-blocks the channel it was meant to hide.
+            if (isGluedMetadataRule(raw)) return true;
             // Reject time-ago strings, view counts, and fragments leaked by old buggy code.
             // A channel NAME is not a metadata row, so isChannelNameText() re-admits the two
             // name-shaped cases the row classifier rejects ("1900", "Live") — otherwise a rule
@@ -388,7 +395,25 @@ function loadSettings() {
           // rewrites it to the real name in place; entries that are not the artifact are kept
           // verbatim, and "duran duran" (a real channel) is never touched (see its guard).
           .map(c => collapseDoubledChannelText(String(c || '').trim()))
-          .filter((c, i, arr) => c && arr.indexOf(c) === i);
+          // REPAIR a glued-metadata rule in place. The block gesture read a modern lockup
+          // metadata row in which the channel name and its byline share one text node, so it
+          // stored "the lewis brothersand pauly shore519k" — the channel name fused to a
+          // collaborator's name and then to the view count. Such a rule can never match a
+          // card, which is why the same channel had to be blocked a dozen times. The repair
+          // strips the fused tail and keeps the channel the gesture was made on; it runs only
+          // on rules the isGluedMetadataRule check above already flagged, so a clean rule is
+          // never rewritten. Existing blacklists heal with no export/import.
+          .map(c => isGluedMetadataRule(c) ? repairGluedMetadataRule(c) : c)
+          // Dedupe on the NORMALIZED key, not the raw string: "quintheo" and
+          // "quintheo 69k 1mo ago" are the same channel (one written clean, one
+          // captured with its row's metadata) but survived as two entries because
+          // they differ as strings. 30 such pairs sat in one real user's list,
+          // bloating the popup with two rows for one channel.
+          .filter((c, i, arr) => {
+            if (!c) return false;
+            const key = normalizeChannel(c);
+            return arr.findIndex(other => other && normalizeChannel(other) === key) === i;
+          });
         // Persist the cleaned channels list back to storage if anything CHANGED — including
         // a doubled entry that migrated to its real name (same count, different content), so
         // the garbage does not survive in storage and get re-migrated in memory on every load.
@@ -1107,15 +1132,131 @@ const CHANNEL_TAIL_TIME_RE = /\s\d+(?:[.,]\d+)?\s*(?:s|sec|secs|second|seconds|m
 // form matters: YouTube renders some rows as "Mark Gilmore 259 2mo ago" where the
 // count is already abbreviated to a plain number, and leaving it behind puts
 // "259" into the comparable key so the rule still cannot match a bare-name card.
+//
+// The whitespace before the digits is OPTIONAL, and that is the load-bearing
+// detail. A card's metadata row is not always space-separated from the channel
+// name: on the modern lockup surface the name and the byline run together, so the
+// block gesture captured "The Lewis Brothers" as
+// "the lewis brothersand pauly shore519k" — the channel name GLUED to the second
+// collaborator's name and then to the view count, with no whitespace anywhere.
+// 36 such rules existed in a real user's list, and not one of them could ever
+// match a card: the card presents the bare name, the rule carries the tail, and
+// the two never compared equal — which is exactly the "I blocked this channel a
+// dozen times and it keeps coming back" report. Each re-block stored a fresh
+// garbage key, so the list grew while the channel stayed visible.
+//
+// This pattern removes the count and lets GLUED_BYLINE_RE (below) take the glued
+// name. It is deliberately conservative about the letters it will consume: only a
+// TRAILING k/m/b magnitude is dropped, never the letters that form a word, so
+// "the puristand offgridbaja" cannot lose its last three letters to a misread.
+// A lone count with no preceding letter ("3M", "412K", "1900") still cannot be
+// stripped, so those real channel names are untouched.
 const CHANNEL_TAIL_COUNT_RE = /\s\d+(?:[.,]\d+)?\s*[kmb]?$/i;
+
+// A byline fused to the channel name with NO separator. YouTube's modern lockup
+// renders the channel and its byline inside one text node on some surfaces, so the
+// block gesture read the whole run as one channel name. Real captures from a live
+// blacklist (36 rules in one user's list):
+//   "the lewis brothersand pauly shore"      -> the channel is "The Lewis Brothers"
+//   "legion of skanks clipsand legion of skanks podcast"
+//   "dimplevideoand the nk guys"
+//   "the puristand offgridbaja"
+// The `and`/`&` is the boundary: it separates the channel the gesture was made on
+// (the FIRST part) from the byline that got glued to it — and there is no
+// whitespace around it, which is why a `\s(?:and|&)\s` pattern never fired.
+//
+// The letter immediately before the conjunction is what makes this safe: it
+// requires the conjunction to be glued onto a word, which is the artifact's
+// signature. A real channel name ending in "…and" with more text glued on in that
+// exact shape is not a form YouTube produces. Note this is used ONLY by
+// repairGluedMetadataRule(), which runs only on a rule already flagged as
+// carrying glued metadata — never on a clean rule.
+const GLUED_BYLINE_RE = /[a-z](?:and|&)\s*[^ ]*$/i;
+
+// A rule that carries a view count glued directly onto the channel name —
+// "the lewis brothersand pauly shore519k", "wheeltalk-w2k", "polarity2.0and
+// polarity5.3k". The count is the marker, and the marker is deliberately narrow:
+// a real view count is at least two digits and normally carries a k/m/b magnitude,
+// whereas a channel handle genuinely ending in one digit is common ("nadatropis2",
+// "u2", "logcabintv1"). Requiring [kmb] plus 2+ digits is what separates the two,
+// and getting that wrong in either direction is costly: too loose rewrites a real
+// channel name, too loose in the other direction leaves a dead rule in place.
+//
+// Why this matters: such a rule can NEVER match a card. The card presents the bare
+// channel name ("The Lewis Brothers"), the rule carries the fused tail, and the two
+// keys are unequal no matter how good the matcher is — so the channel kept
+// reappearing after every block, and every re-block stored another garbage rule.
+function isGluedMetadataRule(raw) {
+  if (!raw) return false;
+  // A multi-digit count with a k/m/b magnitude, glued onto a letter with no space.
+  return /[a-z]\d{2,}(?:\.\d+)?\s*[kmb]$/i.test(raw);
+}
+
+// Recover the channel from a glued-metadata rule.
+//
+// On YouTube's modern lockup surfaces the channel name and its byline share one
+// text node, so the block gesture read the whole run as one name and stored it:
+//   "the lewis brothersand pauly shore519k"   -> the channel is "The Lewis Brothers"
+//   "legion of skanks clipsand legion of skanks podcast22k"
+//   "visors downand more38k"
+// 30 such rules sat in one real user's list, every one permanently dead — the card
+// presents the bare name, the rule carried the fused tail, and the two keys are
+// unequal no matter how good the matcher is.
+//
+// The split runs while the view count is still attached, because the count is what
+// identifies the glue point: "brothersand pauly shore519k" ends in a count, so its
+// "and" is a real boundary, whereas the "and" inside "girland" never is. This part
+// cannot be made fully deterministic — separating them reliably needs a dictionary
+// this extension does not ship — so it abstains whenever the shape is ambiguous.
+// An abstained rule stays dead (the old behaviour); a wrong split would block the
+// wrong creator. The safer failure is a rule that does not work yet.
+function repairGluedMetadataRule(raw) {
+  const original = String(raw || '').trim();
+  if (!original) return original;
+
+  let s = original;
+
+  // The fused byline: a space-delimited word, then a GLUED conjunction, then a
+  // byline that runs to the trailing count. Sliced at a computed index rather than
+  // a replace callback, because a pattern that must both match the tail and capture
+  // the name is easy to get wrong — and a wrong split names the wrong channel.
+  const m = s.match(/(\s)[a-z]{2,}(?:and|&)[\s\S]*\d{2,}(?:[.,]\d+)?\s*[kmb]$/i);
+  if (m) {
+    const lower = s.toLowerCase();
+    const at = lower.indexOf('and', m.index);
+    const cut = at >= 0 ? at : lower.indexOf('&', m.index);
+    if (cut > m.index) s = s.slice(0, cut).trim();
+  }
+
+  // The trailing count. The digit-run is matched without consuming the letters
+  // before it, so a name keeps its last letter.
+  s = s.replace(/\d{2,}(?:[.,]\d+)?\s*[kmb]$/i, '').trim();
+  // A time-ago that survived with the count.
+  s = s.replace(/\s\d+\s*[a-z]{1,4}\s*ago$/i, '').trim();
+
+  return s.length > 1 ? s : original;
+}
 
 function stripChannelMetadataTail(name) {
   let s = name;
   let prev;
   do {
     prev = s;
+    // Test for the time-ago BEFORE stripping it — the count decision below needs
+    // to know whether the ORIGINAL row carried an age.
+    const hadTimeAgo = CHANNEL_TAIL_TIME_RE.test(s);
     s = s.replace(CHANNEL_TAIL_TIME_RE, '').trim();
-    s = s.replace(CHANNEL_TAIL_COUNT_RE, '').trim();
+    // A trailing count is only stripped when it is UNAMBIGUOUSLY metadata:
+    // either it carries a k/m/b magnitude ("Cold Ones 2.1M" is a view count),
+    // or the row ALSO carried a time-ago ("Mark Gilmore 259 2mo ago" is a name,
+    // a count, then an age). A bare number with no magnitude and no age is part
+    // of the channel's NAME — "Garage 54", "Studio 60", "Channel 5", "Salty 214"
+    // are real channels, and stripping their number collapsed "Garage 54" onto a
+    // DIFFERENT channel called "Garage", so blocking one blocked both.
+    const magnitude = /[kmb]$/i.test(s.replace(/[.,\s]/g, ''));
+    if (magnitude || hadTimeAgo) {
+      s = s.replace(CHANNEL_TAIL_COUNT_RE, '').trim();
+    }
   } while (s !== prev && s);
   return s;
 }
@@ -1130,6 +1271,16 @@ function normalizeChannel(name) {
   // BLACKLIST it means the channel is not blocked. Both directions are real bugs.
   clean = clean.replace(/^\/(?:@|channel\/|c\/|user\/)?/, '');
   clean = clean.replace(/^@+/, '');
+  // A rule stored with the channel name FUSED to a byline and a view count —
+  // "the lewis brothersand pauly shore519k" — can never match a card, because the
+  // card presents the bare name. Repairing it here (not only in the load-time
+  // migration) means the block works the moment the rule is written as well as on
+  // every existing rule. isGluedMetadataRule() gates it, so a clean rule is never
+  // rewritten.
+  if (isGluedMetadataRule(clean)) {
+    const repaired = repairGluedMetadataRule(clean);
+    if (repaired && repaired !== clean) clean = repaired;
+  }
   const stripped = stripChannelMetadataTail(clean);
   // Never let the strip consume a name that IS only metadata-shaped: "3M" and
   // "412K" are single tokens, so there is nothing before the count to keep.
@@ -4360,6 +4511,7 @@ function selectKeywordRules(candidates, existing, otherTitles, limit) {
   const out = [];
   const generic = [];
   const common = [];
+  const invalid = [];
   const seen = new Set();
   for (const raw of (Array.isArray(candidates) ? candidates : [])) {
     const norm = canonicalKeywordLower(raw);
@@ -4371,10 +4523,36 @@ function selectKeywordRules(candidates, existing, otherTitles, limit) {
     // The two refusals are kept apart on purpose: "too generic" and "matches what is
     // already on your screen" are different facts and the toast reports them separately.
     if (nytKwIsGenericRule(norm)) { generic.push(norm); continue; }
+    // The storable gate, enforced here too — the model path concatenates its
+    // proposals straight into this function (extractKeywordsFromCard line ~4467),
+    // and without this check a malformed proposal like "out of prison" passed the
+    // generic test, displaced the real subject word "prison" from the offered set,
+    // and got stored instead of it. nytKwRuleIsStorable is the single refusal point
+    // every other writer already uses.
+    if (typeof nytKwRuleIsStorable === 'function' && !nytKwRuleIsStorable(norm)) {
+      invalid.push(norm); continue;
+    }
     if (hitsLimit !== Infinity && nytKwFeedHits(norm, otherTitles) >= hitsLimit) { common.push(norm); continue; }
+    // Subsumption: a rule contained in another ACCEPTED rule is redundant, because
+    // a keyword rule matches any title containing it — "masters" hides nothing that
+    // "poker masters" does not already hide. The reported case: one key-press on a
+    // Poker Masters title offered "masters" AND "poker masters" together, so the
+    // list grew three rules where one sufficed. Drop a candidate an accepted rule
+    // already covers; when the candidate covers an accepted one, replace it.
+    // Containment is WHOLE-WORD: "art" is inside "earth" as a substring but not as
+    // a word, and rule "earth" hides nothing that rule "art" matches.
+    const covers = (long, short) => long === short ||
+      (' ' + long + ' ').includes(' ' + short + ' ');
+    if (out.some(o => covers(o, norm))) continue;
+    // Remove EVERY accepted rule the candidate covers, not just the first:
+    // "favorite spongebob" covers both "spongebob" and "favorite", and leaving
+    // either behind kept the pair the fix exists to collapse.
+    for (let i = out.length - 1; i >= 0; i--) {
+      if (covers(norm, out[i])) out.splice(i, 1);
+    }
     if (out.length < cap) out.push(norm);
   }
-  return { terms: out, generic, common, skipped: generic.concat(common) };
+  return { terms: out, generic, common, invalid, skipped: generic.concat(common) };
 }
 
 // "Added 2 keywords: prison, prison release (from title)" plus a second line naming what
@@ -4394,6 +4572,14 @@ function extractionDetail(sel, droppedByFeed) {
   const list = (arr) => arr.slice(0, 3).join(', ') + (arr.length > 3 ? ` (+${arr.length - 3} more)` : '');
   if (generic.length) {
     parts.push(`Skipped ${generic.length} too-generic rule${generic.length > 1 ? 's' : ''}: ${list(generic)}`);
+  }
+  // Malformed proposals (a particle at the phrase edge, an unstorable shape) are a
+  // third, distinct refusal: not "too generic" and not "on your screen already",
+  // but a rule that cannot be stored at all. Named so a model proposal being
+  // dropped is never a mystery either.
+  const invalid = (sel && sel.invalid) || [];
+  if (invalid.length) {
+    parts.push(`Skipped ${invalid.length} malformed rule${invalid.length > 1 ? 's' : ''}: ${list(invalid)}`);
   }
   if (common.length) {
     parts.push(`Skipped ${common.length} rule${common.length > 1 ? 's' : ''} already matching other videos on screen: ${list(common)}`);

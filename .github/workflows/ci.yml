@@ -1,0 +1,104 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+
+# Cancel superseded runs on the same ref — a force-push should not leave a queue
+# of stale runs burning minutes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test suite
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      # This project has zero npm dependencies — it is vanilla JS by design, and
+      # there is no package-lock.json, so `npm ci` would fail. The runners ship
+      # Node 20+, which is all the suite needs.
+      - name: Report the Node version
+        run: node --version
+
+      # The whole suite is pure Node — no browser, no network, no local AI server.
+      # test:live is deliberately NOT run here: it needs a live Ollama on the
+      # runner, which CI does not have and should not need.
+      - name: Run the test suite
+        run: npm test
+
+  package:
+    name: Package (Windows)
+    runs-on: windows-latest
+    # Packaging is PowerShell-only; if the test job is red, packaging cannot
+    # meaningfully pass either, so do not waste the runner.
+    needs: test
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Report the Node version
+        run: node --version
+
+      - name: Run the test suite
+        run: npm test
+
+      # Verifies the packager still runs and that the shipped manifest matches
+      # the source. Does not attach the artifacts to a release — that stays a
+      # deliberate human action.
+      - name: Build the release package
+        shell: pwsh
+        run: npm run package
+
+      - name: Verify the built artifacts carry the current version
+        shell: pwsh
+        run: |
+          $manifest = Get-Content -Raw manifest.json | ConvertFrom-Json
+          $xpi = "blacklist-firefox.xpi"
+          if (-not (Test-Path $xpi)) { throw "Package build did not produce $xpi" }
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $zip = [System.IO.Compression.ZipFile]::OpenRead((Resolve-Path $xpi))
+          try {
+            $entry = $zip.Entries | Where-Object { $_.FullName -eq 'manifest.json' }
+            if (-not $entry) { throw 'No manifest.json inside the built package' }
+            $reader = New-Object System.IO.StreamReader($entry.Open())
+            $built = $reader.ReadToEnd() | ConvertFrom-Json
+            $reader.Close()
+          } finally {
+            $zip.Dispose()
+          }
+          if ($built.version -ne $manifest.version) {
+            throw "Built package is version $($built.version) but source is $($manifest.version)"
+          }
+          Write-Host "Built package version $($built.version) matches source."
+
+      - name: Upload the built package
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-artifacts
+          path: |
+            YouTube-Blacklister-v*.zip
+            blacklist-firefox.xpi
+            blacklist-firefox.zip
+            blacklist-firefox.jar
+            dist/chromium.zip
+            dist/firefox.zip
+          if-no-files-found: error
+          retention-days: 14

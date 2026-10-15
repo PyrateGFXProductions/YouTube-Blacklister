@@ -723,6 +723,7 @@ const script = `
   // any migration. This is the half that repairs the rules already in the user's
   // list; M5 is the half that stops new ones being written polluted.
   const norm = (v) => (hasNorm ? normalizeChannel(v) : undefined);
+  const isGlued = (v) => (typeof isGluedMetadataRule === 'function' ? isGluedMetadataRule(v) : undefined);
   ok('M7: a polluted stored rule normalizes to the same key as the bare card',
     norm('mugsyboy 1m 1mo ago') === norm('Mugsyboy') &&
     norm('Mugsyboy 1M 1mo ago') === norm('Mugsyboy') &&
@@ -757,6 +758,92 @@ const script = `
   ok('M9b: the prefix strip never damages a plain name',
     norm('Cold Ones') === 'cold ones' && norm('/not/a/channel') === 'not/a/channel',
     'got=' + JSON.stringify([norm('Cold Ones'), norm('/not/a/channel')]));
+
+  // M10: a rule stored with the channel name FUSED to a byline and a view count can
+  // never match a card, so the channel kept reappearing after every block. Real
+  // captures from a live blacklist ("the lewis brothersand pauly shore519k" — 30 of
+  // them in one user's list). normalizeChannel() must reduce such a rule to the bare
+  // channel name the card presents.
+  ok('M10: a rule fused to a byline and a view count reduces to the channel name',
+    norm('the lewis brothersand pauly shore519k') === 'the lewis brothers' &&
+    norm('legion of skanks clipsand legion of skanks podcast22k') === 'legion of skanks clips' &&
+    norm('visors downand more38k') === 'visors down' &&
+    norm('the puristand offgridbaja6442k') === 'the purist',
+    'got=' + JSON.stringify([
+      norm('the lewis brothersand pauly shore519k'),
+      norm('legion of skanks clipsand legion of skanks podcast22k'),
+      norm('visors downand more38k'),
+      norm('the puristand offgridbaja6442k')
+    ]));
+  // The same repair must run at load time, so an existing blacklist heals itself
+  // with no export/import. isGluedMetadataRule() is the flag that gates it.
+  ok('M10b: a real channel name is never treated as a glued-metadata rule',
+    !isGlued('nadatropis2') && !isGlued('u2') && !isGlued('logcabintv1') &&
+    !isGlued('cold ones') && !isGlued('3M') && !isGlued('412K'),
+    'a channel handle ending in one digit is a real name, not metadata');
+  ok('M10c: the genuine artifact IS flagged',
+    isGlued('the lewis brothersand pauly shore519k') &&
+    isGlued('legion of skanks clipsand legion of skanks podcast22k') &&
+    isGlued('the puristand offgridbaja6442k'),
+    'the marker is a multi-digit count with a k/m/b magnitude');
+  // A 1-digit count is NOT the marker: "wheeltalk-w2k" is a real channel name, and
+  // flagging it would rewrite a working rule.
+  ok('M10d: a single-digit count is a real name, not metadata',
+    !isGlued('wheeltalk-w2k') && !isGlued('nadatropis2') && !isGlued('u2'),
+    'one digit after a letter is a handle, not a view count');
+
+  // M12: a channel NAME that ends in a number must not have the number stripped.
+  // "Garage 54" and "Studio 60" are real channels; the suffix-less count strip
+  // (added for "Mark Gilmore 259 2mo ago") ate the number and collapsed
+  // "Garage 54" onto a different channel called "Garage" — blocking one blocked
+  // both. A bare number is only metadata when the row also carried a time-ago,
+  // or the count carries a k/m/b magnitude.
+  ok('M12: a name ending in a plain number keeps its number',
+    norm('Garage 54') === 'garage 54' &&
+    norm('Studio 60') === 'studio 60' &&
+    norm('Channel 5') === 'channel 5' &&
+    norm('Salty 214') === 'salty 214',
+    'got=' + JSON.stringify([
+      norm('Garage 54'), norm('Studio 60'), norm('Channel 5'), norm('Salty 214')
+    ]));
+  // The genuine metadata shapes still strip.
+  ok('M12b: a real count+age row still reduces to the bare name',
+    norm('Mark Gilmore 259 2mo ago') === 'mark gilmore' &&
+    norm('Mugsyboy 1M 1mo ago') === 'mugsyboy' &&
+    norm('Cold Ones 2.1m 3d ago') === 'cold ones',
+    'got=' + JSON.stringify([
+      norm('Mark Gilmore 259 2mo ago'), norm('Mugsyboy 1M 1mo ago'), norm('Cold Ones 2.1m 3d ago')
+    ]));
+  // A magnitude count with no age is still a count.
+  ok('M12c: a k/m/b magnitude with no age is still stripped',
+    norm('Some Creator 847K') === 'some creator',
+    'got=' + JSON.stringify(norm('Some Creator 847K')));
+
+  // M13: extraction must not offer a rule alongside another rule that already
+  // covers it. The reported case: one key-press on a Poker Masters title offered
+  // "masters" AND "poker masters" together — three rules where one sufficed,
+  // because a keyword rule matches any title CONTAINING it, so the shorter rule
+  // hides nothing the longer one does not. Whole-word containment only: "art"
+  // inside "earth" is a substring, not a covered rule.
+  const selKw = (title) => {
+    const ranked = (typeof rankKeywordCandidates === 'function')
+      ? rankKeywordCandidates({ title }, 8, [], []) : [];
+    return (typeof selectKeywordRules === 'function')
+      ? selectKeywordRules(ranked, [], [], 3).terms : undefined;
+  };
+  const pok = selKw('Poker Masters 2026 Final Table');
+  ok('M13: extraction never offers a rule another offered rule already covers',
+    Array.isArray(pok) && pok.includes('poker masters') && !pok.includes('masters'),
+    'got=' + JSON.stringify(pok));
+  const sb = selKw('My Favorite SpongeBob Episode Breakdown');
+  ok('M13b: a covering phrase replaces EVERY rule it covers',
+    Array.isArray(sb) && sb.includes('favorite spongebob') &&
+      !sb.includes('favorite') && !sb.includes('spongebob'),
+    'got=' + JSON.stringify(sb));
+  const ec = selKw('The Problem with Electric Cars Nobody Wants to Admit');
+  ok('M13c: the shorter component is dropped in favour of the phrase',
+    Array.isArray(ec) && ec.includes('electric cars') && !ec.includes('electric'),
+    'got=' + JSON.stringify(ec));
 
   // Add a nested-pair assertion here too: the modern card nests yt-lockup-view-model inside
   // ytd-rich-item-renderer and BOTH are card selectors, so counting must not double.

@@ -525,7 +525,21 @@ function nytKwRuleIsStorable(raw) {
   // patterns are refused here (pre-fix: any /.../ under 200 chars was accepted, which
   // let /.*/i hide the entire feed).
   if (kw.startsWith('/') && kw.lastIndexOf('/') > 0) return nytKwRegexRuleIsSafe(kw);
-  return !nytKwIsGenericRule(kw);
+  if (nytKwIsGenericRule(kw)) return false;
+  // A multi-word rule must not START or END on a particle. The ranker already refuses
+  // to BUILD such fragments ("sink pipe yourself", "cars nobody wants"), but a model
+  // or synthesizer proposes strings directly and this gate never re-checked the edges
+  // — so "out of prison" sailed through and displaced the real subject word "prison"
+  // from the offered set. The refusal is scoped to STOP_WORDS and NON_EDGE_WORDS
+  // deliberately: WEAK_ALONE words like "new" are legitimate phrase OPENERS ("new
+  // home market" is the subject phrase the ranker is designed to produce), so they
+  // are NOT edge-refused here.
+  if (kw.includes(' ')) {
+    const words = kw.split(' ');
+    const edge = (w) => NYT_KW_STOP_WORDS.has(w) || NYT_KW_NON_EDGE_WORDS.has(w);
+    if (edge(words[0]) || edge(words[words.length - 1])) return false;
+  }
+  return true;
 }
 
 // Filters a candidate list down to storable rules, reporting what was refused so the

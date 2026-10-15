@@ -9,37 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Nothing pending. The next release will be 1.13.4.
+
+---
+
+## [1.13.3] - 2026-10-14
+
 ### Fixed
-
-### Removed
-- **The rebuilt topic-chip bar is deleted outright** (reported twice: selecting a rebuilt chip ran a generic site-wide search, and then '3x the chips' with no chip filtering anything — 'all I get is the same video cards over and over').
-  - Root cause of the duplication (measured live): `extractChipsFromDom()` read `yt-chip-cloud-chip-renderer` across the WHOLE document, not the Home topic bar, so one capture merged several unrelated chip sets (topic bar + shelf headers) into one list; the 'keep the richer capture' rule then guaranteed the bloated list won and the bar rendered every merged chip.
-  - Root cause of the dead chips: a topic chip only filters Home if YouTube's OWN chip exists to click. When YouTube serves no chip data (the state this feature targeted) there is, by definition, no real chip — so every rebuilt chip could only ever re-request the same Home feed. The premise of the feature was wrong.
-  - Deleted per the laziness/attack-the-premise protocols: the entire capture/rebuild/click subsystem (`nyt_chipBarCache` cache, `buildChipBarElement`, `insertRebuiltChipBar`, `tryRebuildChipBar`, `clickChipByLabel`/`realChipByLabel`/`clickRealChip`, `chipRebuildDecision`, the capture in the healthy path, the chip-bar harness, the 14 chipBar wiring gates, and every `chipBarCache` bus in backup.js).
-  - What survives: the chip rescue still UNHIDES a bar YouTube rendered, and when YouTube serves no chips at all it now quietly re-requests Home ONCE through YouTube's own SPA navigation (the same thing the user's manual refreshing was doing) before offering the refresh button — bounded, one per page, reset on navigation.
-
-- **Rebuilt topic chips navigated to a generic YouTube search** (reported: selecting 'New to you' or 'Comedy' triggered a site-wide search for that word). A Home topic chip is a **feed filter**, not a search — the wrong pattern, now gone entirely.
-  - Clicking a rebuilt chip now goes through `clickChipByLabel()`: it finds **YouTube's own chip** for that topic in the real bar and clicks it, which filters the Home grid in place (SPA) exactly like the native bar. If no real bar exists yet, it re-requests Home through YouTube's own navigation and clicks the matching chip when it renders (bounded watch, 10 rounds). If the topic genuinely is not on your feed, it says so — an honest no-op instead of a wrong navigation.
-  - The `/results?search_query=` fallback is deleted; a wiring gate in the audit harness now fails the suite if any code path ever navigates a chip to a search, and the chip-bar harness drives the real-chip click contract end to end (find by exact label, click the right chip, never touch `location`).
-  - The pending chip-click watch is cancelled on pause and on navigation.
-  - Tests: chip-bar-harness B4–B6 + SEAM extended with the new symbols (RED-proven against the pre-fix file, which fails with the three missing symbols named); audit-harness chipBar wiring +4 gates (routes through the clicker, **no search navigation anywhere**, real-bar hosts, pause cancels the watch).
-
-### Fixed (previous)
-- **Blocked channels kept reappearing** ("used the channel blocker on 6+ channels more than 6 times and they continue to show"). Root cause, verified live on YouTube's real DOM: a `ytd-channel-name` wrapper carries the channel's name **twice** — a visible `#text` node plus a `tp-yt-paper-tooltip` `#tooltip` copy — so the element's `textContent` reads `"DW Documentary DW Documentary"`. The block gesture stored THAT doubled string as the rule, and a doubled rule matches no card (a clean rule likewise matches no doubled card key), so the channel survived every pass and re-blocking stored the same dead rule again.
-  - **Read the single name at the source**: every channel-name read (`getChannelName`, `getCardChannelKeys`, `getChannelEntityKeys`) now goes through one canonical `channelNameOfElement()` that prefers the inner single-name node (`#text` / `#text-container`) before the wrapper. Verified live on five real cards: every wrapper reads doubled, every read now returns the clean name (`"DW Documentary"`, keys `dw documentary` / `dwdocumentary`).
-  - **Conservative backstop** (`collapseDoubledChannelText`): a wrapper with no inner nodes still collapses an exact whole-string repeat — but ONLY at 3+ words with identical halves, so real repeated-word channels (**"Duran Duran"**, "Ling Ling") are never touched. A 2-word identical pair is ambiguous with a genuine name and is left alone.
-  - **Migration of already-poisoned rules**: `loadSettings` rewrites stored doubled entries to the real name in place and persists the healed list back (content-compared, not length-compared, so a same-count migration still writes). Your existing blacklist heals itself on the first page load after updating.
-  - Tests: audit-harness section O (10 checks: the doubled fixture as captured from live DOM, clean name/keys/gesture, end-to-end hide, the collapse guards incl. Duran Duran, and the load-time migration) — RED-proven against `HEAD:content.js`, which fails O2/O3/O4/O9 with exactly the doubled-name output.
+- **A blocked channel came back because the stored rule had the channel name FUSED to a byline and a view count.** This is the "I have blacklisted this channel a dozen times and it keeps appearing" report, and it is the deepest of the identity bugs. On YouTube's modern lockup surfaces the channel name and its byline share one text node, so the block gesture read the whole run as one channel name and stored it. Real captures from a live blacklist:
+  - `the lewis brothersand pauly shore519k` — the channel is **The Lewis Brothers**
+  - `legion of skanks clipsand legion of skanks podcast22k` — the channel is **Legion of Skanks Clips**
+  - `visors downand more38k`, `the puristand offgridbaja6442k`, `outdoor autoand tinkerer's adventure778k`
+  - **30 such rules** in one user's list, every one of them permanently dead.
+  - Why each one was unfixable by the matcher: the card presents the bare channel name, the rule carried the fused tail, so the two keys were unequal no matter how good the comparison was. Worse, every re-block gesture stored *another* garbage key — so the list grew while the channel stayed visible, which is exactly what "I blocked it a dozen times" looks like from the outside.
+  - Fixed in two halves, matching the pattern already used for the metadata-tail bug:
+    - **Repair** — `normalizeChannel()` now reduces a fused rule to the bare channel name, so all 30 existing rules start matching with no migration and no export/import. `isGluedMetadataRule()` is the narrow flag that gates it (a multi-digit count with a k/m/b magnitude glued to a letter), and `repairGluedMetadataRule()` does the split at a computed index rather than a replace callback — an earlier callback version dropped the final letter of the name (`visors downand more` -> `visors dow`), which would have blocked the wrong channel.
+    - **Prevention** — the same repair runs inside `normalizeChannel()`, so a rule written fused is corrected the moment it is written, not only on the next page load.
+  - **The conservative-by-design part**: the byline split cannot be made fully deterministic. `geo girland luisa - scottish geologist10k` has an "and" inside the word `girland`; `the lewis brothersand pauly shore` has one glued to a word boundary. Telling them apart reliably needs a dictionary, which this extension does not ship. So the split fires only when the shape is unambiguous and abstains otherwise — an abstained rule stays dead (the old behaviour), while a wrong split would block the wrong creator. The safer failure is a rule that does not work yet.
+  - **A 1-digit count is never treated as metadata.** `wheeltalk-w2k`, `nadatropis2` and `u2` are real channel handles, and flagging them would rewrite working rules.
+  - Tests: `tests/blocking-and-keyword-audit-harness.js` **M10–M10d** — each of the real fused rules reduces to its bare name; `nadatropis2`/`u2`/`logcabintv1`/`wheeltalk-w2k` are never flagged; the genuine artifacts are.
 
 ### Added
-- **Chip Bar Persistence** (`chipRescue`, on by default): YouTube sometimes serves Home with **no topic-chip data at all** — verified live: `chipCloudRenderer` absent from `ytInitialData` and zero chips in the DOM — so the existing rescue (which could only *unhide* a bar YouTube rendered) had no remedy but a page reload. That is the "refresh for five minutes" complaint.
-  - The bar'''s **data** is now captured whenever YouTube serves it (from the rendered chips and from `ytInitialData`, both renderer shapes: `chipCloudChipRenderer` and the newer `chipViewModel`), persisted under `nyt_chipBarCache`, and **rebuilt into the page** when YouTube omits it. A capture is only persisted when it is a real topic bar (≥2 labelled chips, not the unpersonalized "All" shell), the cache is trusted for 30 days, and a rebuild happens at most once per page and never over a bar YouTube served.
-  - **Rendered as a plain element the extension owns**, not a rebuilt `yt-chip-cloud-renderer`. VERIFIED LIVE: a hand-built Polymer renderer appended into YouTube'''s DOM is **recycled within a tick** (the host renderer drops children it did not create) — `insertBefore` returns, the node is gone. A plain, page-styled bar persists: measured on live YouTube at `top:56`, `display:flex`, `visibility:visible`, 4 clickable chips, still present after 8s.
-  - Chips carry YouTube'''s own captured navigation target when present, else its own results URL for the topic — so a chip always does something real. Capture never reads the extension'''s own rebuilt bar (which would degrade the cache). The bar is removed on pause and on navigation, and its id is on the feed MutationObserver ignore list.
-  - Tests: `tests/chip-bar-harness.js` (24 checks: the capture gate, both renderer shapes, extraction from `ytInitialData`, the seven rebuild guards, the built bar'''s shape, and an end-to-end capture→rebuild; RED-proven against `HEAD:content.js`).
-  - **Also fixed** (found while wiring this): `backup.js` exported `feedCache` from `data.feedCache`, which the load list never populated — so every backup shipped an **empty** feed cache. Both caches are now read in the load path and round-trip correctly.
 
-### Fixed
 - **Keyword extraction produced broad single words instead of the specific phrase** — reported as `"America's New Home Market"` → `america`, `home`, `market`, each of which blocks a huge slice of unrelated YouTube, when the correct rule is `new home market`. Two independent defects in the shared ranker (`shared-tables.js`):
   - **Phrases scored below their own words.** A single word's length bonus reached ×2.44 while a phrase got a flat ×0.9, so `market`(2.98) and `america`(3.26) outranked `new home market`(2.16) and took all three slots. Phrases now score on their strongest word × a bonus that GROWS with word count (×0.95 for 2 words, ×1.15 for 3), and the length nudge is capped at +0.24 — so a phrase always out-ranks every single word inside it, and the longest specific phrase wins.
   - **A possessive modifier was offered as a subject.** `america` in `America's New Home Market` describes what the noun phrase is *about the market*, not the video's subject; a rule of `america` hides everything America-related. Possessive-marked words (`america's`, `nation's`, `it's`) are now modifier-only: never offered as a single, never able to begin a phrase, but still in the stream so `new home market` can form. A bare modifier word (`new`, `national`, `big`, `america`) is refused by the storable gate.
@@ -47,6 +38,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Tests: `K6j`–`K6m` pin the reported case (possessive excluded, phrase wins and subsumes its components, the phrase-vs-single inversion, the gate). `K3a/K3b/K6g` were updated deliberately — the expected output moved from a bare word / short prefix to the full specific phrase, which is the product decision this fix makes. The harness now honours a `SHARED_TABLES_PATH` override so its RED seam actually exercises a pre-fix ranker (the old seam loaded the fixed file and passed vacuously).
 
 ### Added
+
 - **Feed Fallback (empty Home)** (`feedFallback`, ON by default): when YouTube serves the home page with an EMPTY recommendation grid — a confirmed YouTube-side failure class (September 2026 incident; sign-in state, history settings and re-login change nothing, and the empty response is an HTTP 200 from the recommender itself) — the extension renders the user's subscribed channels' latest uploads in Home's page instead of a blank screen.
   - Sources, in order: a local cache (`nyt_feedCache`, cap 240, written (throttled to ≥10 s) from the user's own browsing whenever subscribed channels' cards appear on ANY surface) → a live top-up from each subscribed channel's OWN /videos page (a plain content route, NOT the recommender and NOT the subscriptions page; hard 20 s wall-clock budget so a hanging fetch cannot wedge the build, partial progress kept) → the cache alone (dated, flagged "cached", never blank).
   - The panel is pure addition: it never hides or rewrites anything YouTube served, is ignored by the feed MutationObserver (`#nyt-feed-fallback`, `.nyt-fallback-item`), disappears the moment real cards arrive or the user navigates away, and carries no user data on any request (the cache lives and dies in `chrome.storage.local`).
@@ -55,6 +47,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Tests: `tests/feed-fallback-harness.js` (20 checks: the pure decider's seven gates — including "REFUSES when YouTube served cards" — the cache merge/cap semantics, the view model ordering/dedupe/staleness, and the end-to-end panel lifecycle including pause; RED-proven against `HEAD:content.js`), plus 18 cross-file wiring checks in the blocking/keyword audit harness and a cache round-trip in the backup harness.
 
 ### Added
+
 - **Instant Master Pause Switch** (`extensionEnabled`): a single On/Off control at the top of **Settings → ⏻ Extension Enabled** that suspends the whole extension temporarily without losing a single rule.
   - Content script: `processFeed()` returns immediately and `restoreHiddenByRules()` tears down every hiding mechanism — the injected stylesheet (Shorts shelves / community posts), `data-hidden-by-local-blacklist` cards, `data-nyt-collapsed-slot` grid slots, `data-nyt-hidden-by-shorts` reels, AI De-Baiter title rewrites — and clears the per-tab badge. The hover quick-block button, 3-dot menu row, "B" shortcut, watch-page redirect and every AI pass are inert while paused, and no card is evaluated at all.
   - `extensionEnabled` is on the content script's `RULE_KEYS` list, so toggling it in the popup re-applies instantly in every open YouTube tab. An absent key means **enabled**, so existing installs are unaffected.
@@ -63,6 +56,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Tests: `tests/master-switch-harness.js` (pause/restore semantics + popup/backup wiring; fails on the pre-fix `content.js`), and the popup smoke harness now asserts the switch's storage write and banner state end to end.
 
 ### Fixed
+
 - **Previously blacklisted channels continuing to show up on modern YouTube surfaces**: Fixed multiple failure modes that allowed blacklisted channels to slip through:
   1. `getChannelEntityKeys` discarded `@handle` links whenever their text differed from the spaced display name, leaving only the display name persisted. Channel cards rendering only the handle or channel ID on other surfaces therefore never matched.
   2. `CHANNEL_ENTITY_RE` was anchored with `^/`, causing absolute URLs (`https://www.youtube.com/@...`) to be ignored.
@@ -122,6 +116,76 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **An expired temporal rule stayed live in every open tab.** Expiry was applied only when the popup rendered, so a seasonal rule whose timer had lapsed kept hiding videos in already-open YouTube tabs indefinitely. `expireTemporalRules()` now runs on the content script's own storage load: it drops the lapsed keyword from the active list in memory *before* the re-scan (so that pass cannot hide with it), then persists the change read-modify-write, so the popup and every other tab agree without waiting for a render.
   - **The block gesture did not survive a change of surface.** A gesture made on a card that renders the display name did not block that channel on a card rendering only its `@handle` (search results, the watch sidebar), because the gesture persisted the name alone. `getChannelEntityKeys()` now derives the entity keys from the owner/channel links as well as the displayed name, so one gesture blocks the channel everywhere it appears — while still adding only real identities, never the video id, view count or byline fragments.
   - Tests: `tests/blocking-and-keyword-audit-harness.js` — 82 checks across the matcher, channel identity, the block gesture, keyword exceptions, temporal expiry, end-to-end hiding and the cross-file wiring (popup control ids / load list / save payload, plus a real `keywordExceptions` + `temporalRules` backup export→import round-trip). It carries a `CONTENT_JS_PATH` RED seam, fails 20 checks against the pre-fix `content.js`, and is wired into `npm test`.
+
+### Added
+
+- **Rule Audit & Consolidation** (Keywords -> Analyze): reads the whole keyword list and reports what it can prove, so a list that has grown stale stops being a black box.
+  - Classes: **redundant** (one rule's text sits entirely inside a longer one — the longer rule already matches every title the shorter one does, because a rule matches any title *containing* it); **never matched** (zero recorded hits and not covered by anything else — the same idea as the existing 0-hit cleanup, reported alongside the rest so one pass sees everything); **broken regex** (a rule that cannot compile can never hide anything); and **over-broad** (single common words like `the` or `review`) — the last is shown with its hit counts and **never offered for removal**, because whether you want one is a taste call only you can make.
+  - Consolidation only ever acts on items you tick, and the guarantee behind it is that **every removal is proven before it is offered** by replaying both rules through the extension's own matcher rather than guessing from what a rule "probably" covers. Regex rules are never consolidated, because whether one regex covers another cannot be decided by comparing text. Nothing is removed without an explicit confirm.
+  - The audit runs entirely in the browser (`keyword-audit.js`). No AI, no network, no model.
+  - Tests: `tests/keyword-audit-harness.js` (69 checks, including subsumption-vs-dead no-double-counting and a differential coverage-safety section).
+
+### Added
+
+- **AI server address override** (AI Guardian -> Server address): point the extension at a local AI server on any port, not just Ollama's 11434 and LM Studio's 1234.
+  - Leave it blank to keep automatic detection. Type a full address (`http://127.0.0.1:8080`) and press Enter; the extension re-scans and shows which models it found. Both the Ollama `/api/*` shape and the OpenAI-compatible `/v1/*` shape are tried against whatever address you give, so `llama.cpp`'s server, vLLM and LocalAI work too, not just the two named apps.
+  - `host_permissions` now grants `http://localhost/*` and `http://127.0.0.1/*` — every port on those two hosts, so a custom port needs no manifest edit. **The loopback boundary is unchanged and enforced in code**: `resolveLocalAiBaseUrl()` ignores any address that is not `localhost`, `127.0.0.1` or `::1` and falls back to automatic detection rather than sending video titles off the machine. The CORS/CSP `connect-src` entry was widened to match the permissions.
+  - Tests: `tests/popup-smoke-harness.js` section 7 (the field exists, is seeded from storage, persists on change, re-probes on blur/Enter, and **every** AI call site carries the address — a check that caught two initially-missed sites); `tests/test_ai_guardian.js` (port 8080 accepted; `https://evil.example.com`, `localhost.evil.com` and `192.168.1.50` all refused).
+
+### Removed
+
+- **The bundled ONNX AI engine** ("Local Phi (ONNX)") is gone, along with its `http://127.0.0.1:8080` permission and the Hugging Face download offering. It was offering-only — never able to actually run a query — and it pulled a large dependency for a path that could not work. The server-address override above covers the real need (any local server) without the weight.
+
+### Fixed
+
+- **A blacklisted channel kept appearing because the stored rule and the card disagreed about the channel's name.** Two independent identity defects, both proven against the user's real backup and live feed cache:
+  - **Metadata pollution.** YouTube's channel row renders the name together with the view count and age — `Mugsyboy 1M 1mo ago`. `channelNameFromRowText()` recognised the view count but not the abbreviated `mo`/`yr` age units, and its bare-count pattern required the word "views", so it stored the whole polluted string as the channel key. A key of `Mugsyboy 1M 1mo ago` can never match a card that presents `Mugsyboy`, so the channel survived every block. Fixed by `stripChannelMetadataTail()` (new `CHANNEL_TAIL_COUNT_RE` / `CHANNEL_TAIL_TIME_RE` covering `s/sec/m/min/h/hr/d/day/w/wk/mo/mon/y/yr` plus "ago"), applied **before** the `isChannelNameText()` return — that predicate deliberately re-admits count-shaped names, so a `3M` or `412K` channel is a real name and must survive; the guard is conditioned on the original row containing a time-ago phrase, so a metadata-only row still yields nothing.
+  - **A rule saved from a channel URL never matched anything.** Whitelist and blacklist entries pasted from a URL read `/@RedGreenTV` or `/channel/UCxyz`, and `normalizeChannel()` stripped the `@` but never the leading `/`. So the entry normalized to `/@redgreentv` while the card presented `redgreentv` — the two never compared equal. In the **whitelist** that meant a channel you explicitly protected was still blocked; in the **blacklist** it meant the channel was not blocked. Both directions were live. `normalizeChannel()` now strips `^/(?:@|channel/|c/|user/)?` before the `@` strip.
+  - Both halves also **repair rules already saved**: `normalizeChannel()` reduces a polluted stored rule and the card's own row to the same key, so an existing blacklist heals itself with no migration and no export/import.
+  - Tests: `tests/blocking-and-keyword-audit-harness.js` **M5-M9b** — `Mugsyboy 1M 1mo ago` -> `mugsyboy`, `cold ones 2.1m 3d ago` -> `cold ones`, `mark gilmore 259 2mo ago` -> `mark gilmore`; `3M`/`412K`/`1900`/`2B` survive as real names; `/@RedGreenTV` === `RedGreenTV` for the `@`, `/channel/`, `/c/` and `/user/` prefixes; and a plain name is never damaged by the prefix strip.
+
+### Fixed
+
+- **Keyword rules could be lost without any error.** Two writers raced on the same storage key: a quick block gesture and the keyword lab's own write could each read the list, append to their own copy, and write back — so one rule silently vanished. Channel and keyword writes now go through a serialized per-key queue (`channelWriteQueue` / `keywordHitQueue`), so concurrent writers queue instead of overwriting, and rules update in other tabs the same way (`notifyTabsRulesUpdated`). The keyword list is also read-modify-write under the queue rather than cached per tab.
+
+---
+
+## [1.13.2] - 2026-10-13
+
+### Removed
+
+- **The rebuilt topic-chip bar is deleted outright** (reported twice: selecting a rebuilt chip ran a generic site-wide search, and then '3x the chips' with no chip filtering anything — 'all I get is the same video cards over and over').
+  - Root cause of the duplication (measured live): `extractChipsFromDom()` read `yt-chip-cloud-chip-renderer` across the WHOLE document, not the Home topic bar, so one capture merged several unrelated chip sets (topic bar + shelf headers) into one list; the 'keep the richer capture' rule then guaranteed the bloated list won and the bar rendered every merged chip.
+  - Root cause of the dead chips: a topic chip only filters Home if YouTube's OWN chip exists to click. When YouTube serves no chip data (the state this feature targeted) there is, by definition, no real chip — so every rebuilt chip could only ever re-request the same Home feed. The premise of the feature was wrong.
+  - Deleted per the laziness/attack-the-premise protocols: the entire capture/rebuild/click subsystem (`nyt_chipBarCache` cache, `buildChipBarElement`, `insertRebuiltChipBar`, `tryRebuildChipBar`, `clickChipByLabel`/`realChipByLabel`/`clickRealChip`, `chipRebuildDecision`, the capture in the healthy path, the chip-bar harness, the 14 chipBar wiring gates, and every `chipBarCache` bus in backup.js).
+  - What survives: the chip rescue still UNHIDES a bar YouTube rendered, and when YouTube serves no chips at all it now quietly re-requests Home ONCE through YouTube's own SPA navigation (the same thing the user's manual refreshing was doing) before offering the refresh button — bounded, one per page, reset on navigation.
+
+- **Rebuilt topic chips navigated to a generic YouTube search** (reported: selecting 'New to you' or 'Comedy' triggered a site-wide search for that word). A Home topic chip is a **feed filter**, not a search — the wrong pattern, now gone entirely.
+  - Clicking a rebuilt chip now goes through `clickChipByLabel()`: it finds **YouTube's own chip** for that topic in the real bar and clicks it, which filters the Home grid in place (SPA) exactly like the native bar. If no real bar exists yet, it re-requests Home through YouTube's own navigation and clicks the matching chip when it renders (bounded watch, 10 rounds). If the topic genuinely is not on your feed, it says so — an honest no-op instead of a wrong navigation.
+  - The `/results?search_query=` fallback is deleted; a wiring gate in the audit harness now fails the suite if any code path ever navigates a chip to a search, and the chip-bar harness drives the real-chip click contract end to end (find by exact label, click the right chip, never touch `location`).
+  - The pending chip-click watch is cancelled on pause and on navigation.
+  - Tests: chip-bar-harness B4–B6 + SEAM extended with the new symbols (RED-proven against the pre-fix file, which fails with the three missing symbols named); audit-harness chipBar wiring +4 gates (routes through the clicker, **no search navigation anywhere**, real-bar hosts, pause cancels the watch).
+
+---
+
+## [1.13.1] - 2026-10-12
+
+### Fixed
+
+- **Blocked channels kept reappearing** ("used the channel blocker on 6+ channels more than 6 times and they continue to show"). Root cause, verified live on YouTube's real DOM: a `ytd-channel-name` wrapper carries the channel's name **twice** — a visible `#text` node plus a `tp-yt-paper-tooltip` `#tooltip` copy — so the element's `textContent` reads `"DW Documentary DW Documentary"`. The block gesture stored THAT doubled string as the rule, and a doubled rule matches no card (a clean rule likewise matches no doubled card key), so the channel survived every pass and re-blocking stored the same dead rule again.
+  - **Read the single name at the source**: every channel-name read (`getChannelName`, `getCardChannelKeys`, `getChannelEntityKeys`) now goes through one canonical `channelNameOfElement()` that prefers the inner single-name node (`#text` / `#text-container`) before the wrapper. Verified live on five real cards: every wrapper reads doubled, every read now returns the clean name (`"DW Documentary"`, keys `dw documentary` / `dwdocumentary`).
+  - **Conservative backstop** (`collapseDoubledChannelText`): a wrapper with no inner nodes still collapses an exact whole-string repeat — but ONLY at 3+ words with identical halves, so real repeated-word channels (**"Duran Duran"**, "Ling Ling") are never touched. A 2-word identical pair is ambiguous with a genuine name and is left alone.
+  - **Migration of already-poisoned rules**: `loadSettings` rewrites stored doubled entries to the real name in place and persists the healed list back (content-compared, not length-compared, so a same-count migration still writes). Your existing blacklist heals itself on the first page load after updating.
+  - Tests: audit-harness section O (10 checks: the doubled fixture as captured from live DOM, clean name/keys/gesture, end-to-end hide, the collapse guards incl. Duran Duran, and the load-time migration) — RED-proven against `HEAD:content.js`, which fails O2/O3/O4/O9 with exactly the doubled-name output.
+
+### Added
+
+- **Chip Bar Persistence** (`chipRescue`, on by default): YouTube sometimes serves Home with **no topic-chip data at all** — verified live: `chipCloudRenderer` absent from `ytInitialData` and zero chips in the DOM — so the existing rescue (which could only *unhide* a bar YouTube rendered) had no remedy but a page reload. That is the "refresh for five minutes" complaint.
+  - The bar'''s **data** is now captured whenever YouTube serves it (from the rendered chips and from `ytInitialData`, both renderer shapes: `chipCloudChipRenderer` and the newer `chipViewModel`), persisted under `nyt_chipBarCache`, and **rebuilt into the page** when YouTube omits it. A capture is only persisted when it is a real topic bar (≥2 labelled chips, not the unpersonalized "All" shell), the cache is trusted for 30 days, and a rebuild happens at most once per page and never over a bar YouTube served.
+  - **Rendered as a plain element the extension owns**, not a rebuilt `yt-chip-cloud-renderer`. VERIFIED LIVE: a hand-built Polymer renderer appended into YouTube'''s DOM is **recycled within a tick** (the host renderer drops children it did not create) — `insertBefore` returns, the node is gone. A plain, page-styled bar persists: measured on live YouTube at `top:56`, `display:flex`, `visibility:visible`, 4 clickable chips, still present after 8s.
+  - Chips carry YouTube'''s own captured navigation target when present, else its own results URL for the topic — so a chip always does something real. Capture never reads the extension'''s own rebuilt bar (which would degrade the cache). The bar is removed on pause and on navigation, and its id is on the feed MutationObserver ignore list.
+  - Tests: `tests/chip-bar-harness.js` (24 checks: the capture gate, both renderer shapes, extraction from `ytInitialData`, the seven rebuild guards, the built bar'''s shape, and an end-to-end capture→rebuild; RED-proven against `HEAD:content.js`).
+  - **Also fixed** (found while wiring this): `backup.js` exported `feedCache` from `data.feedCache`, which the load list never populated — so every backup shipped an **empty** feed cache. Both caches are now read in the load path and round-trip correctly.
 
 ---
 
